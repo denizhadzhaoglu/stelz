@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="3300" viewBox="0 0 2200 3300" style="font-family: -apple-system, Helvetica, sans-serif;">
+  <rect width="2200" height="3300" fill="#FAFAFA"/>
+  <text x="60" y="50" font-size="22" font-weight="700" fill="#111">Spot the Brand · Carousel template (4:5, 6 slides)</text>
+  <text x="60" y="74" font-size="12" fill="#666">Crop each slide individually at 1080×1350. Slides chained left-to-right.</text>
+
+  <!-- Slide dimensions: 1080x1350 scaled 0.5 to 540x675 -->
+  <!-- 3 columns x 2 rows -->
+
+  <!-- ━━━━━━━━ Slide 1: Hook ━━━━━━━━ -->
+  <g transform="translate(60, 110)">
+    <rect width="540" height="675" fill="#0A0A0A"/>
+    <!-- scan lines decoration -->
+    <line x1="0" y1="337" x2="540" y2="337" stroke="#FF1300" stroke-opacity="0.08"/>
+    <line x1="270" y1="0" x2="270" y2="675" stroke="#FF1300" stroke-opacity="0.08"/>
+    <circle cx="270" cy="337" r="120" fill="none" stroke="#FF1300" stroke-opacity="0.1"/>
+    <!-- "01" badge -->
+    <text x="30" y="55" font-family="monospace" font-size="14" fill="#FF1300" letter-spacing="1">01 / 06</text>
+    <!-- stat -->
+    <text x="30" y="290" font-size="120" font-weight="800" fill="white" letter-spacing="-4">436</text>
+    <text x="30" y="345" font-size="18" font-weight="600" fill="white" fill-opacity="0.7">STELZ MOMENTS · LAST QUARTER</text>
+    <!-- headline -->
+    <text x="30" y="450" font-size="42" font-weight="800" fill="white" letter-spacing="-1">Their tool tracked</text>
+    <text x="30" y="500" font-size="42" font-weight="800" fill="#FF1300" letter-spacing="-1">14%.</text>
+    <!-- wordmark bottom -->
+    <text x="30" y="650" font-size="15" font-weight="700" fill="white">Spot the Brand<tspan fill="#FF1300">.</tspan></text>
+  </g>
+
+  <!-- ━━━━━━━━ Slide 2: Setup ━━━━━━━━ -->
+  <g transform="translate(630, 110)">
+    <rect width="540" height="675" fill="#0A0A0A"/>
+    <text x="30" y="55" font-family="monospace" font-size="14" fill="#FF1300" letter-spacing="1">02 / 06</text>
+    <text x="30" y="200" font-size="48" font-weight="800" fill="white" letter-spacing="-1">Their tool</text>
+    <text x="30" y="252" font-size="48" font-weight="800" fill="white" letter-spacing="-1">reads</text>
+    <text x="30" y="304" font-size="48" font-weight="800" fill="white" letter-spacing="-1">words.</text>
+    <text x="30" y="408" font-size="48" font-weight="800" fill="#FF1300" letter-spacing="-1">We see</text>
+    <text x="30" y="460" font-size="48" font-weight="800" fill="#FF1300" letter-spacing="-1">the can.</text>
+    <text x="30" y="640" font-size="14" font-weight="500" fill="white" fill-opacity="0.6">Swipe →</text>
+  </g>
+
+  <!-- ━━━━━━━━ Slide 3: Proof example ━━━━━━━━ -->
+  <g transform="translate(1200, 110)">
+    <rect width="540" height="675" fill="#0A0A0A"/>
+    <text x="30" y="55" font-family="monospace" font-size="14" fill="#FF1300" letter-spacing="1">03 / 06</text>
+    <!-- placeholder image rectangle -->
+    <rect x="30" y="80" width="480" height="420" fill="#2a2a2a"/>
+    <text x="270" y="290" text-anchor="middle" font-size="14" fill="#666">[ creator photo ]</text>
+    <!-- bounding box overlay -->
+    <rect x="180" y="190" width="180" height="220" fill="none" stroke="#FF1300" stroke-width="2.5" stroke-dasharray="6 4"/>
+    <text x="180" y="180" font-family="monospace" font-size="11" fill="#FF1300" letter-spacing="0.5">DETECTED · 0.94</text>
+    <!-- caption -->
+    <text x="30" y="555" font-size="24" font-weight="700" fill="white" letter-spacing="-0.5">@studentdelivery_</text>
+    <text x="30" y="585" font-size="14" font-weight="500" fill="white" fill-opacity="0.7">tier 1 · 22k followers</text>
+    <text x="30" y="630" font-size="13" font-weight="400" fill="white" fill-opacity="0.85">No hashtag. No @mention. Spotted by computer vision.</text>
+  </g>
+
+  <!-- ━━━━━━━━ Slide 4: Concept ━━━━━━━━ -->
+  <g transform="translate(60, 830)">
+    <rect width="540" height="675" fill="#0A0A0A"/>
+    <text x="30" y="55" font-family="monospace" font-size="14" fill="#FF1300" letter-spacing="1">04 / 06</text>
+    <text x="30" y="180" font-size="32" font-weight="800" fill="white" letter-spacing="-0.5">Three things we do</text>
+    <text x="30" y="210" font-size="32" font-weight="800" fill="white" letter-spacing="-0.5">that they don't:</text>
+
+    <text x="30" y="305" font-size="22" font-weight="800" fill="#FF1300" font-family="monospace">01</text>
+    <text x="80" y="305" font-size="20" font-weight="700" fill="white">See the product</text>
+    <text x="80" y="328" font-size="13" font-weight="400" fill="white" fill-opacity="0.7">Computer vision finds packshots, not just hashtags</text>
+
+    <text x="30" y="395" font-size="22" font-weight="800" fill="#FF1300" font-family="monospace">02</text>
+    <text x="80" y="395" font-size="20" font-weight="700" fill="white">Score every creator</text>
+    <text x="80" y="418" font-size="13" font-weight="400" fill="white" fill-opacity="0.7">AI relevance 0-10 per creator, tier auto-assigned</text>
+
+    <text x="30" y="485" font-size="22" font-weight="800" fill="#FF1300" font-family="monospace">03</text>
+    <text x="80" y="485" font-size="20" font-weight="700" fill="white">Surface what matters</text>
+    <text x="80" y="508" font-size="13" font-weight="400" fill="white" fill-opacity="0.7">Daily report + Slack alert when tier 1 lands</text>
+
+    <text x="30" y="640" font-size="14" font-weight="500" fill="white" fill-opacity="0.6">Swipe →</text>
+  </g>
+
+  <!-- ━━━━━━━━ Slide 5: Big claim ━━━━━━━━ -->
+  <g transform="translate(630, 830)">
+    <rect width="540" height="675" fill="#FF1300"/>
+    <text x="30" y="55" font-family="monospace" font-size="14" fill="white" fill-opacity="0.7" letter-spacing="1">05 / 06</text>
+    <text x="30" y="220" font-size="56" font-weight="800" fill="white" letter-spacing="-1.5">Your brand is</text>
+    <text x="30" y="284" font-size="56" font-weight="800" fill="white" letter-spacing="-1.5">in more posts</text>
+    <text x="30" y="348" font-size="56" font-weight="800" fill="white" letter-spacing="-1.5">than you think.</text>
+    <text x="30" y="640" font-size="13" font-weight="700" fill="white" letter-spacing="1">SPOT THE BRAND.</text>
+  </g>
+
+  <!-- ━━━━━━━━ Slide 6: CTA ━━━━━━━━ -->
+  <g transform="translate(1200, 830)">
+    <rect width="540" height="675" fill="#0A0A0A"/>
+    <text x="30" y="55" font-family="monospace" font-size="14" fill="#FF1300" letter-spacing="1">06 / 06</text>
+    <text x="30" y="240" font-size="46" font-weight="800" fill="white" letter-spacing="-1">Try it for</text>
+    <text x="30" y="294" font-size="46" font-weight="800" fill="white" letter-spacing="-1">your brand.</text>
+    <text x="30" y="370" font-size="16" font-weight="400" fill="white" fill-opacity="0.7">14-day trial · no credit card</text>
+    <text x="30" y="395" font-size="16" font-weight="400" fill="white" fill-opacity="0.7">First hits within 24-48 hours</text>
+    <rect x="30" y="450" width="480" height="64" rx="10" fill="#FF1300"/>
+    <text x="270" y="490" text-anchor="middle" font-size="18" font-weight="800" fill="white">spotyourbrand.com</text>
+    <text x="30" y="640" font-size="15" font-weight="700" fill="white">Spot the Brand<tspan fill="#FF1300">.</tspan></text>
+    <text x="510" y="640" text-anchor="end" font-size="11" font-weight="400" fill="white" fill-opacity="0.5">by JackandAI</text>
+  </g>
+
+  <!-- Footer notes -->
+  <g transform="translate(60, 1560)">
+    <text font-size="14" font-weight="700" fill="#111">Production notes</text>
+    <text y="22" font-size="12" fill="#444">• Export each slide at 1080×1350. Use IG carousel order matching numbers.</text>
+    <text y="42" font-size="12" fill="#444">• Replace [creator photo] with real photo + permission.</text>
+    <text y="62" font-size="12" fill="#444">• The bounding box on slide 3 must align to the actual product in the photo.</text>
+    <text y="82" font-size="12" fill="#444">• Numbers (436, 14%) are placeholders — pull live from STELZ dashboard each post.</text>
+  </g>
+</svg>

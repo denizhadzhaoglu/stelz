@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Set up your brand · Spot the Brand</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --bg: #0a0a0a; --panel: #141414; --border: #2a2a2a; --text: #ededed; --muted: #888; --accent: #FF1300; --good: #4ade80; --warn: #fbbf24; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; line-height: 1.55; min-height: 100vh; }
+  .topbar { padding: 14px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .logo { font-size: 18px; font-weight: 700; }
+  .logo span { color: var(--accent); }
+  .topbar a { color: var(--muted); font-size: 13px; text-decoration: none; }
+  .container { max-width: 760px; margin: 0 auto; padding: 36px 24px 80px; }
+  h1 { font-size: 32px; letter-spacing: -0.02em; margin-bottom: 6px; font-weight: 700; }
+  .lead { color: var(--muted); font-size: 15px; margin-bottom: 36px; }
+  .step { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 26px 28px; margin-bottom: 18px; transition: border-color 0.15s, opacity 0.15s; }
+  .step.disabled { opacity: 0.45; pointer-events: none; }
+  .step.active { border-color: var(--accent); }
+  .step.done { border-color: var(--good); }
+  .step-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--bg); border: 1px solid var(--border); font-size: 12px; font-weight: 700; color: var(--muted); }
+  .step.active .step-num { background: var(--accent); color: white; border-color: var(--accent); }
+  .step.done .step-num { background: var(--good); color: black; border-color: var(--good); }
+  .step-title { font-size: 17px; font-weight: 600; }
+  .step-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; text-transform: uppercase; letter-spacing: 0.06em; }
+  input, textarea, select { width: 100%; padding: 11px 14px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: 14px; font-family: inherit; }
+  input:focus { outline: none; border-color: var(--accent); }
+  textarea { min-height: 70px; resize: vertical; }
+  button.primary { padding: 11px 22px; background: var(--accent); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px; }
+  button.primary:hover { opacity: 0.92; }
+  button.primary:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.ghost { padding: 9px 18px; background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 13px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row input { flex: 1; min-width: 200px; }
+  .status { font-size: 13px; color: var(--muted); margin-top: 12px; min-height: 18px; }
+  .status.good { color: var(--good); }
+  .status.bad { color: var(--accent); }
+  .ref-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin-top: 14px; }
+  .ref-tile { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; border: 2px solid var(--border); cursor: pointer; transition: border-color 0.12s; }
+  .ref-tile.selected { border-color: var(--accent); }
+  .ref-tile img { width: 100%; height: 100%; object-fit: cover; }
+  .ref-tile .check { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; background: var(--accent); border-radius: 50%; color: white; display: none; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+  .ref-tile.selected .check { display: flex; }
+  .ref-tile .likes { position: absolute; bottom: 4px; left: 4px; background: rgba(0,0,0,0.7); color: white; font-size: 10px; padding: 1px 6px; border-radius: 3px; font-variant-numeric: tabular-nums; }
+  .hashtag-chip { display: inline-block; padding: 5px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; font-size: 12px; margin: 4px 4px 0 0; cursor: pointer; transition: all 0.12s; }
+  .hashtag-chip.selected { background: rgba(255,19,0,0.12); border-color: var(--accent); color: var(--accent); }
+  .hashtag-chip .count { color: var(--muted); margin-left: 6px; font-size: 10px; }
+  .plan-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+  .plan-card { padding: 18px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; transition: all 0.12s; }
+  .plan-card.selected { border-color: var(--accent); background: rgba(255,19,0,0.04); }
+  .plan-card h3 { font-size: 14px; font-weight: 700; }
+  .plan-card .price { font-size: 24px; font-weight: 800; margin: 6px 0; }
+  .plan-card .price span { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .plan-card .feats { font-size: 12px; color: var(--muted); line-height: 1.7; margin-top: 6px; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">Spot the Brand<span>.</span></div>
+  <a href="/landing.html">← Back to landing</a>
+</div>
+
+<div class="container">
+  <h1>Set up your brand</h1>
+  <p class="lead">Five minutes. We'll scan your last 12 posts to calibrate detection. First hits land within 24 hours.</p>
+
+  <div class="step active" id="step-1">
+    <div class="step-head">
+      <div class="step-num">1</div>
+      <div>
+        <div class="step-title">Your brand on Instagram</div>
+        <div class="step-sub">We'll fetch your latest posts to calibrate detection.</div>
+      </div>
+    </div>
+    <label>Brand name</label>
+    <input id="brand-name" placeholder="e.g. Klar Hard Seltzer">
+    <label>Instagram handle</label>
+    <div class="row">
+      <input id="brand-handle" placeholder="@klarhardseltzer" pattern="^@?[a-zA-Z0-9._]{2,30}$">
+      <button class="primary" id="scan-btn">Scan my brand →</button>
+    </div>
+    <div class="status" id="scan-status"></div>
+  </div>
+
+  <div class="step disabled" id="step-2">
+    <div class="step-head">
+      <div class="step-num">2</div>
+      <div>
+        <div class="step-title">Pick your reference images</div>
+        <div class="step-sub">Select 5-10 photos that clearly show your product. We'll use these to calibrate computer vision.</div>
+      </div>
+    </div>
+    <div class="ref-grid" id="ref-grid"></div>
+    <div class="status" id="ref-status">Selected: <b id="ref-count">0</b> / 10</div>
+  </div>
+
+  <div class="step disabled" id="step-3">
+    <div class="step-head">
+      <div class="step-num">3</div>
+      <div>
+        <div class="step-title">Hashtags to track</div>
+        <div class="step-sub">We extracted these from your posts. Toggle to include in your daily scan pool.</div>
+      </div>
+    </div>
+    <div id="hashtag-list" style="margin-top: 4px;"></div>
+    <label style="margin-top: 18px;">Add custom hashtags (one per line)</label>
+    <textarea id="custom-hashtags" placeholder="competitorname&#10;categoryterm"></textarea>
+  </div>
+
+  <div class="step disabled" id="step-4">
+    <div class="step-head">
+      <div class="step-num">4</div>
+      <div>
+        <div class="step-title">Your details + plan</div>
+        <div class="step-sub">Trial activates immediately. No credit card for the first 14 days.</div>
+      </div>
+    </div>
+    <label>Your email</label>
+    <input id="contact-email" type="email" placeholder="you@brand.com">
+    <label>Your name</label>
+    <input id="contact-name" placeholder="Brand manager">
+    <label style="margin-top: 14px;">Plan</label>
+    <div class="plan-grid">
+      <div class="plan-card" data-plan="starter">
+        <h3>STARTER</h3>
+        <div class="price">€500<span>/mo</span></div>
+        <div class="feats">1 brand · 100 credits · weekly report · monthly scans</div>
+      </div>
+      <div class="plan-card selected" data-plan="pro">
+        <h3>PRO</h3>
+        <div class="price">€1.500<span>/mo</span></div>
+        <div class="feats">1 brand · 1.000 credits · daily scans · Slack alerts · team seats</div>
+      </div>
+    </div>
+    <button class="primary" id="finish-btn" style="margin-top: 22px; width: 100%; padding: 14px;">Start my 14-day trial →</button>
+    <div class="status" id="finish-status"></div>
+  </div>
+</div>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+const state = {
+  leadId: null,
+  brandName: "",
+  handle: "",
+  brandSlug: "",
+  refs: [],
+  selectedRefs: new Set(),
+  hashtags: [],
+  selectedHashtags: new Set(),
+  plan: "pro",
+};
+
+function $(id) { return document.getElementById(id); }
+function activate(stepNum) {
+  for (let i = 1; i <= 4; i++) {
+    const s = $("step-" + i);
+    if (i < stepNum) { s.classList.remove("active", "disabled"); s.classList.add("done"); }
+    else if (i === stepNum) { s.classList.remove("disabled", "done"); s.classList.add("active"); s.scrollIntoView({ behavior: "smooth", block: "start" }); }
+    else { s.classList.add("disabled"); s.classList.remove("active", "done"); }
+  }
+}
+
+$("scan-btn").addEventListener("click", async () => {
+  const name = $("brand-name").value.trim();
+  const handle = $("brand-handle").value.replace(/^@/, "").trim().toLowerCase();
+  if (!name) { $("scan-status").textContent = "Brand name required."; $("scan-status").className = "status bad"; return; }
+  if (!/^[a-z0-9._]{2,30}$/.test(handle)) { $("scan-status").textContent = "Valid IG handle required."; $("scan-status").className = "status bad"; return; }
+  state.brandName = name; state.handle = handle;
+  $("scan-btn").disabled = true;
+  $("scan-status").innerHTML = `<span class="spinner"></span>Scanning @${handle}… (this takes 20-40 seconds)`;
+  $("scan-status").className = "status";
+  try {
+    // First create signup_lead to attach prefetched data to
+    if (!state.leadId) {
+      const { data: lead, error } = await sb.from("signup_leads")
+        .insert({ brand_name: name, brand_slug: handle.replace(/[._]/g, "-"), brand_ig_handle: handle, status: "preview", source: "onboarding-v2" })
+        .select("id").single();
+      if (error) throw error;
+      state.leadId = lead.id;
+    }
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/cold-start-preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ handle, lead_id: state.leadId, brand_name: name }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) throw new Error(data.error || "Scan failed");
+    state.refs = data.candidate_refs || [];
+    state.hashtags = data.suggested_hashtags || [];
+    state.brandSlug = data.suggested_brand_slug;
+    renderRefs();
+    renderHashtags();
+    $("scan-status").textContent = `Found ${state.refs.length} posts and ${state.hashtags.length} hashtag candidates.`;
+    $("scan-status").className = "status good";
+    activate(2);
+  } catch (e) {
+    $("scan-status").textContent = "Failed: " + e.message;
+    $("scan-status").className = "status bad";
+  } finally {
+    $("scan-btn").disabled = false;
+  }
+});
+
+function renderRefs() {
+  $("ref-grid").innerHTML = state.refs.map((r, i) => `
+    <div class="ref-tile" data-idx="${i}">
+      <img src="${r.url}" referrerpolicy="no-referrer">
+      <div class="check">✓</div>
+      ${r.likes ? `<div class="likes">${r.likes >= 1000 ? Math.round(r.likes/1000) + 'k' : r.likes} ♥</div>` : ""}
+    </div>`).join("");
+  $("ref-grid").querySelectorAll(".ref-tile").forEach(tile => {
+    tile.addEventListener("click", () => {
+      const idx = parseInt(tile.dataset.idx);
+      if (state.selectedRefs.has(idx)) state.selectedRefs.delete(idx);
+      else state.selectedRefs.add(idx);
+      tile.classList.toggle("selected");
+      $("ref-count").textContent = state.selectedRefs.size;
+      if (state.selectedRefs.size >= 5) activate(3);
+    });
+  });
+}
+
+function renderHashtags() {
+  // Auto-select top 5 by default
+  state.hashtags.slice(0, 5).forEach(h => state.selectedHashtags.add(h.tag));
+  $("hashtag-list").innerHTML = state.hashtags.map(h => `
+    <span class="hashtag-chip ${state.selectedHashtags.has(h.tag) ? "selected" : ""}" data-tag="${h.tag}">
+      #${h.tag}<span class="count">${h.count}×</span>
+    </span>`).join("");
+  $("hashtag-list").querySelectorAll(".hashtag-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const tag = chip.dataset.tag;
+      if (state.selectedHashtags.has(tag)) state.selectedHashtags.delete(tag);
+      else state.selectedHashtags.add(tag);
+      chip.classList.toggle("selected");
+    });
+  });
+}
+
+document.querySelectorAll(".plan-card").forEach(card => {
+  card.addEventListener("click", () => {
+    document.querySelectorAll(".plan-card").forEach(c => c.classList.remove("selected"));
+    card.classList.add("selected");
+    state.plan = card.dataset.plan;
+  });
+});
+
+// Watch step 3 to enable step 4 once user has either confirmed hashtags (any) or added custom
+function checkStep3() {
+  if (state.selectedHashtags.size > 0 || $("custom-hashtags").value.trim()) activate(4);
+}
+$("custom-hashtags").addEventListener("input", checkStep3);
+$("hashtag-list").addEventListener("click", () => setTimeout(checkStep3, 50));
+
+$("finish-btn").addEventListener("click", async () => {
+  const email = $("contact-email").value.trim().toLowerCase();
+  const contactName = $("contact-name").value.trim();
+  if (!email || !email.includes("@")) { $("finish-status").textContent = "Valid email required."; $("finish-status").className = "status bad"; return; }
+  $("finish-btn").disabled = true;
+  $("finish-status").innerHTML = `<span class="spinner"></span>Saving your setup…`;
+  $("finish-status").className = "status";
+  try {
+    const allHashtags = Array.from(state.selectedHashtags);
+    const custom = $("custom-hashtags").value.split("\n").map(t => t.trim().replace(/^#/, "")).filter(Boolean);
+    for (const t of custom) if (!allHashtags.includes(t)) allHashtags.push(t);
+
+    // Update the lead with all selections, hashtags, refs, plan
+    const selectedRefs = Array.from(state.selectedRefs).map(i => state.refs[i]).filter(Boolean);
+    const { error: updateErr } = await sb.from("signup_leads").update({
+      contact_email: email,
+      contact_name: contactName,
+      plan_slug: state.plan,
+      hashtags: allHashtags,
+      product_lines: [],
+      status: "ready_for_checkout",
+      notes: JSON.stringify({ selected_refs: selectedRefs, all_refs: state.refs }),
+    }).eq("id", state.leadId);
+    if (updateErr) throw updateErr;
+
+    // Trigger Stripe checkout (anonymous-callable signup checkout)
+    $("finish-status").innerHTML = `<span class="spinner"></span>Opening checkout…`;
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/stripe-create-signup-checkout`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lead_id: state.leadId, return_url: `${location.origin}/welcome.html?lead=${state.leadId}` }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.url) throw new Error(data.error || "Could not create checkout");
+    location.href = data.url;
+  } catch (e) {
+    $("finish-status").textContent = "Failed: " + e.message;
+    $("finish-status").className = "status bad";
+    $("finish-btn").disabled = false;
+  }
+});
+</script>
+
+</body>
+</html>

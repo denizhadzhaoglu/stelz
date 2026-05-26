@@ -1,0 +1,38 @@
+# Secrets & credentials
+.env
+.env.*
+!.env.example
+.env.bak
+client_secret*.json
+gcp-oauth.keys.json
+.google-calendar-mcp-token.json
+token.json
+credentials.json
+
+# Claude Code local
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+
+# Dependencies
+node_modules/
+.next/
+.vercel
+
+# Generated / build artifacts
+projects/spot-the-brand/cli/generated/
+projects/spot-the-brand/api/dist/
+
+# Temp & cache
+.tmp/
+.DS_Store
+*.pyc
+__pycache__/
+
+# Session data
+.firecrawl/
+.playwright-mcp/
+supabase/.temp/
+
+# Large backups (kept locally, not in git)
+.backups/

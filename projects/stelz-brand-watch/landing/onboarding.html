@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Onboarding · Lens</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --bg: #0a0a0a; --panel: #141414; --border: #2a2a2a; --text: #ededed; --muted: #888; --accent: #FF1300; --good: #4ade80; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; line-height: 1.55; }
+  .container { max-width: 720px; margin: 0 auto; padding: 60px 24px; }
+  .logo { font-size: 20px; font-weight: 700; margin-bottom: 40px; }
+  .logo span { color: var(--accent); }
+  .progress { display: flex; gap: 10px; margin-bottom: 36px; }
+  .progress .seg { flex: 1; height: 4px; background: var(--border); border-radius: 2px; }
+  .progress .seg.done, .progress .seg.active { background: var(--accent); }
+  h1 { font-size: 30px; letter-spacing: -0.02em; margin-bottom: 10px; font-weight: 700; }
+  .lead { color: var(--muted); margin-bottom: 30px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 32px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input, textarea, select { width: 100%; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: 14px; font-family: inherit; margin-bottom: 18px; }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+  textarea { min-height: 90px; resize: vertical; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .actions { display: flex; justify-content: space-between; margin-top: 24px; }
+  button { padding: 12px 22px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; border: 1px solid; }
+  button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+  button.ghost { background: transparent; color: var(--text); border-color: var(--border); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: -10px; margin-bottom: 18px; }
+  .plan-card { padding: 18px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; margin-bottom: 12px; }
+  .plan-card.selected { border-color: var(--accent); }
+  .plan-card .price { color: var(--accent); font-size: 18px; font-weight: 600; margin-top: 4px; }
+  .plan-card .features { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 14px; }
+  .upload-zone { border: 2px dashed var(--border); padding: 30px; text-align: center; color: var(--muted); border-radius: 10px; cursor: pointer; margin-bottom: 12px; }
+  .upload-zone:hover { border-color: var(--accent); color: var(--text); }
+  .file-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .file-chip { font-size: 12px; padding: 4px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; }
+  .step-content { display: none; }
+  .step-content.active { display: block; }
+  .success-screen { text-align: center; padding: 40px 0; }
+  .success-screen .check { width: 60px; height: 60px; border-radius: 50%; background: var(--good); color: var(--bg); display: inline-flex; align-items: center; justify-content: center; font-size: 30px; margin-bottom: 18px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="logo">Lens<span>.</span></div>
+
+  <div class="progress">
+    <div class="seg active" data-step="1"></div>
+    <div class="seg" data-step="2"></div>
+    <div class="seg" data-step="3"></div>
+    <div class="seg" data-step="4"></div>
+  </div>
+
+  <div class="panel">
+
+    <!-- STEP 1: Brand info -->
+    <div class="step-content active" data-step="1">
+      <h1>Tell us about your brand</h1>
+      <p class="lead">We start with the basics. You can edit anything later.</p>
+      <label>Brand name</label>
+      <input name="brand_name" placeholder="STËLZ Hard Seltzer">
+      <label>URL slug</label>
+      <input name="brand_slug" placeholder="stelz">
+      <div class="hint">Used in your dashboard URL. Lowercase letters and hyphens only.</div>
+      <label>Brand website</label>
+      <input name="brand_website" placeholder="https://drinkstelz.com">
+      <label>Primary markets</label>
+      <input name="markets" placeholder="Netherlands, Belgium, Germany">
+      <div class="actions">
+        <span></span>
+        <button class="primary" onclick="nextStep()">Continue</button>
+      </div>
+    </div>
+
+    <!-- STEP 2: Product lines + references -->
+    <div class="step-content" data-step="2">
+      <h1>Your product lines</h1>
+      <p class="lead">Each product line we should detect separately. Upload 2-5 reference photos per line.</p>
+      <label>Product line names (one per line)</label>
+      <textarea name="product_lines" placeholder="Hard Seltzer&#10;Hard Lemonade&#10;Hard Iced Tea&#10;Mixed Classics"></textarea>
+      <label>Reference images</label>
+      <div class="upload-zone" onclick="document.getElementById('ref-files').click()">
+        Click or drop product photos here
+        <div class="hint" style="margin-top: 8px;">PNG, JPG, WebP. Ideally official packshots + lifestyle shots.</div>
+      </div>
+      <input type="file" id="ref-files" multiple accept="image/*" style="display: none;" onchange="onFiles(this.files)">
+      <div class="file-list" id="file-list"></div>
+      <div class="actions">
+        <button class="ghost" onclick="prevStep()">Back</button>
+        <button class="primary" onclick="nextStep()">Continue</button>
+      </div>
+    </div>
+
+    <!-- STEP 3: Hashtags + competitors -->
+    <div class="step-content" data-step="3">
+      <h1>Where should we look?</h1>
+      <p class="lead">The hashtags your audience uses, plus any competitors we should benchmark against.</p>
+      <label>Brand hashtags (one per line, without #)</label>
+      <textarea name="brand_hashtags" placeholder="stelz&#10;drinkstelz&#10;stelzhardseltzer"></textarea>
+      <label>Audience hashtags</label>
+      <textarea name="audience_hashtags" placeholder="vrijmibo&#10;huisfeest&#10;studentenleven"></textarea>
+      <div class="hint">Hashtags your customers use even when not tagging you. We'll suggest more based on AI analysis.</div>
+      <label>Competitors to benchmark (optional)</label>
+      <input name="competitors" placeholder="White Claw, Truly, Mike's Hard Lemonade">
+      <div class="actions">
+        <button class="ghost" onclick="prevStep()">Back</button>
+        <button class="primary" onclick="nextStep()">Continue</button>
+      </div>
+    </div>
+
+    <!-- STEP 4: Plan + checkout -->
+    <div class="step-content" data-step="4">
+      <h1>Pick your plan</h1>
+      <p class="lead">14-day free trial on any plan. No credit card needed to start.</p>
+      <div class="plan-card" data-plan="starter" onclick="selectPlan('starter', this)">
+        <div style="font-weight: 600;">Starter</div>
+        <div class="price">€500 <span style="color: var(--muted); font-size: 13px; font-weight: 400;">/month</span></div>
+        <div class="features">200 creators · Instagram only · 7d backfill · weekly reports</div>
+      </div>
+      <div class="plan-card selected" data-plan="pro" onclick="selectPlan('pro', this)">
+        <div style="font-weight: 600;">Pro <span style="color: var(--accent); font-size: 11px; margin-left: 6px;">MOST POPULAR</span></div>
+        <div class="price">€1.500 <span style="color: var(--muted); font-size: 13px; font-weight: 400;">/month</span></div>
+        <div class="features">1.000 creators · IG + TikTok · 90d backfill · daily reports · 500 credits/mo</div>
+      </div>
+      <div class="plan-card" data-plan="enterprise" onclick="selectPlan('enterprise', this)">
+        <div style="font-weight: 600;">Enterprise</div>
+        <div class="price">Custom</div>
+        <div class="features">10k+ creators · all platforms · 1y backfill · unlimited seats · SLA</div>
+      </div>
+      <label class="checkbox-row" style="margin-top: 18px;">
+        <input type="checkbox" id="backfill-premium" style="width: auto; margin: 0;">
+        Add historical backfill (€2.500 one-time): scrape up to 1 year back
+      </label>
+      <div class="actions">
+        <button class="ghost" onclick="prevStep()">Back</button>
+        <button class="primary" id="finish-btn" onclick="finish()">Start trial</button>
+      </div>
+    </div>
+
+    <!-- SUCCESS -->
+    <div class="step-content" data-step="success">
+      <div class="success-screen">
+        <div class="check">✓</div>
+        <h1>You're in.</h1>
+        <p class="lead" id="success-message">Your brand profile is being set up. We'll email you within 1 business hour with your dashboard URL.</p>
+        <a href="https://stelz-brand-watch.vercel.app" target="_blank" style="color: var(--accent);">See the live demo →</a>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+let currentStep = 1;
+let formData = { plan_slug: "pro", uploaded_files: [] };
+
+window.nextStep = () => {
+  document.querySelectorAll(`[data-step="${currentStep}"] input, [data-step="${currentStep}"] textarea, [data-step="${currentStep}"] select`).forEach(el => {
+    if (el.name) formData[el.name] = el.value;
+  });
+  document.querySelector(`.step-content[data-step="${currentStep}"]`).classList.remove("active");
+  currentStep++;
+  document.querySelectorAll(`.progress .seg[data-step="${currentStep}"]`).forEach(s => s.classList.add("active"));
+  document.querySelectorAll(`.progress .seg[data-step="${currentStep - 1}"]`).forEach(s => { s.classList.remove("active"); s.classList.add("done"); });
+  document.querySelector(`.step-content[data-step="${currentStep}"]`).classList.add("active");
+};
+window.prevStep = () => {
+  document.querySelector(`.step-content[data-step="${currentStep}"]`).classList.remove("active");
+  currentStep--;
+  document.querySelectorAll(`.progress .seg[data-step="${currentStep + 1}"]`).forEach(s => s.classList.remove("active", "done"));
+  document.querySelector(`.step-content[data-step="${currentStep}"]`).classList.add("active");
+};
+window.selectPlan = (plan, el) => {
+  document.querySelectorAll(".plan-card").forEach(c => c.classList.remove("selected"));
+  el.classList.add("selected");
+  formData.plan_slug = plan;
+};
+window.onFiles = (files) => {
+  const list = document.getElementById("file-list");
+  for (const f of files) {
+    formData.uploaded_files.push(f.name);
+    const chip = document.createElement("span");
+    chip.className = "file-chip";
+    chip.textContent = f.name;
+    list.appendChild(chip);
+  }
+};
+window.finish = async () => {
+  document.querySelectorAll(`[data-step="${currentStep}"] input, [data-step="${currentStep}"] textarea`).forEach(el => {
+    if (el.name) formData[el.name] = el.value;
+  });
+  const backfillPremium = document.getElementById("backfill-premium")?.checked;
+  document.getElementById("finish-btn").disabled = true;
+  document.getElementById("finish-btn").textContent = "Setting up...";
+
+  const lead = {
+    brand_name: formData.brand_name,
+    brand_slug: formData.brand_slug || (formData.brand_name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    contact_email: formData.contact_email || "tbd@example.com",
+    plan_slug: formData.plan_slug,
+    product_lines: (formData.product_lines || "").split("\n").map(s => s.trim()).filter(Boolean),
+    hashtags: [
+      ...(formData.brand_hashtags || "").split("\n").map(s => s.trim()).filter(Boolean),
+      ...(formData.audience_hashtags || "").split("\n").map(s => s.trim()).filter(Boolean),
+    ],
+    notes: `Markets: ${formData.markets || "-"}\nWebsite: ${formData.brand_website || "-"}\nCompetitors: ${formData.competitors || "-"}\nFiles: ${formData.uploaded_files.join(", ")}\nBackfill: ${backfillPremium ? "1y premium" : "standard 7d"}`,
+    source: "onboarding_wizard",
+  };
+
+  try {
+    const { error } = await sb.from("signup_leads").insert(lead);
+    if (error) throw error;
+    document.querySelector(`.step-content[data-step="${currentStep}"]`).classList.remove("active");
+    currentStep = "success";
+    document.querySelector(`.step-content[data-step="success"]`).classList.add("active");
+    document.querySelectorAll(`.progress .seg`).forEach(s => s.classList.add("done"));
+    if (formData.plan_slug !== "enterprise") {
+      document.getElementById("success-message").textContent = "Your brand profile is being set up. You'll receive a Stripe checkout link within the next minutes to start your 14-day trial.";
+    }
+  } catch (err) {
+    alert("Could not save: " + err.message);
+    document.getElementById("finish-btn").disabled = false;
+    document.getElementById("finish-btn").textContent = "Start trial";
+  }
+};
+</script>
+
+</body>
+</html>

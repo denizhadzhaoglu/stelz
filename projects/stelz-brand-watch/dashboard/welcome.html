@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Activating your brand · Spot the Brand</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --bg: #0a0a0a; --panel: #141414; --border: #2a2a2a; --text: #ededed; --muted: #888; --accent: #FF1300; --good: #4ade80; --warn: #fbbf24; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; line-height: 1.55; min-height: 100vh; }
+  .topbar { padding: 14px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .logo { font-size: 18px; font-weight: 700; }
+  .logo span { color: var(--accent); }
+  .container { max-width: 720px; margin: 0 auto; padding: 36px 24px 80px; }
+  h1 { font-size: 32px; letter-spacing: -0.02em; margin-bottom: 8px; font-weight: 700; }
+  .lead { color: var(--muted); font-size: 15px; margin-bottom: 32px; }
+  .step { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px; margin-bottom: 12px; display: flex; align-items: center; gap: 14px; transition: border-color 0.15s; }
+  .step.done { border-left: 3px solid var(--good); }
+  .step.running { border-left: 3px solid var(--warn); }
+  .step.pending { opacity: 0.5; }
+  .step .icon { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-weight: 700; font-size: 12px; }
+  .step.done .icon { color: var(--good); }
+  .step.running .icon { color: var(--warn); }
+  .step .label { flex: 1; font-size: 14px; }
+  .step .label b { color: var(--text); }
+  .step .label .detail { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--warn); border-radius: 50%; animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hits-preview { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; margin-top: 26px; }
+  .hits-preview h2 { font-size: 15px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
+  .live-dot { width: 8px; height: 8px; background: var(--good); border-radius: 50%; animation: pulse 1.5s infinite ease-in-out; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .hit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; margin-top: 12px; }
+  .hit { aspect-ratio: 1; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); position: relative; }
+  .hit img { width: 100%; height: 100%; object-fit: cover; }
+  .hit .conf { position: absolute; top: 4px; right: 4px; background: var(--accent); color: white; font-size: 9px; padding: 1px 5px; border-radius: 3px; font-family: monospace; }
+  .cta { background: linear-gradient(135deg, var(--accent), #ff4d3d); color: white; padding: 20px 24px; border-radius: 12px; margin-top: 26px; display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .cta .copy { font-size: 14px; }
+  .cta .copy b { font-size: 16px; display: block; margin-bottom: 4px; }
+  .cta a { background: white; color: var(--accent); padding: 11px 22px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; }
+  .empty-hint { color: var(--muted); font-size: 13px; padding: 28px; text-align: center; border: 1px dashed var(--border); border-radius: 8px; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">Spot the Brand<span>.</span></div>
+</div>
+
+<div class="container">
+  <h1 id="hero-title">Activating your brand…</h1>
+  <p class="lead" id="hero-sub">We're calibrating computer vision on your references and running your first scan. First hits land in 15-30 minutes.</p>
+
+  <div id="steps">
+    <div class="step running" id="step-payment">
+      <div class="icon">○</div>
+      <div class="label"><b>Payment confirmed</b><div class="detail">Trial activated. No charge for 14 days.</div></div>
+    </div>
+    <div class="step running" id="step-provision">
+      <div class="icon"><span class="spinner"></span></div>
+      <div class="label"><b>Provisioning your workspace</b><div class="detail" id="step-provision-detail">Creating brand, plan and credits.</div></div>
+    </div>
+    <div class="step pending" id="step-refs">
+      <div class="icon">○</div>
+      <div class="label"><b>Seeding reference images</b><div class="detail">Uploading the photos you selected.</div></div>
+    </div>
+    <div class="step pending" id="step-scan">
+      <div class="icon">○</div>
+      <div class="label"><b>Running first scan</b><div class="detail">Scraping hashtags + creators. Typically 5-15 min.</div></div>
+    </div>
+    <div class="step pending" id="step-detect">
+      <div class="icon">○</div>
+      <div class="label"><b>Detecting your brand</b><div class="detail">Computer vision finds the product in posts.</div></div>
+    </div>
+  </div>
+
+  <div class="hits-preview" id="hits-preview" style="display: none;">
+    <h2><span class="live-dot"></span> Live: first detections coming in</h2>
+    <div id="hits-grid" class="hit-grid"></div>
+    <div id="hits-empty" class="empty-hint">No hits yet. The first ones usually appear within 5-10 minutes of the scan starting.</div>
+  </div>
+
+  <div class="cta" id="cta-block" style="display: none;">
+    <div class="copy"><b>Your dashboard is ready.</b>Take the tour and invite your team.</div>
+    <a id="cta-link" href="/">Open dashboard →</a>
+  </div>
+</div>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+const params = new URLSearchParams(location.search);
+const LEAD_ID = params.get("lead");
+let BRAND_SLUG = params.get("brand");
+let pollTimer = null;
+let stepState = { payment: "done", provision: "running", refs: "pending", scan: "pending", detect: "pending" };
+
+function setStep(name, state, detail) {
+  stepState[name] = state;
+  const el = document.getElementById(`step-${name}`);
+  if (!el) return;
+  el.classList.remove("done", "running", "pending");
+  el.classList.add(state);
+  const icon = el.querySelector(".icon");
+  if (icon) icon.innerHTML = state === "done" ? "✓" : state === "running" ? '<span class="spinner"></span>' : "○";
+  if (detail) {
+    const d = el.querySelector(".detail");
+    if (d) d.textContent = detail;
+  }
+}
+
+async function poll() {
+  try {
+    let brandId = null;
+    let lead = null;
+
+    if (LEAD_ID) {
+      const { data } = await sb.from("signup_leads")
+        .select("provisioned_brand_id, brand_slug, brand_name")
+        .eq("id", LEAD_ID).maybeSingle();
+      lead = data;
+      brandId = data?.provisioned_brand_id;
+      if (data?.brand_slug) BRAND_SLUG = data.brand_slug;
+    }
+    if (!brandId && BRAND_SLUG) {
+      const { data } = await sb.from("brands").select("id").eq("slug", BRAND_SLUG).maybeSingle();
+      brandId = data?.id;
+    }
+
+    if (!brandId) {
+      // Webhook hasn't fired yet
+      return;
+    }
+
+    // Step 2: provisioning is done as soon as the brand exists
+    if (stepState.provision !== "done") {
+      setStep("provision", "done", `Workspace ready for ${lead?.brand_name || BRAND_SLUG}.`);
+      setStep("refs", "running");
+    }
+
+    // Step 3: refs seeded — check Storage listing
+    if (stepState.refs !== "done") {
+      const { data: refs } = await sb.storage.from("brand-watch-thumbnails")
+        .list(`references/${BRAND_SLUG}`, { limit: 50 });
+      const refCount = (refs || []).filter(f => f.name && !f.name.startsWith(".") && !f.name.startsWith("training")).length;
+      if (refCount > 0) {
+        setStep("refs", "done", `${refCount} reference images uploaded.`);
+        setStep("scan", "running");
+      }
+    }
+
+    // Step 4: initial scan — check scan_requests
+    if (stepState.scan !== "done") {
+      const { data: scans } = await sb.from("scan_requests")
+        .select("status, started_at, completed_at, progress")
+        .eq("brand_id", brandId).order("requested_at", { ascending: false }).limit(1);
+      const scan = (scans || [])[0];
+      if (scan) {
+        if (scan.status === "completed") {
+          setStep("scan", "done", "First scan complete.");
+          setStep("detect", "running");
+        } else if (scan.status === "running") {
+          const stepKey = scan.progress?.current_step;
+          setStep("scan", "running", stepKey ? `Step: ${stepKey}` : "Running scan pipeline…");
+        }
+      }
+    }
+
+    // Step 5: detections — check the detection table
+    if (stepState.detect !== "done" || stepState.detect === "running") {
+      const { data: dets } = await sb.from("v_detections_full")
+        .select("detection_id, image_url, stored_path, confidence, product_line, creator_handle, posted_at")
+        .eq("brand_id", brandId).eq("detected", true)
+        .order("detected_at", { ascending: false }).limit(8);
+      const hits = dets || [];
+      if (hits.length > 0) {
+        setStep("detect", "done", `${hits.length}+ early hits detected so far.`);
+        renderHits(hits);
+        // Show CTA
+        const cta = document.getElementById("cta-block");
+        cta.style.display = "flex";
+        document.getElementById("cta-link").href = `/?brand=${BRAND_SLUG}`;
+        // Update hero
+        document.getElementById("hero-title").textContent = "Your brand is live.";
+        document.getElementById("hero-sub").textContent = "First detections are landing. The dashboard updates continuously from here.";
+      } else {
+        document.getElementById("hits-preview").style.display = "block";
+      }
+    }
+  } catch (e) {
+    console.error("poll err:", e);
+  }
+}
+
+function renderHits(hits) {
+  const grid = document.getElementById("hits-grid");
+  const empty = document.getElementById("hits-empty");
+  if (!hits.length) { empty.style.display = "block"; grid.innerHTML = ""; return; }
+  document.getElementById("hits-preview").style.display = "block";
+  empty.style.display = "none";
+  grid.innerHTML = hits.map(h => {
+    const url = h.stored_path
+      ? `${SUPABASE_URL}/storage/v1/object/public/brand-watch-thumbnails/${h.stored_path}`
+      : h.image_url;
+    return `<a class="hit" href="/?brand=${BRAND_SLUG}" target="_blank">
+      <img src="${url}" referrerpolicy="no-referrer">
+      <span class="conf">${Math.round((h.confidence || 0) * 100)}%</span>
+    </a>`;
+  }).join("");
+}
+
+// Start polling: every 8 seconds. Once all 5 steps are done, slow to 30s.
+poll();
+pollTimer = setInterval(() => {
+  poll();
+  if (stepState.detect === "done") {
+    clearInterval(pollTimer);
+    pollTimer = setInterval(poll, 30000);
+  }
+}, 8000);
+</script>
+
+</body>
+</html>

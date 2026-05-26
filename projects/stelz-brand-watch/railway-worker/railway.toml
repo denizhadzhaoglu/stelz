@@ -1,0 +1,12 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Always-on worker that polls scan_requests + subculture_expansions queues.
+# Restart on crash so a transient error doesn't kill the queue forever.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+# Single replica — the queue RPCs use FOR UPDATE SKIP LOCKED so it's safe to
+# bump this if throughput becomes an issue, but one is plenty for now.
+numReplicas = 1

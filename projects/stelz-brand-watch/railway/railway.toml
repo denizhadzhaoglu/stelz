@@ -1,0 +1,10 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Cron service: runs the daily_scan once, then exits.
+# Railway re-triggers per the schedule below.
+restartPolicyType = "NEVER"
+# Daily at 06:00 UTC (08:00 NL during daylight saving)
+cronSchedule = "0 6 * * *"

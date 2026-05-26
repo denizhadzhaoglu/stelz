@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Account · Spot the Brand</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --bg: #0a0a0a; --panel: #141414; --border: #2a2a2a; --text: #ededed; --muted: #888; --accent: #FF1300; --good: #4ade80; --warn: #fbbf24; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; line-height: 1.55; }
+  .topbar { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .topbar .logo { font-size: 18px; font-weight: 700; }
+  .topbar .logo span { color: var(--accent); }
+  .topbar a { color: var(--muted); font-size: 13px; text-decoration: none; margin-left: 20px; }
+  .topbar a:hover { color: var(--text); }
+  .topbar a.active { color: var(--accent); }
+  .container { max-width: 880px; margin: 0 auto; padding: 40px 24px; }
+  h1 { font-size: 28px; letter-spacing: -0.02em; margin-bottom: 6px; font-weight: 700; }
+  .lead { color: var(--muted); margin-bottom: 28px; font-size: 14px; }
+  .section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 26px; margin-bottom: 18px; }
+  .section h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+  .row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .row:last-child { border-bottom: none; }
+  .row .label { color: var(--muted); }
+  .row .value { font-weight: 500; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .pill.active { background: rgba(74, 222, 128, 0.1); color: var(--good); border: 1px solid var(--good); }
+  .pill.trial { background: rgba(251, 191, 36, 0.1); color: var(--warn); border: 1px solid var(--warn); }
+  input, textarea, select { width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: 14px; font-family: inherit; margin-bottom: 12px; }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea { min-height: 70px; resize: vertical; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; margin-top: 8px; }
+  button { padding: 10px 18px; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  button.danger { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  button:hover { opacity: 0.9; }
+  button + button { margin-left: 8px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .credit-bar { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-top: 12px; }
+  .credit-bar .credits-line { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .credit-bar .credits-num { font-size: 26px; font-weight: 700; }
+  .credit-bar .credits-label { color: var(--muted); font-size: 12px; }
+  .credit-bar .progress { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .credit-bar .progress > div { height: 100%; background: var(--good); }
+  .danger-zone { border: 1px solid var(--accent); background: rgba(255, 19, 0, 0.04); }
+  .danger-zone h2 { color: var(--accent); }
+  .empty-hint { color: var(--muted); font-size: 13px; padding: 12px; text-align: center; background: var(--bg); border-radius: 8px; border: 1px dashed var(--border); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">Spot the Brand<span>.</span></div>
+  <div>
+    <a href="/">Dashboard</a>
+    <a href="/account.html" class="active">Account</a>
+  </div>
+</div>
+
+<div class="container">
+  <h1>Account & settings</h1>
+  <p class="lead">Manage your brand profile, plan, credits and team.</p>
+
+  <div class="section">
+    <h2>Brand profile</h2>
+    <label>Brand name</label>
+    <input id="brand-name" placeholder="Loading..." />
+    <label>Slug</label>
+    <input id="brand-slug" placeholder="loading" readonly />
+    <label>Website</label>
+    <input id="brand-website" placeholder="https://your-brand.com" />
+    <button id="save-brand">Save changes</button>
+  </div>
+
+  <div class="section">
+    <h2>Subscription & credits</h2>
+    <div class="row"><span class="label">Plan</span><span class="value" id="plan-name">Loading…</span></div>
+    <div class="row"><span class="label">Status</span><span class="value" id="plan-status">—</span></div>
+    <div class="row"><span class="label">Renewal</span><span class="value" id="plan-renewal">—</span></div>
+    <div class="row"><span class="label">Backfill window</span><span class="value" id="plan-backfill">—</span></div>
+    <div class="credit-bar">
+      <div class="credits-line">
+        <div class="credits-num" id="credits-num">—</div>
+        <div class="credits-label">credits remaining</div>
+      </div>
+      <div class="progress"><div id="credits-bar" style="width: 0%"></div></div>
+    </div>
+    <div style="margin-top: 18px;">
+      <button id="change-plan-btn">Change plan</button>
+      <button id="buy-credits-btn" class="ghost">Buy credits</button>
+      <button id="manage-billing-btn" class="ghost">Manage billing in Stripe</button>
+    </div>
+    <div id="billing-status" style="font-size: 12px; color: var(--muted); margin-top: 10px; min-height: 16px;"></div>
+    <div id="credit-usage-chart" style="margin-top: 18px;"></div>
+  </div>
+
+  <div class="modal-backdrop" id="topup-modal" style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 200; padding: 24px;">
+    <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 26px; max-width: 460px; width: 100%;">
+      <h2 style="font-size: 18px; margin-bottom: 6px;">Buy credit pack</h2>
+      <p style="color: var(--muted); font-size: 13px; margin-bottom: 18px;">One-time Stripe checkout. Top-up credits never expire.</p>
+      <div id="topup-packs"></div>
+      <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+        <button id="topup-cancel" class="ghost">Cancel</button>
+      </div>
+      <div id="topup-status" style="font-size: 12px; color: var(--muted); margin-top: 12px;"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="plan-modal" style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 200; padding: 24px;">
+    <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 26px; max-width: 520px; width: 100%;">
+      <h2 style="font-size: 18px; margin-bottom: 6px;">Change plan</h2>
+      <p style="color: var(--muted); font-size: 13px; margin-bottom: 18px;">Stripe handles the checkout. You can cancel anytime from Manage billing.</p>
+      <div id="plan-options"></div>
+      <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+        <button id="plan-cancel" class="ghost">Cancel</button>
+      </div>
+      <div id="plan-status" style="font-size: 12px; color: var(--muted); margin-top: 12px;"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Product lines</h2>
+    <div id="product-lines">Loading…</div>
+    <button class="ghost" style="margin-top: 14px;">Add product line</button>
+  </div>
+
+  <div class="section">
+    <h2>Hashtag pool</h2>
+    <p class="lead" style="margin-bottom: 14px;">Hashtags we track to discover new posts. We also use AI to suggest related tags.</p>
+    <textarea id="hashtags" placeholder="stelz&#10;drinkstelz&#10;vrijmibo"></textarea>
+    <button>Save hashtags</button>
+  </div>
+
+  <div class="section">
+    <h2>Reference images</h2>
+    <p class="lead" style="margin-bottom: 14px;">Used by computer vision to recognize your product. Add more for better detection accuracy. PNG, JPG, WebP. Ideal: 5-10 packshots + lifestyle shots.</p>
+    <div id="ref-images">Loading…</div>
+    <div style="margin-top: 14px;">
+      <input type="file" id="ref-upload-input" multiple accept="image/*" style="display: none;">
+      <button class="ghost" id="ref-upload-btn">Upload reference image</button>
+      <span id="ref-upload-status" style="font-size: 12px; color: var(--muted); margin-left: 10px;"></span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Notifications</h2>
+    <label><input type="checkbox" id="notif-daily" style="width: auto; margin-right: 8px;">Daily summary email at 09:00</label>
+    <label><input type="checkbox" id="notif-slack-tier1" style="width: auto; margin-right: 8px;">Slack alerts for new tier 1 creator hits</label>
+    <label><input type="checkbox" id="notif-weekly-pdf" style="width: auto; margin-right: 8px;">Weekly insight report (PDF)</label>
+    <label>Slack webhook URL (for tier 1 alerts)</label>
+    <input id="notif-slack-url" placeholder="https://hooks.slack.com/services/..." />
+    <label>Email recipients (comma-separated)</label>
+    <input id="notif-emails" placeholder="alice@brand.com, bob@brand.com" />
+    <button id="notif-save">Save preferences</button>
+    <span id="notif-status" style="margin-left: 12px; font-size: 12px; color: var(--muted);"></span>
+  </div>
+
+  <div class="section">
+    <h2>Team</h2>
+    <div id="team-members"><div class="empty-hint">Loading…</div></div>
+    <div style="display: flex; gap: 8px; margin-top: 14px; align-items: center;">
+      <input id="invite-email" type="email" placeholder="teammate@example.com" style="flex: 1; margin: 0;">
+      <select id="invite-role" style="width: 110px; margin: 0;">
+        <option value="editor">Editor</option>
+        <option value="viewer">Viewer</option>
+        <option value="admin">Admin</option>
+      </select>
+      <button id="invite-btn" class="ghost" style="margin: 0;">Send invite</button>
+    </div>
+    <div id="invite-status" style="font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 16px;"></div>
+    <div id="pending-invites" style="margin-top: 12px;"></div>
+  </div>
+
+  <div class="section">
+    <h2>Auto-archived creators</h2>
+    <p class="lead" style="margin-bottom: 14px;">Creators the system stopped tracking because they had no STELZ-related content. You can restore any.</p>
+    <div id="archived-creators">Loading…</div>
+  </div>
+
+  <div class="section danger-zone">
+    <h2>Danger zone</h2>
+    <p class="lead">These actions cannot be undone.</p>
+    <button class="danger">Cancel subscription</button>
+    <button class="danger">Export all data</button>
+    <button class="danger">Delete brand account</button>
+  </div>
+</div>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+let cachedBrand = null;
+
+async function resolveActiveBrand() {
+  // Priority: ?brand=<slug> URL param → first brand the signed-in user
+  // is a member of → STELZ as public-demo fallback.
+  const requestedSlug = new URL(location.href).searchParams.get("brand");
+  const { data: { session } } = await sb.auth.getSession();
+  if (session?.user) {
+    const { data: links } = await sb.from("brand_users")
+      .select("brand:brands(*)")
+      .eq("user_id", session.user.id)
+      .order("created_at", { ascending: true });
+    const memberships = (links || []).map(l => l.brand).filter(Boolean);
+    if (requestedSlug) {
+      const match = memberships.find(b => b.slug === requestedSlug);
+      if (match) return match;
+    }
+    if (memberships.length) return memberships[0];
+  }
+  const fallbackSlug = requestedSlug || "stelz";
+  const { data: brand } = await sb.from("brands").select("*").eq("slug", fallbackSlug).maybeSingle();
+  return brand;
+}
+
+async function load() {
+  const brand = await resolveActiveBrand();
+  if (!brand) {
+    document.querySelector(".container").innerHTML = `<div style="padding: 40px; text-align: center; color: var(--muted);">No brand resolved. Sign in or open ?brand=&lt;slug&gt;.</div>`;
+    return;
+  }
+  cachedBrand = brand;
+  document.getElementById("brand-name").value = brand.name || "";
+  document.getElementById("brand-slug").value = brand.slug || "";
+  document.getElementById("brand-website").value = brand.website || "";
+
+  const { data: sub } = await sb.from("subscriptions").select("*, plan:plans(*)").eq("brand_id", brand.id).maybeSingle();
+  if (sub) {
+    document.getElementById("plan-name").textContent = sub.plan?.name || "—";
+    document.getElementById("plan-status").innerHTML = `<span class="pill ${sub.status === 'active' ? 'active' : 'trial'}">${sub.status}</span>`;
+    document.getElementById("plan-renewal").textContent = sub.current_period_end ? new Date(sub.current_period_end).toISOString().slice(0,10) : "—";
+    document.getElementById("plan-backfill").textContent = (sub.plan?.features?.backfill_days || 7) + " days";
+  } else {
+    document.getElementById("plan-name").textContent = "No active subscription";
+  }
+
+  const { data: credits } = await sb.from("credit_balances").select("balance").eq("brand_id", brand.id).maybeSingle();
+  if (credits) {
+    document.getElementById("credits-num").textContent = credits.balance.toLocaleString("nl-NL");
+    const pct = Math.min(100, (credits.balance / 10000) * 100);
+    document.getElementById("credits-bar").style.width = pct + "%";
+  }
+
+  const { data: pls } = await sb.from("brand_product_lines").select("name, description").eq("brand_id", brand.id);
+  document.getElementById("product-lines").innerHTML = pls?.length
+    ? pls.map(p => `<div class="row"><span class="value">${p.name}</span><span class="label">${p.description || ""}</span></div>`).join("")
+    : `<div class="empty-hint">No product lines configured yet</div>`;
+
+  const { data: tags } = await sb.from("brand_hashtag_pools").select("hashtag, group_label, priority").eq("brand_id", brand.id).order("priority", { ascending: false });
+  if (tags?.length) {
+    document.getElementById("hashtags").value = tags.map(t => t.hashtag).join("\n");
+  }
+
+  await renderReferenceImages();
+  await renderCreditUsage();
+  await loadTeam();
+  await loadPendingInvites();
+  await loadNotificationPrefs();
+
+  // Real archived-creators count from the DB (no more hardcoded 371).
+  const [{ data: archivedSample }, { count: archivedTotal }] = await Promise.all([
+    sb.from("creators").select("id, handle, platform, archived_reason, archived_at").eq("brand_id", brand.id).not("archived_at", "is", null).order("archived_at", { ascending: false }).limit(10),
+    sb.from("creators").select("id", { count: "exact", head: true }).eq("brand_id", brand.id).not("archived_at", "is", null),
+  ]);
+  document.getElementById("archived-creators").innerHTML = archivedSample?.length
+    ? archivedSample.map(c => `<div class="row">
+        <span class="value">@${c.handle} <span class="label">(${c.platform})${c.archived_reason ? " · " + c.archived_reason : ""}</span></span>
+        <button class="ghost" data-action="restore-creator" data-id="${c.id}" style="padding: 4px 10px; font-size: 11px;">Restore</button>
+      </div>`).join("") +
+      (archivedTotal > 10 ? `<div style="text-align: center; margin-top: 12px; color: var(--muted); font-size: 12px;">Showing 10 of ${archivedTotal} archived.</div>` : "")
+    : `<div class="empty-hint">No archived creators yet</div>`;
+}
+
+const REF_BUCKET = "brand-watch-thumbnails";
+
+// ============================================================
+// CREDIT TOP-UP
+// Open modal -> pick pack -> Edge Function creates Stripe checkout
+// session -> redirect to Stripe. Webhook credits the balance on success.
+// ============================================================
+const PACKS = [
+  { slug: "small",  label: "Small",  credits: 100,   price: 25,   per: 0.25  },
+  { slug: "medium", label: "Medium", credits: 500,   price: 100,  per: 0.20  },
+  { slug: "large",  label: "Large",  credits: 2000,  price: 350,  per: 0.175 },
+  { slug: "mega",   label: "Mega",   credits: 10000, price: 1500, per: 0.15  },
+];
+
+function openTopupModal() {
+  if (!cachedBrand) { alert("Brand not loaded yet"); return; }
+  const container = document.getElementById("topup-packs");
+  container.innerHTML = PACKS.map(p => `
+    <div class="row" style="cursor: pointer; padding: 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px;" data-pack="${p.slug}">
+      <div>
+        <div style="font-weight: 600;">${p.label} · ${p.credits.toLocaleString("nl-NL")} credits</div>
+        <div style="color: var(--muted); font-size: 11px;">€${p.per.toFixed(2)} per credit</div>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: flex-end;">
+        <div style="font-weight: 700; font-size: 18px;">€${p.price}</div>
+        <div style="color: var(--accent); font-size: 11px; font-weight: 600;">Buy →</div>
+      </div>
+    </div>`).join("");
+  document.getElementById("topup-modal").style.display = "flex";
+}
+
+async function startTopup(packSlug) {
+  const status = document.getElementById("topup-status");
+  status.textContent = "Creating checkout session…";
+  status.style.color = "var(--muted)";
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    status.textContent = "Sign in first to buy credits.";
+    status.style.color = "var(--accent)";
+    return;
+  }
+  try {
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/stripe-create-topup-checkout`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        pack: packSlug,
+        brand_id: cachedBrand.id,
+        return_url: location.origin + "/account.html",
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.url) {
+      status.textContent = data.error || "Checkout failed. Make sure STRIPE_SECRET_KEY is set on the Edge Function.";
+      status.style.color = "var(--accent)";
+      return;
+    }
+    location.href = data.url;
+  } catch (e) {
+    status.textContent = "Network error: " + e.message;
+    status.style.color = "var(--accent)";
+  }
+}
+
+document.getElementById("buy-credits-btn").addEventListener("click", openTopupModal);
+document.getElementById("topup-cancel").addEventListener("click", () => document.getElementById("topup-modal").style.display = "none");
+
+// ============================================================
+// PLAN CHANGE — opens modal listing available plans + Stripe Checkout
+// ============================================================
+async function openPlanModal() {
+  if (!cachedBrand) { alert("Brand not loaded yet"); return; }
+  const status = document.getElementById("plan-status");
+  status.textContent = "";
+  const { data: plans, error } = await sb.from("plans")
+    .select("id, slug, name, price_eur_month, stripe_price_id, features")
+    .eq("active", true).order("price_eur_month", { ascending: true });
+  const container = document.getElementById("plan-options");
+  if (error || !plans?.length) {
+    container.innerHTML = `<div class="empty-hint">Could not load plans.</div>`;
+  } else {
+    container.innerHTML = plans.map(p => {
+      const feats = p.features || {};
+      const featLines = [
+        feats.brand_count ? `${feats.brand_count} brand${feats.brand_count > 1 ? "s" : ""}` : "",
+        feats.backfill_days ? `${feats.backfill_days}d backfill` : "",
+        p.stripe_price_id ? "" : `<span style="color: var(--warn);">contact sales</span>`,
+      ].filter(Boolean).join(" · ");
+      const disabled = !p.stripe_price_id ? "disabled" : "";
+      return `<div class="row" style="padding: 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; align-items: center;">
+        <div>
+          <div style="font-weight: 600;">${p.name}</div>
+          <div style="color: var(--muted); font-size: 11px;">${featLines || "&nbsp;"}</div>
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
+          <div style="font-weight: 700; font-size: 18px;">€${(p.price_eur_month || 0).toLocaleString("nl-NL")}<span style="color: var(--muted); font-size: 11px; font-weight: 400;">/mo</span></div>
+          <button data-plan="${p.slug}" ${disabled} style="padding: 5px 12px; font-size: 12px;">${disabled ? "Contact sales" : "Subscribe"}</button>
+        </div>
+      </div>`;
+    }).join("");
+  }
+  document.getElementById("plan-modal").style.display = "flex";
+}
+
+async function startSubscribe(planSlug) {
+  const status = document.getElementById("plan-status");
+  status.textContent = "Creating checkout session…"; status.style.color = "var(--muted)";
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { status.textContent = "Sign in first."; status.style.color = "var(--accent)"; return; }
+  try {
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/stripe-create-subscription-checkout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ plan_slug: planSlug, brand_id: cachedBrand.id, return_url: location.href }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.url) { status.textContent = data.error || "Checkout failed."; status.style.color = "var(--accent)"; return; }
+    location.href = data.url;
+  } catch (e) {
+    status.textContent = "Network error: " + e.message; status.style.color = "var(--accent)";
+  }
+}
+
+document.getElementById("change-plan-btn").addEventListener("click", openPlanModal);
+document.getElementById("plan-cancel").addEventListener("click", () => document.getElementById("plan-modal").style.display = "none");
+document.getElementById("plan-modal").addEventListener("click", (e) => {
+  if (e.target.id === "plan-modal") e.target.style.display = "none";
+  const btn = e.target.closest("[data-plan]");
+  if (btn && !btn.disabled) startSubscribe(btn.dataset.plan);
+});
+
+// ============================================================
+// MANAGE BILLING — opens Stripe Customer Portal
+// ============================================================
+document.getElementById("manage-billing-btn").addEventListener("click", async () => {
+  if (!cachedBrand) return;
+  const status = document.getElementById("billing-status");
+  status.textContent = "Opening Stripe…"; status.style.color = "var(--muted)";
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { status.textContent = "Sign in first."; status.style.color = "var(--accent)"; return; }
+  try {
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/stripe-create-portal-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ brand_id: cachedBrand.id, return_url: location.href }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.url) { status.textContent = data.error || "Could not open portal."; status.style.color = "var(--accent)"; return; }
+    location.href = data.url;
+  } catch (e) {
+    status.textContent = "Network error: " + e.message; status.style.color = "var(--accent)";
+  }
+});
+
+// Stripe redirect banners
+if (location.search.includes("subscribe=success")) {
+  setTimeout(() => alert("Subscription geactiveerd. De webhook bevestigt zo de status."), 200);
+} else if (location.search.includes("subscribe=cancelled")) {
+  setTimeout(() => alert("Subscription geannuleerd."), 200);
+}
+document.getElementById("topup-modal").addEventListener("click", (e) => {
+  if (e.target.id === "topup-modal") e.target.style.display = "none";
+  const row = e.target.closest("[data-pack]");
+  if (row) startTopup(row.dataset.pack);
+});
+
+// Show a friendly banner after Stripe redirect
+if (location.search.includes("topup=success")) {
+  setTimeout(() => alert("Credits gekocht! Het kan een minuut duren voor de webhook ze toevoegt aan je balance."), 200);
+} else if (location.search.includes("topup=cancelled")) {
+  setTimeout(() => alert("Checkout geannuleerd. Geen credits afgeschreven."), 200);
+}
+
+// ============================================================
+// Credit usage chart: spent this month vs last month, by action.
+// Lives under the credit-bar so users see at a glance where credits
+// went and can forecast their burn rate.
+// ============================================================
+async function renderCreditUsage() {
+  if (!cachedBrand) return;
+  const container = document.getElementById("credit-usage-chart");
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const prevStart  = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const { data: tx } = await sb.from("credit_transactions")
+    .select("amount, action, created_at")
+    .eq("brand_id", cachedBrand.id)
+    .gte("created_at", prevStart.toISOString())
+    .lt("amount", 0)
+    .limit(2000);
+  if (!tx?.length) {
+    container.innerHTML = `<div class="empty-hint" style="margin-top: 12px;">No credit spending yet this month.</div>`;
+    return;
+  }
+  const byMonth = { current: {}, prev: {} };
+  let curTotal = 0, prevTotal = 0;
+  for (const t of tx) {
+    const d = new Date(t.created_at);
+    const bucket = d >= monthStart ? "current" : "prev";
+    const action = t.action || "other";
+    byMonth[bucket][action] = (byMonth[bucket][action] || 0) + Math.abs(t.amount);
+    if (bucket === "current") curTotal += Math.abs(t.amount);
+    else prevTotal += Math.abs(t.amount);
+  }
+  const allActions = Array.from(new Set([...Object.keys(byMonth.current), ...Object.keys(byMonth.prev)]));
+  const maxVal = Math.max(curTotal, prevTotal, 1);
+  // Days elapsed this month and forecast burn
+  const daysElapsed = Math.max(1, Math.ceil((now - monthStart) / 86400000));
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const forecast = Math.round(curTotal / daysElapsed * daysInMonth);
+  const colors = {
+    manual_scan: "#60a5fa", deep_scan: "#fb923c", expansion: "#f472b6",
+    pro_reverify: "#34d399", backfill: "#a78bfa", other: "#888"
+  };
+  const renderBar = (label, total, breakdown) => {
+    if (total === 0) return `<div style="color: var(--muted); font-size: 12px; padding: 8px 0;">${label}: no spending</div>`;
+    const segs = allActions.map(a => {
+      const v = breakdown[a] || 0;
+      if (!v) return "";
+      const w = (v / maxVal) * 100;
+      const c = colors[a] || "#888";
+      return `<div title="${a}: ${v} cr" style="width:${w}%; background:${c}; height: 100%;"></div>`;
+    }).join("");
+    return `<div style="margin: 10px 0;">
+      <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+        <span style="color: var(--muted);">${label}</span>
+        <span style="font-variant-numeric: tabular-nums;"><b>${total.toLocaleString("nl-NL")}</b> credits</span>
+      </div>
+      <div style="display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg);">${segs}</div>
+    </div>`;
+  };
+  const legend = allActions.map(a => {
+    if (!(byMonth.current[a] || byMonth.prev[a])) return "";
+    return `<span style="display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; font-size: 11px; color: var(--muted);">
+      <span style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: ${colors[a] || '#888'};"></span>${a.replace(/_/g, " ")}</span>`;
+  }).join("");
+  container.innerHTML = `
+    <div style="font-size: 12px; color: var(--muted); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+      <span>Credit usage</span>
+      <span>Forecast this month: <b style="color: var(--text);">${forecast.toLocaleString("nl-NL")} cr</b></span>
+    </div>
+    ${renderBar("This month so far", curTotal, byMonth.current)}
+    ${renderBar("Previous month", prevTotal, byMonth.prev)}
+    <div style="margin-top: 8px;">${legend}</div>`;
+}
+
+async function renderReferenceImages() {
+  if (!cachedBrand) return;
+  const folder = `references/${cachedBrand.slug}`;
+  const { data: files, error } = await sb.storage.from(REF_BUCKET).list(folder, {
+    limit: 100,
+    sortBy: { column: "created_at", order: "desc" },
+  });
+  const container = document.getElementById("ref-images");
+  if (error) {
+    container.innerHTML = `<div class="empty-hint">Could not load references: ${error.message}</div>`;
+    return;
+  }
+  const valid = (files || []).filter(f => f.name && !f.name.startsWith("."));
+  if (!valid.length) {
+    container.innerHTML = `<div class="empty-hint">No reference images yet — upload your first product photo.</div>`;
+    return;
+  }
+  container.innerHTML = `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px;">` +
+    valid.map(f => {
+      const url = `${SUPABASE_URL}/storage/v1/object/public/${REF_BUCKET}/${folder}/${f.name}`;
+      return `<div style="position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; border: 1px solid var(--border);">
+        <img src="${url}" style="width: 100%; height: 100%; object-fit: cover;" referrerpolicy="no-referrer">
+        <button class="ghost" data-action="del-ref" data-name="${f.name}" style="position: absolute; top: 4px; right: 4px; padding: 2px 8px; font-size: 10px;">×</button>
+      </div>`;
+    }).join("") +
+    `</div>`;
+}
+
+document.getElementById("ref-upload-btn").addEventListener("click", () => {
+  document.getElementById("ref-upload-input").click();
+});
+document.getElementById("ref-upload-input").addEventListener("change", async (e) => {
+  if (!cachedBrand) return;
+  const files = e.target.files;
+  if (!files?.length) return;
+  const status = document.getElementById("ref-upload-status");
+  let done = 0;
+  for (const f of files) {
+    status.textContent = `Uploading ${done+1}/${files.length}…`;
+    const path = `references/${cachedBrand.slug}/${Date.now()}-${f.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    const { error } = await sb.storage.from(REF_BUCKET).upload(path, f, {
+      contentType: f.type || "image/jpeg",
+      upsert: false,
+    });
+    if (error) {
+      status.textContent = `Failed: ${error.message}`;
+      status.style.color = "var(--accent)";
+      return;
+    }
+    done++;
+  }
+  status.textContent = `Uploaded ${done}/${files.length} ✓`;
+  status.style.color = "var(--good)";
+  e.target.value = "";
+  await renderReferenceImages();
+  setTimeout(() => { status.textContent = ""; status.style.color = "var(--muted)"; }, 2500);
+});
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-action='del-ref']");
+  if (!btn || !cachedBrand) return;
+  if (!confirm(`Delete this reference image? This affects future detections.`)) return;
+  const path = `references/${cachedBrand.slug}/${btn.dataset.name}`;
+  const { error } = await sb.storage.from(REF_BUCKET).remove([path]);
+  if (error) { alert("Delete failed: " + error.message); return; }
+  await renderReferenceImages();
+});
+
+// Save brand profile changes
+document.getElementById("save-brand").addEventListener("click", async (e) => {
+  if (!cachedBrand) return;
+  e.target.disabled = true;
+  e.target.textContent = "Saving…";
+  const { error } = await sb.from("brands").update({
+    name: document.getElementById("brand-name").value,
+    website: document.getElementById("brand-website").value || null,
+    updated_at: new Date().toISOString(),
+  }).eq("id", cachedBrand.id);
+  e.target.disabled = false;
+  e.target.textContent = error ? "Failed — retry" : "Saved ✓";
+  if (error) { alert("Save failed: " + error.message); e.target.textContent = "Save changes"; return; }
+  setTimeout(() => e.target.textContent = "Save changes", 1500);
+});
+
+// Save hashtag pool
+const hashtagSection = document.getElementById("hashtags").closest(".section");
+hashtagSection.querySelector("button").addEventListener("click", async (e) => {
+  if (!cachedBrand) return;
+  e.target.disabled = true; e.target.textContent = "Saving…";
+  const tags = document.getElementById("hashtags").value.split("\n")
+    .map(t => t.trim().replace(/^#/, "")).filter(Boolean);
+  // Replace pool: delete then insert (simpler than diffing)
+  await sb.from("brand_hashtag_pools").delete().eq("brand_id", cachedBrand.id);
+  if (tags.length) {
+    await sb.from("brand_hashtag_pools").insert(tags.map(t => ({
+      brand_id: cachedBrand.id, hashtag: t, platform: "instagram", priority: 5, active: true,
+    })));
+  }
+  e.target.disabled = false;
+  e.target.textContent = "Saved ✓";
+  setTimeout(() => e.target.textContent = "Save hashtags", 1500);
+});
+
+// Restore an archived creator
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-action='restore-creator']");
+  if (!btn) return;
+  const id = btn.dataset.id;
+  btn.disabled = true;
+  btn.textContent = "…";
+  const { error } = await sb.from("creators").update({
+    archived_at: null,
+    archived_reason: null,
+    status: "discovered",
+  }).eq("id", id);
+  if (error) {
+    btn.disabled = false;
+    btn.textContent = "Restore";
+    alert("Failed: " + error.message);
+    return;
+  }
+  btn.closest(".row").style.opacity = "0.4";
+  btn.textContent = "Restored ✓";
+});
+
+// ============================================================
+// TEAM + INVITES
+// ============================================================
+async function loadTeam() {
+  if (!cachedBrand) return;
+  const container = document.getElementById("team-members");
+  const { data: members, error } = await sb.from("brand_users")
+    .select("id, email, role, user_id, created_at")
+    .eq("brand_id", cachedBrand.id)
+    .order("created_at", { ascending: true });
+  if (error) {
+    container.innerHTML = `<div class="empty-hint">Could not load team: ${error.message}</div>`;
+    return;
+  }
+  if (!members?.length) {
+    container.innerHTML = `<div class="empty-hint">No team members yet.</div>`;
+    return;
+  }
+  const { data: { user: me } } = await sb.auth.getUser();
+  container.innerHTML = members.map(m => {
+    const isMe = me?.id === m.user_id;
+    const isOwner = m.role === "owner";
+    const canRemove = !isOwner && !isMe;
+    return `<div class="row">
+      <span class="value">${m.email}${isMe ? " <span class='label'>(you)</span>" : ""}</span>
+      <span style="display: flex; align-items: center; gap: 10px;">
+        <span class="pill ${isOwner ? 'active' : 'trial'}">${m.role}</span>
+        ${canRemove ? `<button class="ghost" data-action="remove-member" data-id="${m.id}" style="padding: 4px 10px; font-size: 11px;">Remove</button>` : ""}
+      </span>
+    </div>`;
+  }).join("");
+}
+
+async function loadPendingInvites() {
+  if (!cachedBrand) return;
+  const container = document.getElementById("pending-invites");
+  const { data: invites, error } = await sb.from("brand_invites")
+    .select("id, email, role, token, expires_at, status, created_at")
+    .eq("brand_id", cachedBrand.id)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+  if (error || !invites?.length) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = `<div style="font-size: 12px; color: var(--muted); margin-bottom: 6px;">Pending invites</div>` +
+    invites.map(inv => {
+      const link = `${location.origin}/accept-invite.html?token=${inv.token}`;
+      return `<div class="row" style="padding: 8px 0;">
+        <span class="value" style="font-size: 13px;">${inv.email} <span class="label">(${inv.role})</span></span>
+        <span style="display: flex; align-items: center; gap: 8px;">
+          <button class="ghost" data-action="copy-invite" data-link="${link}" style="padding: 4px 10px; font-size: 11px;">Copy link</button>
+          <button class="ghost" data-action="revoke-invite" data-id="${inv.id}" style="padding: 4px 10px; font-size: 11px;">Revoke</button>
+        </span>
+      </div>`;
+    }).join("");
+}
+
+document.getElementById("invite-btn").addEventListener("click", async () => {
+  if (!cachedBrand) return;
+  const email = document.getElementById("invite-email").value.trim().toLowerCase();
+  const role = document.getElementById("invite-role").value;
+  const status = document.getElementById("invite-status");
+  if (!email || !email.includes("@")) {
+    status.textContent = "Enter a valid email."; status.style.color = "var(--accent)";
+    return;
+  }
+  status.textContent = "Creating invite…"; status.style.color = "var(--muted)";
+  const { data, error } = await sb.rpc("create_brand_invite", {
+    p_brand_id: cachedBrand.id, p_email: email, p_role: role,
+  });
+  if (error) {
+    status.textContent = "Failed: " + error.message; status.style.color = "var(--accent)";
+    return;
+  }
+  const token = data?.token || data;
+  const link = `${location.origin}/accept-invite.html?token=${token}`;
+  try { await navigator.clipboard.writeText(link); } catch {}
+  status.innerHTML = `Invite created for ${email}. Link copied to clipboard.`;
+  status.style.color = "var(--good)";
+  document.getElementById("invite-email").value = "";
+  await loadPendingInvites();
+});
+
+document.addEventListener("click", async (e) => {
+  const copyBtn = e.target.closest("[data-action='copy-invite']");
+  if (copyBtn) {
+    try { await navigator.clipboard.writeText(copyBtn.dataset.link); } catch {}
+    copyBtn.textContent = "Copied ✓";
+    setTimeout(() => copyBtn.textContent = "Copy link", 1500);
+    return;
+  }
+  const revokeBtn = e.target.closest("[data-action='revoke-invite']");
+  if (revokeBtn) {
+    if (!confirm("Revoke this invite?")) return;
+    const { error } = await sb.from("brand_invites").update({ status: "revoked" }).eq("id", revokeBtn.dataset.id);
+    if (error) { alert("Failed: " + error.message); return; }
+    await loadPendingInvites();
+    return;
+  }
+  const removeBtn = e.target.closest("[data-action='remove-member']");
+  if (removeBtn) {
+    if (!confirm("Remove this team member?")) return;
+    const { error } = await sb.from("brand_users").delete().eq("id", removeBtn.dataset.id);
+    if (error) { alert("Failed: " + error.message); return; }
+    await loadTeam();
+  }
+});
+
+// ============================================================
+// NOTIFICATION PREFERENCES
+// ============================================================
+async function loadNotificationPrefs() {
+  if (!cachedBrand) return;
+  const { data } = await sb.from("brand_notification_prefs")
+    .select("*").eq("brand_id", cachedBrand.id).maybeSingle();
+  document.getElementById("notif-daily").checked = data?.daily_summary_email ?? true;
+  document.getElementById("notif-slack-tier1").checked = data?.slack_alerts_tier1 ?? false;
+  document.getElementById("notif-weekly-pdf").checked = data?.weekly_pdf_report ?? false;
+  document.getElementById("notif-slack-url").value = data?.slack_webhook_url || "";
+  document.getElementById("notif-emails").value = (data?.email_recipients || []).join(", ");
+}
+
+document.getElementById("notif-save").addEventListener("click", async (e) => {
+  if (!cachedBrand) return;
+  const status = document.getElementById("notif-status");
+  e.target.disabled = true; e.target.textContent = "Saving…";
+  status.textContent = "";
+  const emails = document.getElementById("notif-emails").value
+    .split(",").map(s => s.trim().toLowerCase()).filter(s => s.includes("@"));
+  const payload = {
+    brand_id: cachedBrand.id,
+    daily_summary_email: document.getElementById("notif-daily").checked,
+    slack_alerts_tier1: document.getElementById("notif-slack-tier1").checked,
+    weekly_pdf_report: document.getElementById("notif-weekly-pdf").checked,
+    slack_webhook_url: document.getElementById("notif-slack-url").value.trim() || null,
+    email_recipients: emails,
+    updated_at: new Date().toISOString(),
+  };
+  const { error } = await sb.from("brand_notification_prefs")
+    .upsert(payload, { onConflict: "brand_id" });
+  e.target.disabled = false; e.target.textContent = "Save preferences";
+  if (error) { status.textContent = "Failed: " + error.message; status.style.color = "var(--accent)"; return; }
+  status.textContent = "Saved ✓"; status.style.color = "var(--good)";
+  setTimeout(() => status.textContent = "", 2000);
+});
+
+// Buttons without a concrete handler get a clear "coming soon" notice instead of
+// silently doing nothing (the previous footgun).
+document.querySelectorAll("button").forEach(b => {
+  const wired = new Set(["save-brand", "invite-btn", "notif-save", "change-plan-btn", "manage-billing-btn", "buy-credits-btn", "topup-cancel", "plan-cancel", "ref-upload-btn"]);
+  if (wired.has(b.id)) return;
+  if (b.dataset.action) return;
+  if (b.dataset.plan) return;
+  if (b.dataset.pack) return;
+  if (b.closest(".section")?.querySelector("textarea#hashtags")) return;
+  if (b.closest(".section.danger-zone")) {
+    b.addEventListener("click", () => alert("Critical action — email support@jackandai.com to confirm."));
+    return;
+  }
+  b.addEventListener("click", () => alert("This action is coming soon. For now, email support@jackandai.com."));
+});
+
+load().catch(console.error);
+</script>
+
+</body>
+</html>

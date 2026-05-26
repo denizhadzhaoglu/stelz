@@ -1,0 +1,282 @@
+{
+  "positive": [
+    {
+      "file": "fewshot_pos_00.jpg",
+      "creator": "drinkstelz",
+      "model_said": {
+        "product_line": "hard_seltzer",
+        "confidence": 1.0,
+        "size_in_frame": "medium",
+        "context": "Two cans of ST\u00cbLZ Hard Seltzer Raspberry are on a counter, with one clearly visible in the center of the frame and a second one partially visible to the right."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_01.jpg",
+      "creator": "drinkstelz",
+      "model_said": {
+        "product_line": "hard_seltzer",
+        "confidence": 1.0,
+        "size_in_frame": "dominant",
+        "context": "A ST\u00cbLZ Hard Seltzer Raspberry can is the primary subject, placed in focus in an outdoor setting with a building in the background."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_02.jpg",
+      "creator": "fatimawn",
+      "model_said": {
+        "product_line": "hard_iced_tea",
+        "confidence": 0.95,
+        "size_in_frame": "medium",
+        "context": "A person is holding a can of ST\u00cbLZ Hard Iced Tea, with the distinctive green leaf pattern for the Lemon flavor clearly visible and confirmed by on-screen text."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_03.jpg",
+      "creator": "drinkstelz",
+      "model_said": {
+        "product_line": "mixed_classics",
+        "confidence": 1.0,
+        "size_in_frame": "large",
+        "context": "A man in a tuxedo behind a bar holds up two ST\u00cbLZ cans, a Mixed Classics Gin & Tonic and a Hard Iced Tea, with many more cans stacked in the background."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_04.jpg",
+      "creator": "pancakesamsterdam",
+      "model_said": {
+        "product_line": "hard_seltzer",
+        "confidence": 1.0,
+        "size_in_frame": "medium",
+        "context": "A can of ST\u00cbLZ Hard Seltzer (Lime flavor) is lying on a wooden table next to a plate with a pancake."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_05.jpg",
+      "creator": "deheerenvanaemstel",
+      "model_said": {
+        "product_line": "hard_iced_tea",
+        "confidence": 1.0,
+        "size_in_frame": "dominant",
+        "context": "Three cans of ST\u00cbLZ Hard Iced Tea Peach are prominently displayed in the center of the image."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_06.jpg",
+      "creator": "bijonsoptnoord",
+      "model_said": {
+        "product_line": "hard_iced_tea",
+        "confidence": 1.0,
+        "size_in_frame": "small",
+        "context": "The ST\u00cbLZ brand logo and name are visible on a sign and a refrigerator at an outdoor bar in the background, with the fridge specifically advertising the brand's Iced Tea."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_07.jpg",
+      "creator": "drinkstelz",
+      "model_said": {
+        "product_line": "hard_iced_tea",
+        "confidence": 0.95,
+        "size_in_frame": "small",
+        "context": "Three cans are visible on a dinner table; the clearest one in the foreground matches the ST\u00cbLZ Hard Iced Tea (Lemon) product design."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_08.jpg",
+      "creator": "drinkstelz",
+      "model_said": {
+        "product_line": "hard_seltzer",
+        "confidence": 1.0,
+        "size_in_frame": "large",
+        "context": "A promotional gold-colored can branded as a ST\u00cbLZ Hard Seltzer is superimposed over a black and white image of the city of Groningen."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_09.jpg",
+      "creator": "drinkstelz",
+      "model_said": {
+        "product_line": "zero_zero",
+        "confidence": 1.0,
+        "size_in_frame": "dominant",
+        "context": "Five cans of ST\u00cbLZ 0.0 Raspberry seltzer water are displayed in a row, centrally located in the frame."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_10.jpg",
+      "creator": "djdigianni",
+      "model_said": {
+        "product_line": "hard_iced_tea",
+        "confidence": 1.0,
+        "size_in_frame": "medium",
+        "context": "A man on a promotional event poster is holding up two cans of ST\u00cbLZ Hard Iced Tea Peach."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    },
+    {
+      "file": "fewshot_pos_11.jpg",
+      "creator": "jumbozutphen",
+      "model_said": {
+        "product_line": "hard_seltzer",
+        "confidence": 1.0,
+        "size_in_frame": "dominant",
+        "context": "A promotional advertisement from a Jumbo supermarket features a dominant ST\u00cbLZ Hard Seltzer Raspberry can in the center, with more products on shelves in the background."
+      },
+      "moderator_verdict": "STELZ is visible in this image \u2014 correct positive"
+    }
+  ],
+  "negative": [
+    {
+      "file": "fewshot_neg_00.jpg",
+      "creator": "michal.petrilin",
+      "high_signal": true,
+      "model_said": {
+        "product_line": "hard_seltzer",
+        "confidence": 1.0,
+        "size_in_frame": "medium",
+        "context": "A person in the foreground is holding the bottom of a blue box of ST\u00cbLZ Hard Seltzer, with the logo and text clearly visible upside down."
+      },
+      "moderator_verdict": "CRITICAL FALSE POSITIVE: The model AND the Pro verify chain BOTH marked this as a trusted STELZ detection \u2014 but a human moderator rejected it. STELZ is NOT visible. The diagnostic features the model claimed to see are not actually there. Be especially skeptical of this pattern."
+    },
+    {
+      "file": "fewshot_neg_01.jpg",
+      "creator": "deermeloschefrietzaak",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "logo_only",
+        "confidence": 0.8,
+        "size_in_frame": "small",
+        "context": "A small white ST\u00cbLZ S-in-circle logo is visible on a black sign above a patio entrance on the left side of the image."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    },
+    {
+      "file": "fewshot_neg_02.jpg",
+      "creator": "de_winkel_borrel_en_eetbar",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "hard_seltzer",
+        "confidence": 1.0,
+        "size_in_frame": "small",
+        "context": "A woman is wearing a dark t-shirt with a small ST\u00cbLZ Hard Seltzer logo visible on the left side of her chest."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    },
+    {
+      "file": "fewshot_neg_03.jpg",
+      "creator": "deermeloschefrietzaak",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "hard_seltzer",
+        "confidence": 0.9,
+        "size_in_frame": "small",
+        "context": "Two women are posing outside a shop, each holding a ST\u00cbLZ Hard Seltzer can."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    },
+    {
+      "file": "fewshot_neg_04.jpg",
+      "creator": "defanoholwijn",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "hard_iced_tea",
+        "confidence": 0.95,
+        "size_in_frame": "small",
+        "context": "A man in a video screenshot holds a can with the distinct branding and green leaf pattern of a ST\u00cbLZ Hard Iced Tea Lemon."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    },
+    {
+      "file": "fewshot_neg_05.jpg",
+      "creator": "mjrtom_int",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "logo_only",
+        "confidence": 0.9,
+        "size_in_frame": "small",
+        "context": "A group of people are gathered outdoors, with one person carrying a green cooler bag displaying the white ST\u00cbLZ S-in-circle logo."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    },
+    {
+      "file": "fewshot_neg_06.jpg",
+      "creator": "djdigianni",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "logo_only",
+        "confidence": 0.7,
+        "size_in_frame": "small",
+        "context": "A person in the far background is wearing a white t-shirt with a small, recognizable ST\u00cbLZ S-in-circle logo on the left chest."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    },
+    {
+      "file": "fewshot_neg_07.jpg",
+      "creator": "bycarmel",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "mixed_classics",
+        "confidence": 1.0,
+        "size_in_frame": "small",
+        "context": "Two ST\u00cbLZ Mixed Classics cans are resting on a bed next to a person."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    },
+    {
+      "file": "fewshot_neg_08.jpg",
+      "creator": "partyschnaps",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "logo_only",
+        "confidence": 0.8,
+        "size_in_frame": "medium",
+        "context": "A ST\u00cbLZ logo is visible on a blurred bottle in the background behind a cocktail."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    },
+    {
+      "file": "fewshot_neg_09.jpg",
+      "creator": "maudolieslagers",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "mixed_classics",
+        "confidence": 1.0,
+        "size_in_frame": "large",
+        "context": "A woman is holding a ST\u00cbLZ Mixed Classics Gin & Tonic can while smiling at a sporting event."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    },
+    {
+      "file": "fewshot_neg_10.jpg",
+      "creator": "pietpann",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "mixed_classics",
+        "confidence": 0.9,
+        "size_in_frame": "small",
+        "context": "A ST\u00cbLZ Mixed Classics can (Classic Spritz flavor) is visible lying on a wooden bar counter."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    },
+    {
+      "file": "fewshot_neg_11.jpg",
+      "creator": "desireehoreweg",
+      "high_signal": false,
+      "model_said": {
+        "product_line": "logo_only",
+        "confidence": 0.9,
+        "size_in_frame": "small",
+        "context": "The brand name \"ST\u00cbLZ\" is visible in its characteristic font on a sign on the wall in the background, although the image is horizontally flipped."
+      },
+      "moderator_verdict": "STELZ is NOT visible \u2014 model hallucinated. Do not detect."
+    }
+  ]
+}

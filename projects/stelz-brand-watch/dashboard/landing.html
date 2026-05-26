@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spot the Brand — AI brand monitoring without the noise</title>
+<meta name="description" content="See where your brand really shows up. Spot the Brand uses computer vision to find your product in social content, even when nobody tags you.">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://js.stripe.com/v3/"></script>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --panel: #141414;
+    --border: #2a2a2a;
+    --text: #ededed;
+    --muted: #888;
+    --accent: #FF1300;
+    --good: #4ade80;
+    --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  a { color: var(--text); text-decoration: none; }
+  a:hover { color: var(--accent); }
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+  nav { padding: 20px 0; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: rgba(10,10,10,0.92); backdrop-filter: blur(10px); z-index: 100; }
+  nav .row { display: flex; justify-content: space-between; align-items: center; gap: 32px; }
+  nav .logo { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+  nav .logo span { color: var(--accent); }
+  nav ul { display: flex; gap: 28px; list-style: none; font-size: 14px; }
+  nav ul a { color: var(--muted); }
+  nav ul a:hover { color: var(--text); }
+  nav .cta { background: var(--accent); color: white; padding: 9px 18px; border-radius: 8px; font-weight: 500; font-size: 14px; transition: opacity 0.15s; }
+  nav .cta:hover { opacity: 0.85; color: white; }
+
+  .hero { padding: 100px 0 80px; text-align: center; border-bottom: 1px solid var(--border); }
+  .hero .eyebrow { display: inline-block; padding: 6px 14px; background: rgba(255, 19, 0, 0.08); border: 1px solid rgba(255, 19, 0, 0.3); border-radius: 999px; font-size: 12px; color: var(--accent); margin-bottom: 24px; letter-spacing: 0.04em; }
+  .hero h1 { font-size: 64px; line-height: 1.05; letter-spacing: -0.02em; font-weight: 700; margin-bottom: 20px; max-width: 800px; margin-left: auto; margin-right: auto; }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .hero p.lead { font-size: 20px; color: var(--muted); max-width: 640px; margin: 0 auto 36px; }
+  .hero .cta-row { display: flex; gap: 14px; justify-content: center; }
+  .btn { display: inline-block; padding: 14px 28px; border-radius: 10px; font-weight: 500; font-size: 15px; transition: all 0.15s; cursor: pointer; border: 1px solid; }
+  .btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
+  .btn-primary:hover { opacity: 0.9; color: white; }
+  .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  section { padding: 80px 0; border-bottom: 1px solid var(--border); }
+  section.problem { background: var(--panel); }
+  h2.section-title { font-size: 38px; line-height: 1.15; letter-spacing: -0.02em; margin-bottom: 16px; font-weight: 700; }
+  p.section-lead { font-size: 17px; color: var(--muted); max-width: 600px; margin-bottom: 56px; }
+
+  .pain-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+  .pain-card { padding: 28px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; }
+  .pain-card .num { font-size: 12px; color: var(--accent); font-weight: 600; margin-bottom: 12px; letter-spacing: 0.06em; }
+  .pain-card h3 { font-size: 19px; font-weight: 600; margin-bottom: 10px; }
+  .pain-card p { color: var(--muted); font-size: 14px; }
+
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-top: 48px; }
+  .step { padding: 24px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; position: relative; }
+  .step .step-num { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: white; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px; margin-bottom: 18px; }
+  .step h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+  .step p { color: var(--muted); font-size: 13px; }
+
+  .features { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-top: 40px; }
+  .feature { padding: 26px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+  .feature .icon { width: 36px; height: 36px; background: rgba(255, 19, 0, 0.1); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; margin-bottom: 16px; }
+  .feature h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+  .feature p { color: var(--muted); font-size: 14px; }
+
+  .demo { padding: 60px 0; text-align: center; background: linear-gradient(180deg, var(--bg) 0%, var(--panel) 100%); }
+  .demo h2 { margin-bottom: 16px; }
+  .demo p { color: var(--muted); margin-bottom: 32px; font-size: 16px; }
+  .demo-window { max-width: 900px; margin: 0 auto; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .demo-window img { width: 100%; border-radius: 8px; }
+
+  .pricing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; margin-top: 48px; }
+  .price-card { padding: 32px 28px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; position: relative; }
+  .price-card.featured { border-color: var(--accent); }
+  .price-card.featured::before { content: "MOST POPULAR"; position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: var(--accent); color: white; padding: 4px 12px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+  .price-card h3 { font-size: 19px; font-weight: 600; margin-bottom: 6px; }
+  .price-card .price { font-size: 38px; font-weight: 700; letter-spacing: -0.02em; margin: 18px 0 4px; }
+  .price-card .price span { font-size: 14px; color: var(--muted); font-weight: 400; }
+  .price-card .price-eyebrow { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .price-card ul { list-style: none; margin-bottom: 26px; }
+  .price-card li { padding: 8px 0; color: var(--muted); font-size: 14px; border-bottom: 1px solid var(--border); }
+  .price-card li:last-child { border-bottom: none; }
+  .price-card li::before { content: "✓"; color: var(--good); margin-right: 10px; font-weight: 600; }
+
+  .signup { padding: 100px 0; background: var(--panel); }
+  .signup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; }
+  .signup form { display: grid; gap: 14px; }
+  .signup input, .signup textarea, .signup select { padding: 14px 16px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: 14px; font-family: inherit; }
+  .signup input:focus, .signup textarea:focus, .signup select:focus { outline: none; border-color: var(--accent); }
+  .signup textarea { min-height: 80px; resize: vertical; }
+  .signup button { padding: 14px 24px; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 500; cursor: pointer; }
+  .signup button:hover { opacity: 0.9; }
+  .signup .form-status { font-size: 13px; color: var(--muted); margin-top: 12px; min-height: 18px; }
+  .signup .form-status.success { color: var(--good); }
+  .signup .form-status.error { color: var(--warn); }
+
+  .faq { padding: 80px 0; }
+  details { padding: 22px 0; border-bottom: 1px solid var(--border); }
+  details summary { font-size: 17px; font-weight: 500; cursor: pointer; list-style: none; display: flex; justify-content: space-between; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::after { content: "+"; color: var(--accent); font-size: 22px; }
+  details[open] summary::after { content: "−"; }
+  details p { color: var(--muted); margin-top: 14px; font-size: 14px; line-height: 1.6; }
+
+  footer { padding: 50px 0 40px; color: var(--muted); font-size: 13px; text-align: center; }
+  footer span { color: var(--accent); }
+
+  @media (max-width: 768px) {
+    .hero h1 { font-size: 40px; }
+    .hero p.lead { font-size: 17px; }
+    .pain-grid, .features, .pricing-grid, .steps, .signup-grid { grid-template-columns: 1fr; }
+    nav ul { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container row">
+    <div class="logo">Spot the Brand<span>.</span></div>
+    <ul>
+      <li><a href="#how-it-works">How it works</a></li>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#pricing">Pricing</a></li>
+      <li><a href="#demo">Demo</a></li>
+      <li><a href="#faq">FAQ</a></li>
+    </ul>
+    <a href="signup.html" class="cta">Start free trial</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="eyebrow">AI brand monitoring · for FMCG and lifestyle brands</div>
+    <h1>See where your brand <em>really</em> shows up.</h1>
+    <p class="lead">Computer vision finds your product in social content, even when nobody tags you. Every can. Every t-shirt. Every banner. Everywhere your customers actually meet your brand.</p>
+    <div class="cta-row">
+      <a href="signup.html" class="btn btn-primary">Start 14-day free trial</a>
+      <a href="#demo" class="btn btn-ghost">See live demo</a>
+    </div>
+  </div>
+</header>
+
+<section class="problem">
+  <div class="container">
+    <h2 class="section-title">Hashtag monitoring misses 80% of your brand mentions.</h2>
+    <p class="section-lead">Your fans drink your product without writing your name in their caption. Your sponsorships hang on banners at festivals nobody hashtags. Your retail partners stock your shelves without tagging you. Traditional monitoring tools can't see any of it.</p>
+    <div class="pain-grid">
+      <div class="pain-card">
+        <div class="num">01</div>
+        <h3>The hashtag gap</h3>
+        <p>People share moments, not brand names. A can in hand, a bucket on the bar, a logo on a t-shirt — that's where culture happens, and it's invisible to text-based monitoring.</p>
+      </div>
+      <div class="pain-card">
+        <div class="num">02</div>
+        <h3>The noise problem</h3>
+        <p>Brand24, Mention, others surface every retail flyer and supermarket post. You get inbox fatigue, not insight. The signal lives in real consumer moments.</p>
+      </div>
+      <div class="pain-card">
+        <div class="num">03</div>
+        <h3>The expensive lock-in</h3>
+        <p>Enterprise listening platforms charge €1.000–2.000 per brand per month. You pay enterprise rates for tools built for any industry — not for your bottle, your can, your specific logo.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how-it-works">
+  <div class="container">
+    <h2 class="section-title">Four steps from setup to insight.</h2>
+    <p class="section-lead">Bring your brand. We bring the eyes.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3>Onboard your brand</h3>
+        <p>Upload 5 product photos, list your product lines and the hashtags your audience uses. Five minutes setup.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3>Auto-discover creators</h3>
+        <p>Our system finds the accounts that already post about you, plus the niche communities where your audience actually lives.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3>Visual + textual detection</h3>
+        <p>Every image scanned by computer vision tuned to your specific product. Two-pass AI verification reduces false positives by ~33%.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <h3>Insights, weekly or daily</h3>
+        <p>Automated reports delivered to your inbox. Live dashboard with the realtime feed. Alerts when key creators post.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="container">
+    <h2 class="section-title">What's inside.</h2>
+    <p class="section-lead">A complete brand intelligence suite, not a glorified hashtag tracker.</p>
+    <div class="features">
+      <div class="feature">
+        <div class="icon" style="color: var(--accent); font-family: monospace; font-size: 14px; letter-spacing: 1px;">01</div>
+        <h3>Visual brand detection</h3>
+        <p>Every image and video frame scanned by computer vision. Recognizes your product in any context — held, on shelves, in the background, on screens.</p>
+      </div>
+      <div class="feature">
+        <div class="icon" style="color: var(--accent); font-family: monospace; font-size: 14px; letter-spacing: 1px;">02</div>
+        <h3>Live feed</h3>
+        <p>Dashboard auto-refreshes every minute. New mentions surface immediately with brand-owned / hashtag / mention / visual-only signal badges.</p>
+      </div>
+      <div class="feature">
+        <div class="icon" style="color: var(--accent); font-family: monospace; font-size: 14px; letter-spacing: 1px;">03</div>
+        <h3>AI relevance scoring</h3>
+        <p>Every creator scored 0-10 on audience fit. Tier 1/2/3 promotion is automatic. The system learns who matters; the rest gets filtered.</p>
+      </div>
+      <div class="feature">
+        <div class="icon" style="color: var(--accent); font-family: monospace; font-size: 14px; letter-spacing: 1px;">04</div>
+        <h3>Multi-platform</h3>
+        <p>Instagram posts, Reels, Stories and TikTok in one unified feed. Cross-platform identity-matching so one creator counts once across channels.</p>
+      </div>
+      <div class="feature">
+        <div class="icon" style="color: var(--accent); font-family: monospace; font-size: 14px; letter-spacing: 1px;">05</div>
+        <h3>Alerts + PDF reports</h3>
+        <p>Slack ping when a tier-1 creator posts. Email + designed PDF weekly. Daily summary in your inbox. Configurable per role.</p>
+      </div>
+      <div class="feature">
+        <div class="icon" style="color: var(--accent); font-family: monospace; font-size: 14px; letter-spacing: 1px;">06</div>
+        <h3>Historical backfill</h3>
+        <p>Premium plans backfill up to 365 days of history on activation, so your first dashboard shows months of context, not an empty grid.</p>
+      </div>
+      <div class="feature">
+        <div class="icon" style="color: var(--accent); font-family: monospace; font-size: 14px; letter-spacing: 1px;">07</div>
+        <h3>Creator outreach DMs</h3>
+        <p>One click on a tier-1 creator profile drafts a personalized intro DM based on their actual brand mentions. Edit and send.</p>
+      </div>
+      <div class="feature">
+        <div class="icon" style="color: var(--accent); font-family: monospace; font-size: 14px; letter-spacing: 1px;">08</div>
+        <h3>Multi-tenant by default</h3>
+        <p>Strict per-brand isolation via row-level security. Your detections, creators, references and reports never leak across tenants.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="demo" id="demo">
+  <div class="container">
+    <h2 class="section-title" style="text-align: center;">See it live.</h2>
+    <p>A working dashboard with real production data from a Dutch hard seltzer brand. Public preview, refreshed daily — so you can see what computer-vision-based brand monitoring looks like before you set up your own.</p>
+    <a href="/?brand=stelz&demo=1" target="_blank" class="btn btn-primary">Open the live demo →</a>
+    <p style="margin-top: 14px; font-size: 13px; color: var(--muted);">436 verified hits · 545 creators · daily scans · 90 days of history</p>
+  </div>
+</section>
+
+<section id="try" style="padding: 64px 0; background: linear-gradient(180deg, rgba(255,19,0,0.06), transparent); border-top: 1px solid var(--border, #2a2a2a); border-bottom: 1px solid var(--border, #2a2a2a);">
+  <div class="container" style="max-width: 720px; margin: 0 auto; text-align: center;">
+    <h2 class="section-title" style="margin-bottom: 12px;">Try it on your brand right now.</h2>
+    <p style="color: var(--muted, #888); font-size: 15px; margin-bottom: 26px;">Enter an Instagram handle. We'll scan the 6 most recent posts and show you what we'd detect. Free, 30 seconds, no signup.</p>
+    <form id="try-form" style="display: flex; gap: 8px; max-width: 460px; margin: 0 auto; flex-wrap: wrap;">
+      <input id="try-handle" type="text" placeholder="@yourbrand" required pattern="^@?[a-zA-Z0-9._]{2,30}$" style="flex: 1; min-width: 200px; padding: 12px 14px; background: #141414; border: 1px solid #2a2a2a; color: white; border-radius: 8px; font-size: 14px; font-family: inherit;">
+      <button type="submit" style="padding: 12px 22px; background: #FF1300; color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;">Scan now →</button>
+    </form>
+    <p id="try-status" style="font-size: 13px; color: var(--muted, #888); margin-top: 14px; min-height: 20px;"></p>
+    <div id="try-results" style="margin-top: 18px;"></div>
+  </div>
+</section>
+
+<script>
+(function () {
+  const form = document.getElementById("try-form");
+  if (!form) return;
+  const status = document.getElementById("try-status");
+  const results = document.getElementById("try-results");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    results.innerHTML = "";
+    const handle = document.getElementById("try-handle").value.replace(/^@/, "").trim();
+    if (!handle) return;
+    status.style.color = "#888";
+    status.textContent = "Scanning @" + handle + "… (this takes 20-30 seconds)";
+    try {
+      const r = await fetch("https://menaatbeoeutywulcdvv.supabase.co/functions/v1/live-preview-scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handle, brand_name: handle }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.error) {
+        status.style.color = "#FF1300";
+        status.textContent = data.error || "Scan failed. Try a different handle.";
+        return;
+      }
+      status.style.color = "#4ade80";
+      status.textContent = data.message || "Done.";
+      results.innerHTML = `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; max-width: 720px; margin: 14px auto 0;">
+        ${(data.sample_urls || []).filter(s => s.url).map(s => `
+          <div style="aspect-ratio: 1; border-radius: 8px; overflow: hidden; border: 2px solid ${s.detected ? '#FF1300' : '#2a2a2a'}; position: relative;">
+            <img src="${s.url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;${s.detected ? '' : 'filter: grayscale(60%) brightness(0.7);'}">
+            ${s.detected ? `<span style="position:absolute;top:4px;left:4px;background:#FF1300;color:white;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700;font-family:monospace;">DETECTED ${Math.round(s.confidence*100)}%</span>` : ''}
+          </div>`).join("")}
+      </div>
+      <p style="margin-top: 18px; font-size: 13px; color: #888;">This was the lightweight free preview. The full product scans hashtags, all creators in your category, and 90+ days of history — every day.</p>
+      <a href="#signup" style="display: inline-block; margin-top: 8px; padding: 10px 20px; background: #FF1300; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">Start a free trial →</a>`;
+    } catch (err) {
+      status.style.color = "#FF1300";
+      status.textContent = "Scan failed: " + err.message;
+    }
+  });
+})();
+</script>
+
+<section id="pricing">
+  <div class="container">
+    <h2 class="section-title">Simple pricing. No surprises.</h2>
+    <p class="section-lead">Pick the tier that matches your scale. Upgrade or downgrade any time.</p>
+    <div class="pricing-grid">
+      <div class="price-card">
+        <h3>Starter</h3>
+        <div class="price-eyebrow">For local brands & single markets</div>
+        <div class="price">€500<span> /month</span></div>
+        <ul>
+          <li>200 monitored creators</li>
+          <li>Instagram only</li>
+          <li>7-day historical lookback</li>
+          <li>Weekly auto-reports</li>
+          <li>2 user seats</li>
+          <li>100 credits included</li>
+        </ul>
+        <a href="signup.html" class="btn btn-ghost" data-plan="starter" style="width: 100%; text-align: center;">Start free trial</a>
+      </div>
+      <div class="price-card featured">
+        <h3>Pro</h3>
+        <div class="price-eyebrow">For growing brands across platforms</div>
+        <div class="price">€1.500<span> /month</span></div>
+        <ul>
+          <li>1.000 monitored creators</li>
+          <li>Instagram + TikTok</li>
+          <li>90-day historical lookback</li>
+          <li>Daily auto-reports</li>
+          <li>5 user seats</li>
+          <li>500 credits/month included</li>
+          <li>Priority Pro detection layer</li>
+          <li>Slack & email alerts</li>
+        </ul>
+        <a href="signup.html" class="btn btn-primary" data-plan="pro" style="width: 100%; text-align: center;">Start free trial</a>
+      </div>
+      <div class="price-card">
+        <h3>Enterprise</h3>
+        <div class="price-eyebrow">For multi-brand groups & agencies</div>
+        <div class="price">Custom</div>
+        <ul>
+          <li>10.000+ creators</li>
+          <li>All platforms incl. YouTube</li>
+          <li>1-year historical lookback</li>
+          <li>Real-time alerts</li>
+          <li>Unlimited seats</li>
+          <li>Custom integrations</li>
+          <li>Dedicated success manager</li>
+          <li>SLA & SSO</li>
+        </ul>
+        <a href="signup.html" class="btn btn-ghost" data-plan="enterprise" style="width: 100%; text-align: center;">Contact sales</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="signup" id="signup">
+  <div class="container">
+    <div class="signup-grid">
+      <div>
+        <h2 class="section-title">Start your free trial.</h2>
+        <p class="section-lead">5-minute setup. No credit card. We scan your last 12 posts to calibrate detection, then first hits land within 30 minutes.</p>
+        <ul style="list-style: none; color: var(--muted); font-size: 14px;">
+          <li style="padding: 6px 0;"><span style="color: var(--good); margin-right: 8px;">✓</span>Self-serve setup — type your IG handle, we do the rest</li>
+          <li style="padding: 6px 0;"><span style="color: var(--good); margin-right: 8px;">✓</span>First detections within 30 minutes</li>
+          <li style="padding: 6px 0;"><span style="color: var(--good); margin-right: 8px;">✓</span>14 days free. Cancel any time.</li>
+          <li style="padding: 6px 0;"><span style="color: var(--good); margin-right: 8px;">✓</span>Need help? Email support@jackandai.com</li>
+        </ul>
+      </div>
+      <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 28px;">
+        <h3 style="font-size: 18px; margin-bottom: 8px;">Ready to see your brand?</h3>
+        <p style="color: var(--muted); font-size: 14px; margin-bottom: 22px;">The onboarding wizard scans your Instagram, suggests reference photos, and proposes a hashtag pool — all before you commit to a plan.</p>
+        <a href="/onboarding-v2.html" class="btn btn-primary" style="display: block; text-align: center; padding: 14px; font-size: 15px; text-decoration: none;">Start setup →</a>
+        <p style="font-size: 12px; color: var(--muted); margin-top: 14px; text-align: center;">Prefer to talk first? <a href="mailto:meinte@jackandai.com" style="color: var(--accent);">Email Meinte</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="faq" id="faq">
+  <div class="container">
+    <h2 class="section-title">Frequently asked.</h2>
+    <details><summary>How is this different from social listening tools?</summary>
+      <p>Traditional listening monitors text — hashtags, keywords, mentions. We monitor pixels. Computer vision scans every image and video frame for your specific product. Result: we find your brand in posts that mention nothing of you, but show your can in hand.</p>
+    </details>
+    <details><summary>How quickly can you onboard a new brand?</summary>
+      <p>5 minutes for the setup wizard. We scan your last 12 Instagram posts to suggest reference images and a hashtag pool. First detections land within 30 minutes. A populated dashboard within a few days.</p>
+    </details>
+    <details><summary>How accurate is the detection?</summary>
+      <p>Two-pass detection: fast initial scan with a vision LLM, then strict verification with a higher-capability model. In our STËLZ pilot, this combination removed 33% of false positives from the first pass. Confidence scores per detection so you can tune your own threshold.</p>
+    </details>
+    <details><summary>What about historical data?</summary>
+      <p>Standard plans look back 7 days. Pro plans 90 days. Enterprise can backfill up to 1 year of historical content. Backfill is a one-time credit-based action that builds your dataset before live monitoring takes over.</p>
+    </details>
+    <details><summary>Do I need to install anything?</summary>
+      <p>No. Everything runs in the cloud. You get a dashboard URL, automated reports in your inbox, and (Pro+) alerts in Slack or email. No engineering needed on your side.</p>
+    </details>
+    <details><summary>What if a creator gets archived but I want them back?</summary>
+      <p>Auto-archiving is reversible. Every archived creator is one click from re-promotion. Manual promotions never get auto-demoted. You stay in control.</p>
+    </details>
+    <details><summary>How does pricing scale with multi-brand groups?</summary>
+      <p>Enterprise pricing is per-brand-equivalent. A holding with 5 brands typically pays less per brand than 5 separate Pro accounts. Contact sales for a setup that fits.</p>
+    </details>
+    <details><summary>Is there a free trial?</summary>
+      <p>Yes — 14 days, full feature access, 100 credits included. No credit card required to start.</p>
+    </details>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div>Spot the Brand — built by <span>JackandAI</span></div>
+    <div style="margin-top: 8px;">© 2026 · <a href="mailto:hello@jackandai.com" style="color: var(--muted);">hello@jackandai.com</a></div>
+  </div>
+</footer>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+// Plan-card → onboarding wizard handoff: clicking a plan deeplinks
+// to onboarding-v2 with the plan pre-selected.
+document.querySelectorAll("[data-plan]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const plan = btn.dataset.plan;
+    if (plan === "enterprise") {
+      location.href = "mailto:meinte@jackandai.com?subject=Spot the Brand Enterprise";
+    } else {
+      location.href = `/onboarding-v2.html?plan=${encodeURIComponent(plan)}`;
+    }
+  });
+});
+</script>
+
+</body>
+</html>

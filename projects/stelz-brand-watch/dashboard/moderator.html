@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spot Your Brand · Moderator</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: #0a0a0a; --panel: #141414; --border: #2a2a2a; --text: #ededed;
+    --muted: #888; --accent: #FF1300; --good: #4ade80; --bad: #ef4444; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; min-height: 100vh; }
+  body { display: flex; flex-direction: column; }
+
+  header { padding: 14px 22px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+  header .logo { font-size: 18px; font-weight: 700; }
+  header .logo .dot { color: var(--accent); }
+  header .brand-name { color: var(--muted); font-size: 12px; margin-left: 8px; font-weight: 400; }
+  header nav { display: flex; gap: 0; }
+  header nav a { color: var(--muted); margin-left: 18px; text-decoration: none; font-size: 13px; }
+  header nav a:hover { color: var(--text); }
+  header nav a.active { color: var(--accent); }
+  header .brand-switcher { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 5px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+
+  .stats-bar { display: flex; gap: 24px; padding: 12px 22px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .stats-bar b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .stats-bar .good { color: var(--good); }
+  .stats-bar .bad  { color: var(--bad); }
+  .stats-bar .warn { color: var(--warn); }
+
+  main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; position: relative; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; max-width: 720px; width: 100%; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.5); display: flex; flex-direction: column; transition: transform 0.22s ease, opacity 0.22s ease; }
+  .card.swipe-left  { transform: translateX(-140%) rotate(-12deg); opacity: 0; }
+  .card.swipe-right { transform: translateX(140%)  rotate(12deg);  opacity: 0; }
+  .card.swipe-up    { transform: translateY(-100%); opacity: 0; }
+  .card.swipe-down  { transform: translateY(100%);  opacity: 0; }
+  .card.processing { pointer-events: none; opacity: 0.85; }
+
+  .image-wrap { position: relative; background: #000; display: flex; align-items: center; justify-content: center; min-height: 420px; max-height: 70vh; }
+  .image-wrap img { max-width: 100%; max-height: 70vh; display: block; }
+  .image-wrap .img-error { color: var(--muted); padding: 60px 24px; text-align: center; font-size: 13px; }
+  .image-wrap .img-error .original { display: block; margin-top: 12px; color: var(--accent); font-size: 11px; }
+  .image-wrap svg.bbox { position: absolute; inset: 0; pointer-events: none; }
+  .image-wrap svg.bbox rect { fill: rgba(255, 19, 0, 0.08); stroke: var(--accent); stroke-width: 3; vector-effect: non-scaling-stroke; }
+  .image-wrap svg.bbox .bbox-label { fill: var(--accent); font-size: 14px; font-weight: 600; paint-order: stroke; stroke: rgba(0,0,0,0.7); stroke-width: 3; }
+
+  .verdict-overlay {
+    position: absolute; top: 16px; left: 16px; right: 16px;
+    background: rgba(0,0,0,0.75); color: white;
+    padding: 8px 12px; border-radius: 6px; font-size: 12px;
+    max-width: 60%; max-height: 200px; overflow-y: auto;
+    backdrop-filter: blur(6px); line-height: 1.4;
+  }
+  .verdict-overlay .model-tag { color: var(--accent); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.08em; }
+
+  .meta { padding: 18px 22px; border-top: 1px solid var(--border); }
+  .meta .creator { font-size: 16px; font-weight: 600; }
+  .meta .creator .platform { color: var(--muted); font-size: 13px; font-weight: 400; margin-left: 6px; }
+  .meta .product-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: #1a1a1a; color: var(--muted); border: 1px solid var(--border); }
+  .badge.hard_lemonade { color: #fb923c; border-color: #fb923c; }
+  .badge.hard_seltzer { color: #60a5fa; border-color: #60a5fa; }
+  .badge.hard_iced_tea { color: #34d399; border-color: #34d399; }
+  .badge.mixed_classics { color: #f472b6; border-color: #f472b6; }
+  .badge.zero_zero { color: #94a3b8; border-color: #94a3b8; }
+  .badge.logo_only { color: #c084fc; border-color: #c084fc; }
+  .conf-pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .conf-pill.high { background: rgba(74,222,128,0.1); color: var(--good); border: 1px solid var(--good); }
+  .conf-pill.med  { background: rgba(251,191,36,0.1); color: var(--warn); border: 1px solid var(--warn); }
+  .conf-pill.low  { background: rgba(239,68,68,0.1);  color: var(--bad);  border: 1px solid var(--bad); }
+  .caption { color: var(--muted); font-size: 13px; margin-top: 10px; line-height: 1.5; max-height: 80px; overflow-y: auto; }
+  .hashtags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .hashtag-chip { background: #1a1a1a; color: #60a5fa; font-size: 10px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border); }
+  .hashtag-chip.brand-tag { color: var(--accent); border-color: var(--accent); }
+  .post-link { color: var(--muted); font-size: 12px; margin-top: 8px; text-decoration: none; display: inline-block; }
+  .post-link:hover { color: var(--accent); }
+
+  .actions { padding: 18px 22px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: center; align-items: center; background: rgba(0,0,0,0.4); flex-wrap: wrap; }
+  .action-btn { flex: 1; min-width: 140px; max-width: 200px; padding: 14px 18px; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: transform 0.08s ease, opacity 0.15s ease, background 0.15s ease; border: 2px solid; background: transparent; display: flex; align-items: center; justify-content: center; gap: 8px; position: relative; }
+  .action-btn:active { transform: scale(0.96); }
+  .action-btn:hover { opacity: 0.9; }
+  .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .action-btn.reject { color: var(--bad); border-color: var(--bad); }
+  .action-btn.reject:hover { background: rgba(239,68,68,0.08); }
+  .action-btn.plausible { color: var(--warn); border-color: var(--warn); }
+  .action-btn.plausible:hover { background: rgba(251,191,36,0.08); }
+  .action-btn.skip { color: var(--muted); border-color: var(--border); flex: 0 0 auto; min-width: 100px; padding: 14px 12px; }
+  .action-btn.skip:hover { color: var(--text); border-color: var(--text); }
+  .action-btn.confirm { color: var(--good); border-color: var(--good); }
+  .action-btn.confirm:hover { background: rgba(74,222,128,0.08); }
+  .action-btn .key { font-size: 10px; color: var(--muted); background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; margin-left: 4px; }
+  .action-btn .spinner { display: none; width: 14px; height: 14px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; }
+  .action-btn.loading .spinner { display: inline-block; }
+  .action-btn.loading .label { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .undo-bar { background: rgba(74,222,128,0.06); border-top: 1px solid var(--border); padding: 8px 22px; display: none; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
+  .undo-bar.show { display: flex; }
+  .undo-bar .undo-btn { background: transparent; color: var(--text); border: 1px solid var(--border); padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .undo-bar .undo-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .empty-state { text-align: center; color: var(--muted); padding: 80px 24px; }
+  .empty-state h2 { color: var(--text); margin-bottom: 12px; font-size: 22px; }
+  .progress-bar { position: fixed; top: 60px; left: 0; right: 0; height: 2px; background: var(--border); z-index: 5; }
+  .progress-bar > div { height: 100%; background: var(--accent); transition: width 0.2s ease; }
+
+  .filter-bar { display: flex; gap: 10px; padding: 10px 22px; background: var(--bg); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); align-items: center; flex-wrap: wrap; }
+  .filter-bar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .filter-bar input[type=radio] { accent-color: var(--accent); }
+  .filter-bar .keys-hint { font-family: ui-monospace, "Menlo", monospace; font-size: 11px; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--border); padding: 10px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity 0.2s ease; pointer-events: none; z-index: 10; }
+  .toast.show { opacity: 1; }
+  .toast.confirm { border-color: var(--good); color: var(--good); }
+  .toast.reject  { border-color: var(--bad);  color: var(--bad); }
+  .toast.plausible { border-color: var(--warn); color: var(--warn); }
+  .toast.error   { border-color: var(--bad); color: var(--bad); }
+
+  /* Mobile responsiveness */
+  @media (max-width: 720px) {
+    header { padding: 10px 14px; }
+    header nav { width: 100%; order: 3; }
+    .stats-bar { font-size: 11px; gap: 12px; padding: 8px 14px; }
+    main { padding: 12px; }
+    .verdict-overlay { max-width: 75%; }
+    .actions { padding: 12px; gap: 8px; }
+    .action-btn { min-width: calc(50% - 4px); max-width: none; padding: 12px 14px; font-size: 13px; }
+    .action-btn.skip { flex: 1 1 100%; max-width: none; }
+    .image-wrap { min-height: 320px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Spot Your Brand<span class="dot">.</span> Moderator<span class="brand-name" id="brand-name-tag"></span></div>
+  <nav>
+    <a href="/">Dashboard</a>
+    <a href="/moderator.html" class="active">Moderator</a>
+    <a href="/account.html">Account</a>
+  </nav>
+  <select class="brand-switcher" id="brand-switcher" title="Switch brand"></select>
+</header>
+
+<div class="filter-bar">
+  Show:
+  <label><input type="radio" name="queue" value="all" checked> All unreviewed</label>
+  <label><input type="radio" name="queue" value="review"> Low confidence only</label>
+  <label><input type="radio" name="queue" value="strong"> Strong hits (spot-check)</label>
+  <label><input type="radio" name="queue" value="recent"> Last 24h</label>
+  <span class="keys-hint" style="margin-left: auto;">← reject · ↓ aannemelijk · → confirm · space skip · u undo · r refresh</span>
+</div>
+
+<div class="stats-bar">
+  <span><b id="stat-remaining">—</b> remaining</span>
+  <span class="good">✓ <b id="stat-confirmed">0</b> session</span>
+  <span class="warn">~ <b id="stat-plausible">0</b> aannemelijk</span>
+  <span class="bad">✗ <b id="stat-rejected">0</b> session</span>
+  <span>↻ <b id="stat-skipped">0</b> skipped</span>
+  <span style="margin-left: auto;" id="stat-alltime"></span>
+  <span><b id="stat-progress">0%</b> through queue</span>
+</div>
+<div class="progress-bar"><div id="progress-fill" style="width: 0%"></div></div>
+
+<main id="main">
+  <div class="empty-state">Loading queue…</div>
+</main>
+
+<div class="undo-bar" id="undo-bar">
+  Laatste beslissing: <b id="undo-summary"></b>
+  <button class="undo-btn" id="undo-btn">↶ Undo (u)</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const STORAGE_BUCKET = "brand-watch-thumbnails";
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+// ─── Session-persistent state ──────────────────────────────
+// Stats persist across filter switches so the operator's session count
+// reflects ALL their work in this session, not just the current filter.
+let queue = [];
+let index = 0;
+let stats = JSON.parse(sessionStorage.getItem("mod_stats") || '{"confirmed":0,"plausible":0,"rejected":0,"skipped":0}');
+let currentQueue = sessionStorage.getItem("mod_queue") || "all";
+let activeBrand = null;
+let availableBrands = [];
+let isProcessing = false;          // hard lock — prevents double-click race condition
+let lastDecision = null;           // {detection_id, prev_state, content_image_id, prev_excluded} for undo
+
+function saveStats() { sessionStorage.setItem("mod_stats", JSON.stringify(stats)); }
+
+// ─── Image helpers ─────────────────────────────────────────
+function imageUrlFor(d) {
+  if (d.stored_path) return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${d.stored_path}`;
+  return d.image_url || "";
+}
+
+// Pre-fetch next 3 images so the swipe feels instant.
+const prefetchCache = new Set();
+function prefetchNext(n = 3) {
+  for (let i = index + 1; i < Math.min(index + 1 + n, queue.length); i++) {
+    const url = imageUrlFor(queue[i]);
+    if (!url || prefetchCache.has(url)) continue;
+    prefetchCache.add(url);
+    const img = new Image();
+    img.referrerPolicy = "no-referrer";
+    img.src = url;
+  }
+}
+
+function isStrongHit(d) {
+  if (d.verified && (d.model || "").includes("pro")) return true;
+  if (d.is_primary_subject && ["medium","large","dominant"].includes(d.size_in_frame || "")) return true;
+  if (["hard_lemonade","hard_seltzer","hard_iced_tea","mixed_classics"].includes(d.product_line || "")
+      && ["medium","large","dominant"].includes(d.size_in_frame || "")) return true;
+  return false;
+}
+
+function bboxRects(d) {
+  const arr = Array.isArray(d.bbox) ? d.bbox : (d.bbox && Array.isArray(d.bbox.bbox) ? d.bbox.bbox : []);
+  if (!arr || !arr.length) return "";
+  return arr.map(b => {
+    const box = b.box_2d || b;
+    if (!Array.isArray(box) || box.length < 4) return "";
+    const [y1, x1, y2, x2] = box;
+    const w = Math.max(0, x2 - x1);
+    const h = Math.max(0, y2 - y1);
+    const label = (b.label || "").replace(/</g, "&lt;");
+    return `<rect x="${x1}" y="${y1}" width="${w}" height="${h}" rx="6"></rect>` +
+      (label ? `<text class="bbox-label" x="${x1 + 12}" y="${y1 - 12}">${label}</text>` : "");
+  }).join("");
+}
+
+// ─── Brand resolution + switcher ───────────────────────────
+async function resolveAllBrands() {
+  // For the dropdown: brands the user has access to + STELZ as anon-fallback.
+  const { data: { session } } = await sb.auth.getSession();
+  if (session?.user) {
+    const { data: links } = await sb.from("brand_users")
+      .select("brand_id, role, brand:brands(id, slug, name)")
+      .eq("user_id", session.user.id)
+      .order("created_at", { ascending: true });
+    availableBrands = (links || []).map(l => l.brand).filter(Boolean);
+  }
+  if (!availableBrands.length) {
+    const { data: b } = await sb.from("brands").select("id, slug, name").eq("slug", "stelz").maybeSingle();
+    if (b) availableBrands = [b];
+  }
+}
+
+async function resolveActiveBrand() {
+  await resolveAllBrands();
+  const requestedSlug = new URL(location.href).searchParams.get("brand");
+  if (requestedSlug) {
+    const match = availableBrands.find(b => b.slug === requestedSlug);
+    if (match) { activeBrand = match; return activeBrand; }
+  }
+  activeBrand = availableBrands[0] || null;
+  return activeBrand;
+}
+
+function renderBrandSwitcher() {
+  const sel = document.getElementById("brand-switcher");
+  if (!sel) return;
+  sel.innerHTML = availableBrands.map(b =>
+    `<option value="${b.slug}" ${activeBrand && b.slug === activeBrand.slug ? "selected" : ""}>${b.name || b.slug}</option>`
+  ).join("");
+  sel.style.display = availableBrands.length > 1 ? "inline-block" : "none";
+  sel.onchange = (e) => {
+    const slug = e.target.value;
+    const u = new URL(location.href);
+    u.searchParams.set("brand", slug);
+    location.href = u.toString();
+  };
+}
+
+// ─── Brand-aware caption matcher ───────────────────────────
+// Multi-brand support: pull brand_hashtag_pools to know which strings
+// count as "brand in caption" instead of hardcoded "stelz" regex.
+let brandCaptionTokens = [];
+async function loadBrandTokens(brandId) {
+  // Combine known brand hashtags from pool + the brand name itself.
+  const { data } = await sb.from("brand_hashtag_pools")
+    .select("hashtag").eq("brand_id", brandId).limit(200);
+  const tokens = new Set((data || []).map(r => (r.hashtag || "").toLowerCase()));
+  if (activeBrand?.slug) tokens.add(activeBrand.slug.toLowerCase());
+  brandCaptionTokens = Array.from(tokens).filter(Boolean);
+}
+
+function brandInCaption(d) {
+  if (!brandCaptionTokens.length) return false;
+  const cap = (d.post_caption || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const tags = (d.post_hashtags || []).map(h => (h || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase());
+  for (const t of brandCaptionTokens) {
+    if (cap.includes(t)) return true;
+    if (tags.some(tag => tag.startsWith(t))) return true;
+  }
+  return false;
+}
+
+// ─── Queue loader ──────────────────────────────────────────
+async function loadQueue() {
+  document.getElementById("main").innerHTML = `<div class="empty-state">Loading queue…</div>`;
+
+  const brand = await resolveActiveBrand();
+  renderBrandSwitcher();
+  if (!brand?.id) {
+    document.getElementById("main").innerHTML = `<div class="empty-state">No brand resolved. Sign in or open ?brand=&lt;slug&gt;.</div>`;
+    return;
+  }
+  document.getElementById("brand-name-tag").textContent = brand.name || brand.slug;
+  await loadBrandTokens(brand.id);
+
+  // Two parallel fetches scoped to active brand
+  const sinceFilter = currentQueue === "recent"
+    ? new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+    : null;
+  let detQuery = sb.from("v_detections_full").select("*")
+    .eq("brand_id", brand.id)
+    .eq("detected", true)
+    .order("detected_at", { ascending: false }).limit(3000);
+  if (sinceFilter) detQuery = detQuery.gte("detected_at", sinceFilter);
+
+  const [detRes, modRes] = await Promise.all([
+    detQuery,
+    sb.from("detections").select("id, is_false_positive, verified_at, moderation_label")
+      .eq("brand_id", brand.id)
+      .eq("verified_by", "moderator_review")
+      .limit(10000),
+  ]);
+  if (detRes.error) {
+    document.getElementById("main").innerHTML = `<div class="empty-state">Error: ${detRes.error.message}</div>`;
+    return;
+  }
+  const moderatedIds = new Set((modRes.data || []).map(r => r.id));
+  const allTimeConfirmed = (modRes.data || []).filter(r => (r.moderation_label === "confirmed") || (!r.is_false_positive && r.moderation_label !== "plausible" && r.moderation_label !== "rejected")).length;
+  const allTimeRejected  = (modRes.data || []).filter(r => r.moderation_label === "rejected" || r.is_false_positive).length;
+  document.getElementById("stat-alltime").innerHTML =
+    `<span style="color: var(--muted);">all-time: <b style="color: var(--good);">${allTimeConfirmed}</b>✓ / <b style="color: var(--bad);">${allTimeRejected}</b>✗</span>`;
+
+  let all = (detRes.data || []).filter(d => {
+    if (d.is_false_positive) return false;
+    if (moderatedIds.has(d.detection_id)) return false;
+    return true;
+  });
+  if (currentQueue === "review") all = all.filter(d => !isStrongHit(d));
+  if (currentQueue === "strong") all = all.filter(d =>  isStrongHit(d));
+  if (currentQueue === "strong") {
+    all.sort(() => Math.random() - 0.5);
+  } else if (currentQueue === "recent") {
+    // Most recent first — operator triages live findings
+    all.sort((a, b) => new Date(b.detected_at || 0) - new Date(a.detected_at || 0));
+  } else {
+    all.sort((a, b) => (a.confidence || 0) - (b.confidence || 0));
+  }
+  queue = all;
+  index = 0;
+  prefetchCache.clear();
+  refreshStats();
+  renderCurrent();
+  prefetchNext();
+}
+
+function refreshStats() {
+  document.getElementById("stat-remaining").textContent = Math.max(0, queue.length - index);
+  document.getElementById("stat-confirmed").textContent = stats.confirmed;
+  document.getElementById("stat-plausible").textContent = stats.plausible;
+  document.getElementById("stat-rejected").textContent  = stats.rejected;
+  document.getElementById("stat-skipped").textContent   = stats.skipped;
+  const total = queue.length || 1;
+  const pct = Math.round((index / total) * 100);
+  document.getElementById("stat-progress").textContent = pct + "%";
+  document.getElementById("progress-fill").style.width = pct + "%";
+  saveStats();
+}
+
+function renderCurrent() {
+  refreshStats();
+  if (index >= queue.length) {
+    document.getElementById("main").innerHTML = `
+      <div class="empty-state">
+        <h2>Queue complete</h2>
+        <p>Je hebt ${stats.confirmed + stats.rejected + stats.plausible} detections geclassificeerd in deze sessie.</p>
+        <p style="margin-top: 8px; font-size: 13px;">Deze beslissingen versterken de Pro verify prompt en helpen toekomstige scans.</p>
+        <button class="action-btn confirm" style="margin-top: 20px; max-width: 200px; flex: 0 0 auto;" onclick="location.reload()">Nieuwe ronde</button>
+      </div>`;
+    return;
+  }
+  const d = queue[index];
+  const conf = Math.round((d.confidence || 0) * 100);
+  const confCls = conf >= 85 ? "high" : conf >= 70 ? "med" : "low";
+  const brandHit = brandInCaption(d);
+  const rects = bboxRects(d);
+  const imgUrl = imageUrlFor(d);
+
+  document.getElementById("main").innerHTML = `
+    <div class="card" id="card">
+      <div class="image-wrap">
+        ${imgUrl
+          ? `<img src="${imgUrl}" referrerpolicy="no-referrer" onerror="this.outerHTML='<div class=\\'img-error\\'>Image unavailable (CDN expired or 404).<a class=\\'original\\' href=&quot;${d.post_url || '#'}&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;>↗ open original post</a></div>'">`
+          : `<div class="img-error">No image cached</div>`
+        }
+        ${rects ? `<svg class="bbox" viewBox="0 0 1000 1000" preserveAspectRatio="none">${rects}</svg>` : ""}
+        <div class="verdict-overlay">
+          <div class="model-tag">${(d.model || "").replace("gemini-2.5-", "")}${d.verified ? " · verified" : ""}</div>
+          <div style="margin-top: 4px;">${(d.context || "").replace(/</g, "&lt;")}</div>
+        </div>
+      </div>
+      <div class="meta">
+        <div class="creator">@${d.creator_handle || "unknown"} <span class="platform">· ${d.platform || ""}${d.follower_count ? ` · ${d.follower_count >= 1000 ? (d.follower_count/1000).toFixed(0)+"k" : d.follower_count} followers` : ""}</span></div>
+        <div class="product-row">
+          <span class="badge ${d.product_line || "none"}">${d.product_line || "none"}</span>
+          <span class="badge">size: ${d.size_in_frame || "—"}</span>
+          ${d.is_primary_subject ? `<span class="badge" style="color: var(--good); border-color: var(--good);">primary</span>` : ""}
+          <span class="conf-pill ${confCls}">${conf}% conf</span>
+          ${brandHit ? `<span class="badge" style="color: var(--accent); border-color: var(--accent);">brand in caption</span>` : ""}
+        </div>
+        ${d.post_caption ? `<div class="caption">${(d.post_caption || "").replace(/</g, "&lt;").replace(/\n/g, " ")}</div>` : ""}
+        ${(d.post_hashtags && d.post_hashtags.length) ? `<div class="hashtags">${d.post_hashtags.slice(0, 12).map(h => {
+          const isB = brandCaptionTokens.some(t => (h||"").toLowerCase().startsWith(t));
+          return `<span class="hashtag-chip${isB?" brand-tag":""}">#${h}</span>`;
+        }).join("")}</div>` : ""}
+        ${d.post_url ? `<a class="post-link" href="${d.post_url}" target="_blank" rel="noopener">↗ open original post</a>` : ""}
+      </div>
+      <div class="actions">
+        <button class="action-btn reject"    data-decision="reject"><span class="label">✗ Geen STELZ</span><span class="spinner"></span><span class="key">←</span></button>
+        <button class="action-btn plausible" data-decision="plausible" title="Niet 100% zichtbaar, maar wel aannemelijk"><span class="label">~ Aannemelijk</span><span class="spinner"></span><span class="key">↓</span></button>
+        <button class="action-btn skip"      data-decision="skip"><span class="label">↻ Skip</span><span class="spinner"></span><span class="key">␣</span></button>
+        <button class="action-btn confirm"   data-decision="confirm"><span class="label">✓ STELZ zichtbaar</span><span class="spinner"></span><span class="key">→</span></button>
+      </div>
+    </div>`;
+}
+
+function showToast(msg, cls) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className = "toast show " + cls;
+  setTimeout(() => t.classList.remove("show"), 1400);
+}
+
+function showUndoBar(label) {
+  const bar = document.getElementById("undo-bar");
+  document.getElementById("undo-summary").textContent = label;
+  bar.classList.add("show");
+  clearTimeout(window._undoTimer);
+  window._undoTimer = setTimeout(() => bar.classList.remove("show"), 8000);
+}
+
+function hideUndoBar() {
+  document.getElementById("undo-bar").classList.remove("show");
+  clearTimeout(window._undoTimer);
+}
+
+// ─── Decision write ────────────────────────────────────────
+async function decide(decision) {
+  if (isProcessing) return;        // hard lock against double-click + key spam
+  if (index >= queue.length) return;
+  const d = queue[index];
+  isProcessing = true;
+  const card = document.getElementById("card");
+  const btn = card?.querySelector(`[data-decision="${decision}"]`);
+  // Disable all buttons immediately so user can't fire another decision
+  card?.querySelectorAll("[data-decision]").forEach(b => b.disabled = true);
+  if (btn) btn.classList.add("loading");
+
+  // Capture previous state for undo — view doesn't expose content_image_id or
+  // verified_at, so we hit the base table once before mutating.
+  let prevState = {
+    detection_id: d.detection_id,
+    is_false_positive: d.is_false_positive,
+    verified: d.verified,
+    verified_by: d.verified_by,
+    moderation_label: d.moderation_label,
+    notes: d.notes,
+    content_image_id: null,
+    verified_at: null,
+  };
+  try {
+    const { data: pre } = await sb.from("detections")
+      .select("content_image_id, verified_at, notes, moderation_label, is_false_positive, verified, verified_by")
+      .eq("id", d.detection_id).maybeSingle();
+    if (pre) prevState = { ...prevState, ...pre };
+  } catch (e) {
+    console.warn("prevState fetch failed (undo may be partial):", e);
+  }
+
+  async function applyDecision(updates, successMsg, successCls, swipeCls) {
+    // Append to notes instead of overwriting — preserves audit trail of any
+    // earlier auto-annotations or prior moderator pass. Pull existing notes
+    // from prevState (just fetched), not from view, since view truncates.
+    if (updates.notes) {
+      const stamp = `[${new Date().toISOString().slice(0,16).replace('T',' ')}] `;
+      const newLine = stamp + updates.notes;
+      const existing = (prevState && prevState.notes) || d.notes || "";
+      updates.notes = (existing ? existing + "\n" : "") + newLine;
+    }
+    const { data, error } = await sb.from("detections")
+      .update(updates).eq("id", d.detection_id)
+      .select("id, content_image_id");
+    if (error) {
+      showToast("Update gefaald: " + error.message.slice(0, 60), "error");
+      console.error("moderator update error:", error);
+      return null;
+    }
+    if (!data || data.length === 0) {
+      showToast("Geen rechten op deze detection (RLS) — sign in als brand member", "error");
+      return null;
+    }
+    if (card) card.classList.add(swipeCls);
+    showToast(successMsg, successCls);
+    return data[0];
+  }
+
+  let ok = null;
+  if (decision === "confirm") {
+    ok = await applyDecision({
+      is_false_positive: false, verified: true,
+      verified_by: "moderator_review", verified_at: new Date().toISOString(),
+      moderation_label: "confirmed",
+      notes: "moderator confirmed: brand visible",
+    }, "Bevestigd · STELZ zichtbaar", "confirm", "swipe-right");
+    if (ok) { stats.confirmed++; showUndoBar(`✓ @${d.creator_handle} bevestigd`); }
+  } else if (decision === "plausible") {
+    ok = await applyDecision({
+      is_false_positive: false, verified: true,
+      verified_by: "moderator_review", verified_at: new Date().toISOString(),
+      moderation_label: "plausible",
+      notes: "moderator marked plausible: likely brand but not 100% visible — excluded from few-shot training",
+    }, "Aannemelijk · zachte hit, niet in training", "plausible", "swipe-down");
+    if (ok) { stats.plausible++; showUndoBar(`~ @${d.creator_handle} aannemelijk`); }
+  } else if (decision === "reject") {
+    ok = await applyDecision({
+      is_false_positive: true, verified: true,
+      verified_by: "moderator_review", verified_at: new Date().toISOString(),
+      moderation_label: "rejected",
+      notes: "moderator rejected: brand not visible",
+    }, "Verworpen · geen STELZ", "reject", "swipe-left");
+    if (ok) {
+      stats.rejected++;
+      showUndoBar(`✗ @${d.creator_handle} verworpen`);
+      // Sticky reject: also exclude the content_image so rescan can't resurrect
+      try {
+        if (ok.content_image_id) {
+          await sb.from("content_images").update({
+            excluded_at: new Date().toISOString(),
+            excluded_by: "moderator_review",
+            excluded_reason: "moderator:rejected",
+          }).eq("id", ok.content_image_id).is("excluded_at", null);
+        }
+      } catch (e) {
+        console.warn("content_images exclude failed:", e);
+      }
+    }
+  } else {
+    // skip
+    if (card) card.classList.add("swipe-up");
+    stats.skipped++;
+  }
+
+  if (ok || decision === "skip") {
+    lastDecision = { ...prevState, decision };
+  }
+  refreshStats();
+  // Advance after swipe animation
+  setTimeout(() => {
+    index++;
+    isProcessing = false;
+    renderCurrent();
+    prefetchNext();
+  }, 220);
+}
+
+async function undoLast() {
+  if (!lastDecision) return;
+  if (isProcessing) return;
+  isProcessing = true;
+  // Skip wasn't written to DB, just step back in queue
+  if (lastDecision.decision === "skip") {
+    index = Math.max(0, index - 1);
+    stats.skipped = Math.max(0, stats.skipped - 1);
+  } else {
+    // Roll back the detection row to its previous state
+    const { error } = await sb.from("detections").update({
+      is_false_positive: lastDecision.is_false_positive,
+      verified: lastDecision.verified,
+      verified_by: lastDecision.verified_by,
+      verified_at: lastDecision.verified_at,
+      moderation_label: lastDecision.moderation_label,
+      notes: lastDecision.notes,
+    }).eq("id", lastDecision.detection_id);
+    if (error) {
+      showToast("Undo gefaald: " + error.message.slice(0, 60), "error");
+      isProcessing = false;
+      return;
+    }
+    // If reject, also un-exclude the content_image
+    if (lastDecision.decision === "reject" && lastDecision.content_image_id) {
+      await sb.from("content_images").update({
+        excluded_at: null, excluded_by: null, excluded_reason: null,
+      }).eq("id", lastDecision.content_image_id)
+        .eq("excluded_reason", "moderator:rejected");
+    }
+    if (lastDecision.decision === "confirm")    stats.confirmed   = Math.max(0, stats.confirmed - 1);
+    if (lastDecision.decision === "plausible")  stats.plausible   = Math.max(0, stats.plausible - 1);
+    if (lastDecision.decision === "reject")     stats.rejected    = Math.max(0, stats.rejected - 1);
+    index = Math.max(0, index - 1);
+  }
+  saveStats();
+  lastDecision = null;
+  hideUndoBar();
+  showToast("Undone", "confirm");
+  isProcessing = false;
+  renderCurrent();
+}
+
+// ─── Wiring ────────────────────────────────────────────────
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-decision]");
+  if (b && !b.disabled) decide(b.dataset.decision);
+  if (e.target.id === "undo-btn") undoLast();
+});
+document.addEventListener("keydown", (e) => {
+  // Ignore keys when typing in inputs
+  if (["INPUT","TEXTAREA","SELECT"].includes(e.target.tagName)) return;
+  if (e.key === "ArrowRight" || e.key.toLowerCase() === "y") { decide("confirm");   e.preventDefault(); }
+  else if (e.key === "ArrowLeft"  || e.key.toLowerCase() === "n") { decide("reject");    e.preventDefault(); }
+  else if (e.key === "ArrowDown"  || e.key.toLowerCase() === "p") { decide("plausible"); e.preventDefault(); }
+  else if (e.key === " "          || e.key === "ArrowUp"        ) { decide("skip");      e.preventDefault(); }
+  else if (e.key.toLowerCase() === "u") { undoLast(); e.preventDefault(); }
+  else if (e.key.toLowerCase() === "r") { loadQueue(); e.preventDefault(); showToast("Queue refreshed", "confirm"); }
+});
+document.querySelectorAll('input[name="queue"]').forEach(r => {
+  // Restore filter from session
+  if (r.value === currentQueue) r.checked = true;
+  r.addEventListener("change", (e) => {
+    currentQueue = e.target.value;
+    sessionStorage.setItem("mod_queue", currentQueue);
+    loadQueue();
+  });
+});
+
+loadQueue();
+</script>
+
+</body>
+</html>

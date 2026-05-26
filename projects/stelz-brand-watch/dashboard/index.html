@@ -1,0 +1,3143 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spot the Brand · Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --panel: #141414;
+    --border: #2a2a2a;
+    --text: #ededed;
+    --muted: #888;
+    --accent: #FF1300;
+    --good: #4ade80;
+    --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; font-size: 14px; }
+  header { padding: 12px 22px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 18px; }
+  .header-left  { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+  .header-stats { display: flex; gap: 18px; color: var(--muted); font-size: 12px; margin-left: 12px; }
+  .header-stats b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 3px; }
+  .header-right { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-shrink: 0; }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+  header h1 span { color: var(--accent); }
+  /* keep the old .stats class working anywhere else but the visible style now lives on .header-stats */
+  .stats { display: flex; gap: 18px; color: var(--muted); font-size: 12px; }
+  .stats b { color: var(--text); font-weight: 600; }
+
+  /* Last-scan pill replaces the small bottom-right LIVE indicator + scan-history button */
+  .last-scan-btn { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; background: transparent; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 11px; cursor: pointer; font-family: inherit; }
+  .last-scan-btn:hover { border-color: var(--accent); color: var(--text); }
+  .last-scan-btn .live-dot { width: 7px; height: 7px; background: var(--good); border-radius: 50%; animation: pulse 1.5s infinite ease-in-out; }
+
+  /* Split-button: primary Scan + dropdown for Deep + future variants */
+  .scan-split { position: relative; display: inline-flex; }
+  .scan-split-main { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; background: var(--accent); border: 1px solid var(--accent); color: white; border-top-left-radius: 8px; border-bottom-left-radius: 8px; border-top-right-radius: 0; border-bottom-right-radius: 0; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600; }
+  .scan-split-main:hover { opacity: 0.92; }
+  .scan-split-main:disabled { opacity: 0.55; cursor: not-allowed; }
+  .scan-split-main .scan-label { letter-spacing: 0.02em; }
+  .scan-split-main .scan-now-cost { font-size: 10px; background: rgba(255,255,255,0.18); padding: 1px 6px; border-radius: 999px; font-weight: 700; }
+  .scan-split-main .scan-now-icon { font-size: 13px; }
+  .scan-split-main .scan-now-icon.spin { animation: spin 1s linear infinite; }
+  .scan-split-toggle { padding: 7px 9px; background: var(--accent); border: 1px solid var(--accent); border-left: 1px solid rgba(255,255,255,0.25); color: white; border-top-right-radius: 8px; border-bottom-right-radius: 8px; border-top-left-radius: 0; border-bottom-left-radius: 0; cursor: pointer; font-family: inherit; font-size: 12px; }
+  .scan-split-toggle:hover { opacity: 0.92; }
+  .scan-split-menu { display: none; position: absolute; top: calc(100% + 6px); right: 0; min-width: 240px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 6px; z-index: 50; box-shadow: 0 12px 32px rgba(0,0,0,0.4); }
+  .scan-split-menu.open { display: block; }
+  .scan-split-item { display: flex; align-items: baseline; flex-wrap: wrap; width: 100%; padding: 10px 12px; background: transparent; border: none; color: var(--text); border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 13px; text-align: left; }
+  .scan-split-item:hover { background: rgba(255,19,0,0.06); }
+
+  /* Header links (Moderator, Account, Sign in) — uniform subtle treatment */
+  .header-link { color: var(--muted); font-size: 12px; text-decoration: none; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; transition: all 0.12s; }
+  .header-link:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* Auth pill becomes a tiny text-link, not a fat pill */
+  .auth-pill { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+  .auth-pill a { color: var(--accent); text-decoration: none; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.12s; }
+  .auth-pill a:hover { border-color: var(--accent); }
+  main { display: grid; grid-template-columns: 280px 1fr; gap: 0; min-height: calc(100vh - 60px); }
+  aside { background: var(--panel); border-right: 1px solid var(--border); padding: 20px; overflow-y: auto; }
+  aside h3 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  aside .group { margin-bottom: 22px; }
+  aside label { display: flex; align-items: center; padding: 4px 0; font-size: 13px; cursor: pointer; }
+  aside label input { margin-right: 8px; accent-color: var(--accent); }
+  aside .count { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .range-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+  .range-row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .range-row .val { width: 36px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .date-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; }
+  .date-row input[type=date] { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 4px 6px; border-radius: 4px; font-size: 11px; color-scheme: dark; flex: 1; min-width: 0; }
+  .date-presets { display: flex; gap: 4px; margin-top: 4px; }
+  .preset-btn { background: var(--bg); border: 1px solid var(--border); color: var(--muted); padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; flex: 1; }
+  .preset-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .preset-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(255, 19, 0, 0.08); }
+  .posted-date { color: var(--muted); font-size: 11px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+  section { padding: 20px 24px; overflow-y: auto; }
+  .controls-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .controls-bar input[type=search] { flex: 1; background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+  .controls-bar button { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 7px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .controls-bar button:hover { border-color: var(--accent); color: var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); background: var(--bg); position: sticky; top: 0; }
+  td .handle { font-weight: 500; color: var(--text); }
+  td .handle:hover { color: var(--accent); }
+  td a { color: var(--text); text-decoration: none; }
+  td a:hover { color: var(--accent); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: #1a1a1a; color: var(--muted); border: 1px solid var(--border); }
+  .badge.hard_lemonade { color: #fb923c; border-color: #fb923c; }
+  .badge.hard_seltzer { color: #60a5fa; border-color: #60a5fa; }
+  .badge.hard_iced_tea { color: #34d399; border-color: #34d399; }
+  .badge.logo_only { color: #c084fc; border-color: #c084fc; }
+  .badge.none { color: var(--muted); }
+  .badge.cat-person { color: var(--good); border-color: var(--good); }
+  .badge.cat-horeca { color: #fbbf24; border-color: #fbbf24; }
+  .badge.cat-festival { color: #f472b6; border-color: #f472b6; }
+  .badge.cat-student_org { color: #38bdf8; border-color: #38bdf8; }
+  .badge.cat-retail { color: #a78bfa; border-color: #a78bfa; }
+  .badge.cat-other { color: var(--muted); }
+  .badge.tier-tier_1 { color: #fbbf24; border-color: #fbbf24; }
+  .badge.tier-tier_2 { color: #60a5fa; border-color: #60a5fa; }
+  .badge.tier-tier_3 { color: var(--muted); }
+  .score-pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: #1a1a1a; border: 1px solid var(--border); margin-top: 4px; }
+  .score-pill.s9, .score-pill.s10 { color: var(--good); border-color: var(--good); }
+  .score-pill.s7, .score-pill.s8 { color: #4ade80; border-color: #4ade80; }
+  .score-pill.s4, .score-pill.s5, .score-pill.s6 { color: var(--warn); border-color: var(--warn); }
+  .score-pill.s0, .score-pill.s1, .score-pill.s2, .score-pill.s3 { color: var(--muted); }
+  .thumb { width: 70px; height: 70px; object-fit: cover; border-radius: 4px; background: var(--panel); border: 1px solid var(--border); }
+  .thumb-wrap { position: relative; width: 70px; height: 70px; display: inline-block; cursor: zoom-in; }
+  /* Thumbnails are 70x70 — bbox visualization isn't useful at that size
+     and any decent stroke width eats most of the image. We hide the
+     overlay on thumbnails entirely. The full dashed bounding-box still
+     renders in the lightbox where there's room to see it. */
+  .thumb-wrap svg.bbox-overlay { display: none; }
+  .thumb-wrap .bbox-pin { display: none; }
+  .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; z-index: 100; padding: 40px; }
+  .lightbox.open { display: flex; }
+  .lightbox-inner { position: relative; max-width: 90vw; max-height: 90vh; }
+  .lightbox-inner img { max-width: 100%; max-height: 90vh; display: block; }
+  .lightbox-inner svg.bbox-overlay { position: absolute; inset: 0; pointer-events: none; }
+  .lightbox-inner svg.bbox-overlay rect { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 8 5; vector-effect: non-scaling-stroke; }
+  .lightbox-inner svg.bbox-overlay .bbox-label { fill: var(--accent); font-size: 14px; font-weight: 600; paint-order: stroke; stroke: rgba(0,0,0,0.7); stroke-width: 3; }
+  .lightbox-close { position: absolute; top: -32px; right: 0; color: white; background: transparent; border: none; font-size: 22px; cursor: pointer; }
+  .ctx { color: var(--muted); font-size: 12px; max-width: 380px; }
+  .caption { color: var(--text); font-size: 12px; max-width: 380px; margin-top: 6px; line-height: 1.4; white-space: pre-wrap; max-height: 60px; overflow: hidden; position: relative; }
+  .caption::after { content: ""; position: absolute; bottom: 0; left: 0; right: 0; height: 18px; background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events: none; }
+  .hashtags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .hashtag-chip { background: #1a1a1a; color: #60a5fa; font-size: 10px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border); }
+  .hashtag-chip.stelz { color: var(--accent); border-color: var(--accent); }
+  .fp-row { opacity: 0.4; }
+  .conf-bar { width: 60px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+  .conf-bar > div { height: 100%; background: var(--good); }
+  .conf-bar > div.low { background: var(--warn); }
+  .conf-bar > div.high { background: var(--good); }
+  .empty { text-align: center; color: var(--muted); padding: 60px; }
+
+  .time-overview { display: grid; grid-template-columns: repeat(3, 1fr) 2fr; gap: 12px; margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+  .time-tile { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; cursor: pointer; transition: all 0.15s; }
+  .time-tile:hover { border-color: var(--accent); }
+  .time-tile.active { border-color: var(--accent); background: rgba(255, 19, 0, 0.08); }
+  .time-tile .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+  .time-tile .value { color: var(--text); font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .time-tile .delta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .time-tile .delta.up { color: var(--good); }
+  .time-tile .delta.down { color: var(--warn); }
+  .trend-chart { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; position: relative; }
+  .trend-chart .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 11px; color: var(--muted); }
+  .trend-chart .chart-toggle { display: inline-flex; gap: 4px; }
+  .trend-chart .chart-toggle button { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; }
+  .trend-chart .chart-toggle button.active { color: var(--accent); border-color: var(--accent); }
+  .trend-chart svg { width: 100%; height: 60px; display: block; }
+  .trend-chart .bar { fill: var(--accent); opacity: 0.7; }
+  .trend-chart .bar:hover { opacity: 1; }
+
+  .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; animation: pulse 1.5s infinite ease-in-out; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.85); } }
+  .source-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 4px; margin-top: 2px; border: 1px solid; }
+  .source-tag.brand { color: var(--accent); border-color: var(--accent); background: rgba(255, 19, 0, 0.06); }
+  .source-tag.hashtag { color: #60a5fa; border-color: #60a5fa; }
+  .source-tag.mention { color: #c084fc; border-color: #c084fc; }
+  .source-tag.visual { color: var(--good); border-color: var(--good); background: rgba(74, 222, 128, 0.06); }
+  tr.is-new td { background: rgba(255, 19, 0, 0.04); }
+  tr.is-new td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+  .sentiment { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; text-transform: uppercase; margin-top: 4px; border: 1px solid; }
+  .sentiment.positive { color: var(--good); border-color: var(--good); }
+  .sentiment.neutral { color: var(--muted); border-color: var(--border); }
+  .sentiment.negative { color: var(--accent); border-color: var(--accent); }
+  .sentiment.promotional { color: #c084fc; border-color: #c084fc; }
+
+  .scan-history { position: relative; display: inline-block; }
+  .scan-history-btn { background: var(--panel); border: 1px solid var(--border); color: var(--muted); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .scan-history-btn:hover { color: var(--text); border-color: var(--accent); }
+  .scan-history-btn .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
+  .scan-history-panel { position: absolute; right: 0; top: calc(100% + 6px); width: 380px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: none; max-height: 400px; overflow-y: auto; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .scan-history-panel.open { display: block; }
+  .scan-history-panel h4 { font-size: 11px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .scan-row { display: flex; justify-content: space-between; padding: 8px 6px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .scan-row:last-child { border-bottom: none; }
+  .scan-row .left { display: flex; flex-direction: column; gap: 2px; }
+  .scan-row .type { color: var(--text); font-weight: 500; text-transform: capitalize; }
+  .scan-row .meta { color: var(--muted); font-size: 10px; }
+  .scan-row .right { text-align: right; font-variant-numeric: tabular-nums; }
+  .scan-row .right.completed { color: var(--good); }
+  .scan-row .right.running { color: var(--warn); }
+  .scan-row .right.failed { color: var(--accent); }
+
+  .period-bar { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .period-btn { background: var(--panel); border: 1px solid var(--border); color: var(--muted); padding: 7px 14px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 12px; display: inline-flex; align-items: center; gap: 7px; transition: border-color 0.12s, color 0.12s; }
+  .period-btn:hover { color: var(--text); border-color: var(--accent); }
+  .period-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(255, 19, 0, 0.06); }
+  .period-btn .period-count { background: var(--bg); color: var(--muted); padding: 1px 7px; border-radius: 999px; font-size: 10px; font-variant-numeric: tabular-nums; }
+  .period-btn.active .period-count { color: var(--accent); }
+  tr.day-divider td { background: var(--bg); padding: 14px 12px 8px; border-bottom: 1px solid var(--border); border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  tr.day-divider td b { color: var(--text); font-weight: 700; margin-right: 8px; text-transform: none; letter-spacing: 0; font-size: 13px; }
+  .live-feed-pill { position: fixed; bottom: 24px; right: 24px; background: var(--accent); color: white; padding: 10px 16px; border-radius: 999px; font-size: 13px; font-weight: 600; box-shadow: 0 8px 24px rgba(255,19,0,0.4); cursor: pointer; z-index: 80; display: none; align-items: center; gap: 8px; animation: live-pulse 1.8s infinite ease-in-out; }
+  .live-feed-pill.show { display: inline-flex; }
+  .live-feed-pill .live-dot { width: 8px; height: 8px; background: white; border-radius: 50%; }
+  @keyframes live-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+  tr.fresh-arrival { animation: fresh-flash 3.2s ease-out; }
+  @keyframes fresh-flash {
+    0%   { background: rgba(255, 19, 0, 0.28); }
+    25%  { background: rgba(255, 19, 0, 0.18); }
+    100% { background: transparent; }
+  }
+  tr.fresh-arrival td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  .fresh-badge { display: inline-block; background: var(--accent); color: white; font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; letter-spacing: 0.05em; }
+  .credit-banner { display: none; align-items: center; gap: 14px; padding: 10px 18px; background: linear-gradient(90deg, rgba(251, 191, 36, 0.12), rgba(251, 191, 36, 0.04)); border-bottom: 1px solid var(--warn); font-size: 13px; position: sticky; top: 0; z-index: 25; }
+  .credit-banner.show { display: flex; }
+  .credit-banner.critical { background: linear-gradient(90deg, rgba(255,19,0,0.16), rgba(255,19,0,0.05)); border-bottom-color: var(--accent); }
+  .credit-banner b { color: var(--text); }
+  .credit-banner a { color: var(--warn); font-weight: 600; margin-left: auto; padding: 5px 12px; border: 1px solid var(--warn); border-radius: 6px; text-decoration: none; font-size: 12px; }
+  .credit-banner.critical a { color: var(--accent); border-color: var(--accent); }
+  .credit-banner .dismiss { color: var(--muted); cursor: pointer; margin-left: 8px; font-size: 16px; }
+  .scan-banner { display: none; align-items: center; gap: 14px; padding: 10px 18px; background: linear-gradient(90deg, rgba(255,19,0,0.12), rgba(255,19,0,0.04)); border-bottom: 1px solid var(--accent); cursor: pointer; font-size: 13px; transition: background 0.15s; position: sticky; top: 0; z-index: 30; }
+  .scan-banner.show { display: flex; }
+  .scan-banner:hover { background: linear-gradient(90deg, rgba(255,19,0,0.18), rgba(255,19,0,0.06)); }
+  .scan-banner .banner-icon { font-size: 16px; color: var(--accent); animation: spin 1.4s linear infinite; }
+  .scan-banner .banner-step { color: var(--text); font-weight: 600; }
+  .scan-banner .banner-step-counter { color: var(--muted); font-size: 11px; margin-left: 6px; font-variant-numeric: tabular-nums; }
+  .scan-banner .banner-progress-track { flex: 1; max-width: 360px; height: 6px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; margin: 0 8px; }
+  .scan-banner .banner-progress-fill { height: 100%; background: var(--accent); transition: width 0.4s ease; width: 0%; }
+  .scan-banner .banner-totals { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .scan-banner .banner-totals b { color: var(--text); }
+  .scan-banner .banner-elapsed { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; margin-left: 8px; }
+  .scan-banner .banner-open { color: var(--accent); font-weight: 600; font-size: 11px; margin-left: 6px; }
+  .progress-step { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: 8px; background: var(--bg); margin-bottom: 8px; border: 1px solid var(--border); }
+  .progress-step.running { border-color: var(--accent); background: rgba(255,19,0,0.04); }
+  .progress-step.completed { border-color: var(--good); }
+  .progress-step.failed { border-color: var(--bad); }
+  .progress-step .step-icon { font-size: 18px; line-height: 1; min-width: 22px; text-align: center; padding-top: 1px; }
+  .progress-step.pending .step-icon { color: var(--muted); }
+  .progress-step.running .step-icon { color: var(--accent); animation: spin 1.4s linear infinite; }
+  .progress-step.completed .step-icon { color: var(--good); }
+  .progress-step.failed .step-icon { color: var(--bad); }
+  .progress-step .step-body { flex: 1; min-width: 0; }
+  .progress-step .step-label { font-size: 13px; font-weight: 500; color: var(--text); }
+  .progress-step.pending .step-label { color: var(--muted); }
+  .progress-step .step-detail { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .progress-step .step-delta { color: var(--good); font-size: 11px; margin-top: 3px; font-weight: 500; }
+  .progress-step .step-log { color: var(--muted); font-size: 10px; margin-top: 6px; font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; max-height: 60px; overflow-y: auto; opacity: 0.8; }
+  .progress-step .step-time { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; margin-left: 8px; }
+  .scan-now-btn { display: flex; align-items: center; gap: 6px; padding: 7px 12px; background: var(--accent); border: 1px solid var(--accent); color: white; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600; transition: opacity 0.15s, transform 0.08s; }
+  .scan-now-btn:hover { opacity: 0.92; }
+  .scan-now-btn:active { transform: scale(0.97); }
+  .scan-now-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .scan-now-icon { display: inline-block; font-size: 14px; }
+  .scan-now-icon.spin { animation: spin 1s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .scan-now-cost { font-size: 10px; background: rgba(255,255,255,0.18); padding: 1px 6px; border-radius: 999px; font-weight: 700; }
+  .subc-status-tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+  .subc-status-tab { background: var(--panel); border: 1px solid var(--border); color: var(--muted); padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .subc-status-tab:hover { color: var(--text); border-color: var(--accent); }
+  .subc-status-tab.active { color: var(--accent); border-color: var(--accent); background: rgba(255, 19, 0, 0.06); }
+  .subc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; padding-bottom: 28px; }
+  .subc-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 12px; transition: border-color 0.15s; }
+  .subc-card:hover { border-color: var(--accent); }
+  .subc-card .head { display: flex; align-items: center; gap: 10px; }
+  .subc-card .emoji { font-size: 26px; line-height: 1; }
+  .subc-card .name { font-size: 16px; font-weight: 600; }
+  .subc-card .slug { color: var(--muted); font-size: 11px; }
+  .subc-card .desc { color: var(--muted); font-size: 12px; line-height: 1.5; min-height: 36px; }
+  .subc-card .metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .subc-card .metric { text-align: center; }
+  .subc-card .metric .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .subc-card .metric .l { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 2px; }
+  .subc-card .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .subc-card .tag { background: var(--bg); color: var(--muted); font-size: 10px; padding: 2px 6px; border-radius: 3px; border: 1px solid var(--border); }
+  .subc-card .actions { display: flex; gap: 6px; margin-top: auto; }
+  .subc-card button { flex: 1; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; font-size: 11px; font-family: inherit; }
+  .subc-card button.primary { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .subc-card button.primary:hover { background: rgba(255,19,0,0.06); }
+  .subc-card button.ghost:hover { color: var(--accent); border-color: var(--accent); }
+  .subc-card .last-exp { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .ghost-btn { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 7px 14px; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 12px; }
+  .ghost-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 200; padding: 24px; }
+  .modal-backdrop.open { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; max-width: 520px; width: 100%; max-height: 85vh; overflow-y: auto; }
+  .modal h2 { font-size: 17px; font-weight: 600; margin-bottom: 14px; }
+  .modal label { display: block; font-size: 11px; color: var(--muted); margin-top: 12px; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .modal input, .modal textarea { width: 100%; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-size: 13px; font-family: inherit; }
+  .modal textarea { min-height: 60px; resize: vertical; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .modal button { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; font-family: inherit; font-size: 12px; }
+  .modal button.primary { background: var(--accent); border-color: var(--accent); color: white; font-weight: 600; }
+  /* Compact credits widget: just the number + a tiny plan dot. Full plan
+     details live on /account.html which the widget links to. */
+  .credits-widget.compact { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border: 1px solid var(--border); border-radius: 8px; text-decoration: none; color: var(--text); font-size: 12px; transition: border-color 0.12s; }
+  .credits-widget.compact:hover { border-color: var(--accent); }
+  .credits-widget.compact .credits-num { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .credits-widget.compact .credits-num.low { color: var(--warn); }
+  .credits-widget.compact .credits-num.empty { color: var(--accent); }
+  .credits-widget.compact .credits-plan-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
+  .credits-widget.compact .credits-plan-dot.trial { background: var(--warn); }
+  .credits-widget.compact .credits-plan-dot.expired { background: var(--accent); }
+  .insights-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding-bottom: 24px; }
+  .insight-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  .insight-card h3 { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 12px 0; text-transform: uppercase; letter-spacing: 0.04em; }
+  .insight-card .card-sub { color: var(--muted); font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 6px; }
+  .insight-card.insight-wide { grid-column: span 2; }
+  .insight-card .card-body { font-size: 13px; color: var(--text); line-height: 1.6; }
+  .insight-card .stat-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .insight-card .stat-row:last-child { border-bottom: none; }
+  .insight-card .stat-row .label { color: var(--muted); }
+  .insight-card .stat-row .val { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .insight-card .delta { font-size: 11px; margin-left: 6px; }
+  .insight-card .delta.up { color: var(--good); }
+  .insight-card .delta.down { color: var(--warn); }
+  .insight-card .delta.flat { color: var(--muted); }
+  .insight-card .empty-mini { color: var(--muted); font-size: 12px; padding: 12px 0; }
+  .insight-card .tag-pill { display: inline-block; background: #1a1a1a; color: #60a5fa; font-size: 11px; padding: 3px 9px; margin: 3px 4px 3px 0; border-radius: 999px; border: 1px solid var(--border); }
+  .insight-card .tag-pill .count { color: var(--muted); margin-left: 6px; }
+  .insight-card .tag-pill.suggest { border-color: var(--accent); color: var(--accent); }
+  .creator-mini { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); align-items: center; }
+  .creator-mini:last-child { border-bottom: none; }
+  .creator-mini .handle { font-weight: 500; }
+  .creator-mini .meta { color: var(--muted); font-size: 11px; }
+  .perplexity-bullet { padding: 8px 12px; border-left: 2px solid var(--accent); margin: 8px 0; font-size: 13px; line-height: 1.5; background: rgba(255,19,0,0.04); border-radius: 0 6px 6px 0; }
+  .perplexity-bullet .meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  .view-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .view-tab { background: transparent; border: none; color: var(--muted); padding: 10px 18px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500; font-family: inherit; }
+
+  /* SRS Discovery view */
+  .platform-mini { display: inline-block; font-family: var(--font-mono); font-size: 9px; color: var(--muted); border: 1px solid var(--border-bright); padding: 1px 5px; margin-left: 6px; letter-spacing: 0.05em; }
+  .srs-bar-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; max-width: 460px; }
+  .srs-bar-cell { display: flex; align-items: center; gap: 4px; min-width: 70px; }
+  .srs-bar-label { font-family: var(--font-mono); font-size: 9px; color: var(--muted); letter-spacing: 0.06em; width: 30px; text-align: right; }
+  .srs-bar-track { display: inline-block; width: 36px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .srs-bar-fill { display: block; height: 100%; }
+  .srs-bar-empty { font-family: var(--font-mono); font-size: 12px; color: var(--border-bright); width: 36px; text-align: center; }
+  .view-tab:hover { color: var(--text); }
+  .view-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .trust-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .trust-tab { background: var(--panel); border: 1px solid var(--border); color: var(--muted); padding: 6px 14px; font-size: 12px; cursor: pointer; border-radius: 6px; font-family: inherit; display: inline-flex; align-items: center; gap: 6px; }
+  .trust-tab:hover { color: var(--text); border-color: var(--accent); }
+  .trust-tab.active { color: var(--accent); border-color: var(--accent); background: rgba(255, 19, 0, 0.06); }
+  .trust-tab .tab-count { background: var(--bg); color: var(--muted); padding: 1px 7px; border-radius: 999px; font-size: 10px; font-variant-numeric: tabular-nums; }
+  .trust-tab.active .tab-count { color: var(--accent); }
+  .trust-banner { padding: 8px 12px; background: rgba(251, 191, 36, 0.06); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 6px; color: var(--warn); font-size: 12px; margin-bottom: 12px; display: none; }
+  .trust-banner.show { display: block; }
+  .trust-flag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; text-transform: uppercase; margin-top: 4px; border: 1px solid var(--warn); color: var(--warn); }
+  .trust-flag.plausible { border-color: #fbbf24; color: #fbbf24; background: rgba(251,191,36,0.08); }
+  .review-actions { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
+  .review-actions button { background: var(--panel); border: 1px solid var(--border); color: var(--muted); padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; font-family: inherit; line-height: 1.2; }
+  .review-actions button:hover { color: var(--text); border-color: var(--accent); }
+  .review-actions button.confirm:hover, .review-actions button.confirm.done { color: var(--good); border-color: var(--good); }
+  .review-actions button.reject:hover,  .review-actions button.reject.done  { color: var(--accent); border-color: var(--accent); }
+  .review-actions button.done { background: rgba(255,255,255,0.04); }
+  .review-actions .label-mini { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 2px; }
+  tr.user-confirmed td:first-child { box-shadow: inset 3px 0 0 var(--good); }
+  tr.user-plausible td:first-child { box-shadow: inset 3px 0 0 #fbbf24; }
+  tr.user-rejected td { opacity: 0.45; }
+  tr.user-rejected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  .view-section { display: none; }
+  .view-section.active { display: block; }
+  td.creator-cell { cursor: pointer; }
+  td.creator-cell:hover { background: rgba(255, 19, 0, 0.04); }
+  .status-pill { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; text-transform: uppercase; border: 1px solid; }
+  .status-pill.discovered { color: var(--muted); border-color: var(--border); }
+  .status-pill.promoted { color: var(--good); border-color: var(--good); }
+  .status-pill.rejected { color: var(--accent); border-color: var(--accent); opacity: 0.6; }
+  .last-scraped { color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div id="demo-banner" style="display: none; background: linear-gradient(90deg, #FF1300, #ff4d3d); color: white; padding: 10px 22px; font-size: 13px; display: none; align-items: center; justify-content: space-between; gap: 16px;">
+  <div style="display: flex; align-items: center; gap: 12px;">
+    <span style="background: rgba(255,255,255,0.2); padding: 2px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em;">DEMO</span>
+    <span>You're viewing live STËLZ data. <b>545 creators tracked</b>, <b>436 verified product hits</b>, refreshed daily. Real customers see their own brand here.</span>
+  </div>
+  <div style="display: flex; gap: 10px; align-items: center;">
+    <a href="/highlights.html" style="color: white; text-decoration: none; font-weight: 600; padding: 5px 12px; border: 1px solid rgba(255,255,255,0.6); border-radius: 6px; font-size: 12px;">View highlights</a>
+    <a href="/landing.html" style="color: white; text-decoration: none; font-weight: 600; padding: 5px 12px; background: white; color: #FF1300; border-radius: 6px; font-size: 12px;">Try for your brand →</a>
+  </div>
+</div>
+
+<header>
+  <!-- LEFT: brand + live status (one cluster, clear identity)  -->
+  <div class="header-left">
+    <h1 id="brand-title">Spot the Brand<span>.</span></h1>
+    <select id="brand-switcher" style="display: none; background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 5px 8px; border-radius: 6px; font-size: 12px; font-family: inherit; cursor: pointer;"></select>
+    <div class="scan-history" id="scan-history-wrap">
+      <button class="last-scan-btn" id="scan-history-btn" title="Click for scan history">
+        <span class="live-dot"></span>
+        <span id="last-scan-label">Loading…</span>
+      </button>
+      <div class="scan-history-panel" id="scan-history-panel">
+        <h4>Scan history</h4>
+        <div id="scan-history-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER: only essential stats — detections + creators -->
+  <div class="header-stats" id="stats">Loading…</div>
+
+  <!-- RIGHT: actions + identity, demoted secondary buttons -->
+  <div class="header-right">
+    <!-- Split-button: primary Scan now (25cr), chevron opens Deep + future variants -->
+    <div class="scan-split">
+      <button id="scan-now-btn" class="scan-split-main" title="Run a manual scan now">
+        <span class="scan-now-icon">↻</span><span class="scan-label">Scan</span><span class="scan-now-cost" id="scan-now-cost">25 cr</span>
+      </button>
+      <button id="scan-split-toggle" class="scan-split-toggle" title="More scan options" aria-label="More scan options">▾</button>
+      <div class="scan-split-menu" id="scan-split-menu">
+        <button id="deep-scan-btn" class="scan-split-item">
+          <span style="flex: 1;">⚡ Deep scan</span>
+          <span style="color: var(--muted); font-size: 11px;">100 cr</span>
+          <div style="width: 100%; color: var(--muted); font-size: 10px; margin-top: 4px;">Full sweep · no skip · TikTok included</div>
+        </button>
+      </div>
+    </div>
+
+    <a href="/moderator.html" class="header-link" title="Tinder-style moderation queue">Moderator</a>
+
+    <a href="/account.html" class="credits-widget compact" id="credits-widget" title="Click for plan + credits">
+      <span class="credits-num" id="header-credits-num">—</span>
+      <span class="credits-plan-dot" id="credits-plan-dot" title=""></span>
+    </a>
+
+    <a href="/account.html" class="header-link" title="Account settings">Account</a>
+    <div id="auth-pill" class="auth-pill"></div>
+  </div>
+</header>
+
+<div class="credit-banner" id="credit-banner">
+  <span id="credit-banner-text">Low credits.</span>
+  <a href="/account.html#buy-credits-btn" id="credit-banner-cta">Buy credits →</a>
+  <span class="dismiss" id="credit-banner-dismiss" title="Hide for this session">×</span>
+</div>
+
+<div class="live-feed-pill" id="live-feed-pill" title="Click to jump to newest">
+  <span class="live-dot"></span>
+  <span id="live-feed-count">0 new</span>
+  <span style="opacity: 0.85;">↑</span>
+</div>
+
+<div class="scan-banner" id="scan-banner">
+  <span class="banner-icon">↻</span>
+  <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0;">
+    <div>
+      <span class="banner-step" id="banner-step-label">Starting scan…</span>
+      <span class="banner-step-counter" id="banner-step-counter">step 0/3</span>
+    </div>
+    <div class="banner-totals" id="banner-totals" style="display: none;"></div>
+  </div>
+  <div class="banner-progress-track"><div class="banner-progress-fill" id="banner-progress-fill"></div></div>
+  <span class="banner-elapsed" id="banner-elapsed"></span>
+  <span class="banner-open">View details →</span>
+</div>
+
+<main>
+  <aside>
+    <div class="group">
+      <h3>Product line</h3>
+      <div id="filter-product-line"></div>
+    </div>
+    <div class="group">
+      <h3>Size in frame</h3>
+      <div id="filter-size"></div>
+    </div>
+    <div class="group">
+      <h3>Creator category</h3>
+      <div id="filter-category"></div>
+    </div>
+    <div class="group">
+      <h3>Platform</h3>
+      <div id="filter-platform"></div>
+    </div>
+    <div class="group">
+      <h3>Min confidence</h3>
+      <div class="range-row">
+        <input type="range" id="filter-confidence" min="0" max="100" value="50" step="5">
+        <span class="val" id="filter-confidence-val">0.50</span>
+      </div>
+    </div>
+    <div class="group">
+      <h3>Min AI relevance</h3>
+      <div class="range-row">
+        <input type="range" id="filter-relevance" min="0" max="10" value="0" step="1">
+        <span class="val" id="filter-relevance-val">0</span>
+      </div>
+    </div>
+    <div class="group">
+      <h3>Creator tier</h3>
+      <div id="filter-tier"></div>
+    </div>
+    <div class="group">
+      <h3>Posted between</h3>
+      <div class="date-row">
+        <input type="date" id="filter-date-from" />
+        <span style="color: var(--muted); font-size: 11px;">to</span>
+        <input type="date" id="filter-date-to" />
+      </div>
+      <div class="date-presets">
+        <button data-preset="7" class="preset-btn">7d</button>
+        <button data-preset="30" class="preset-btn">30d</button>
+        <button data-preset="90" class="preset-btn">90d</button>
+        <button data-preset="365" class="preset-btn">1y</button>
+        <button data-preset="all" class="preset-btn">all</button>
+      </div>
+    </div>
+    <div class="group">
+      <h3>Sentiment</h3>
+      <div id="filter-sentiment"></div>
+    </div>
+    <div class="group">
+      <h3>Source signal</h3>
+      <label><input type="checkbox" id="signal-brand"> Brand-owned post</label>
+      <label><input type="checkbox" id="signal-hashtag"> #stelz hashtag in caption</label>
+      <label><input type="checkbox" id="signal-mention"> @drinkstelz tagged</label>
+      <label><input type="checkbox" id="signal-visual"> Visual only (no tag/hashtag)</label>
+    </div>
+    <div class="group">
+      <h3>Visibility</h3>
+      <label><input type="checkbox" id="filter-primary"> Only primary subject</label>
+      <label><input type="checkbox" id="filter-clear"> Only clear product (no logos/banners)</label>
+      <label><input type="checkbox" id="filter-fp"> Show known false positives</label>
+      <label><input type="checkbox" id="filter-hide-brand" checked> Hide brand-owned accounts (drinkstelz, stelz_suriname, distributors)</label>
+    </div>
+  </aside>
+
+  <section>
+    <div class="view-tabs">
+      <button class="view-tab active" data-view="detections">Detections</button>
+      <button class="view-tab" data-view="discovery">Discovery <span id="discovery-count" style="color: var(--accent); font-size: 11px; margin-left: 4px;"></span></button>
+      <button class="view-tab" data-view="subcultures">Subcultures <span id="subc-count" style="color: var(--muted); font-size: 11px; margin-left: 4px;"></span></button>
+      <button class="view-tab" data-view="creators">Creators we track <span id="creators-count" style="color: var(--muted); font-size: 11px; margin-left: 4px;"></span></button>
+      <button class="view-tab" data-view="insights">Insights <span id="insights-badge" style="color: var(--accent); font-size: 11px; margin-left: 4px;"></span></button>
+    </div>
+    <div class="view-section active" id="view-detections">
+    <div class="time-overview" id="time-overview">
+      <div class="time-tile" data-period="day" id="tile-day">
+        <div class="label">Today</div>
+        <div class="value" id="tile-day-val">—</div>
+        <div class="delta" id="tile-day-delta"></div>
+      </div>
+      <div class="time-tile" data-period="week" id="tile-week">
+        <div class="label">This week</div>
+        <div class="value" id="tile-week-val">—</div>
+        <div class="delta" id="tile-week-delta"></div>
+      </div>
+      <div class="time-tile" data-period="month" id="tile-month">
+        <div class="label">This month</div>
+        <div class="value" id="tile-month-val">—</div>
+        <div class="delta" id="tile-month-delta"></div>
+      </div>
+      <div class="trend-chart">
+        <div class="chart-header">
+          <span id="chart-title">Hits per day, last 30 days</span>
+          <div class="chart-toggle">
+            <button data-bucket="day" class="active">Day</button>
+            <button data-bucket="week">Week</button>
+            <button data-bucket="month">Month</button>
+          </div>
+        </div>
+        <svg id="trend-svg" viewBox="0 0 600 60" preserveAspectRatio="none"></svg>
+      </div>
+    </div>
+    <div class="trust-tabs">
+      <button class="trust-tab active" data-trust="trusted">
+        <span>Strong visual hits</span>
+        <span class="tab-count" id="trust-count-trusted">0</span>
+      </button>
+      <button class="trust-tab" data-trust="review">
+        <span>Low visual confidence</span>
+        <span class="tab-count" id="trust-count-review">0</span>
+      </button>
+      <button class="trust-tab" data-trust="all">
+        <span>All</span>
+        <span class="tab-count" id="trust-count-all">0</span>
+      </button>
+    </div>
+    <div class="trust-banner" id="trust-banner">
+      <b>Low visual confidence:</b> hits waar het product klein, niet primary subject, of alleen als logo zichtbaar is. Confirm / reject om de vision scanner te trainen. Caption mention is een hint maar niet bepalend, de tool is vision-first.
+    </div>
+    <div class="period-bar" id="period-bar">
+      <button class="period-btn" data-period="today">Vandaag <span class="period-count" id="period-count-today">0</span></button>
+      <button class="period-btn" data-period="yesterday">Gisteren <span class="period-count" id="period-count-yesterday">0</span></button>
+      <button class="period-btn" data-period="week">Deze week <span class="period-count" id="period-count-week">0</span></button>
+      <button class="period-btn" data-period="month">Deze maand <span class="period-count" id="period-count-month">0</span></button>
+      <button class="period-btn" data-period="last30">Laatste 30d <span class="period-count" id="period-count-last30">0</span></button>
+      <button class="period-btn active" data-period="all">Alles <span class="period-count" id="period-count-all">0</span></button>
+    </div>
+    <div class="period-bar" id="ctype-bar" style="margin-top: 6px;">
+      <button class="period-btn active" data-ctype="all">Alle formats <span class="period-count" id="ctype-count-all">0</span></button>
+      <button class="period-btn" data-ctype="post">Posts <span class="period-count" id="ctype-count-post">0</span></button>
+      <button class="period-btn" data-ctype="reel">Reels <span class="period-count" id="ctype-count-reel">0</span></button>
+      <button class="period-btn" data-ctype="tiktok">TikToks <span class="period-count" id="ctype-count-tiktok">0</span></button>
+      <button class="period-btn" data-ctype="story">Stories <span class="period-count" id="ctype-count-story">0</span></button>
+    </div>
+    <div id="story-banner" style="display:none; background: rgba(255,19,0,0.06); border: 1px solid rgba(255,19,0,0.35); border-radius: 8px; padding: 12px 16px; margin: 8px 0; font-size: 12.5px; color: var(--muted); line-height: 1.5;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">
+        <div>
+          <b style="color: var(--text);">▸ Instagram Stories</b> — live story-scraping draait via gekoppeld IG-account. Stories verdwijnen na 24 uur. Wij vangen ze daarvoor.
+          <span id="story-meta" style="display: block; margin-top: 4px; color: var(--muted); font-size: 11.5px;"></span>
+        </div>
+        <button id="scan-stories-now" style="background: var(--accent); color: white; border: none; padding: 6px 14px; border-radius: 6px; font-size: 11.5px; font-weight: 600; cursor: pointer; white-space: nowrap; letter-spacing: 0.02em;">▸ Scan now</button>
+      </div>
+    </div>
+    <div class="controls-bar">
+      <input type="search" id="search" placeholder="Search handle, caption, context...">
+      <button id="export-btn">Export CSV</button>
+      <span id="result-count" style="color: var(--muted); font-size: 12px;"></span>
+    </div>
+    <div id="table-container">
+      <div class="empty">Loading detections...</div>
+    </div>
+    </div><!-- /view-detections -->
+
+    <div class="modal-backdrop" id="subc-modal">
+  <div class="modal">
+    <h2 id="subc-modal-title">New subculture</h2>
+    <input type="hidden" id="subc-modal-id">
+    <label>Emoji</label><input id="subc-modal-emoji" placeholder="🍻" maxlength="4">
+    <label>Name</label><input id="subc-modal-name" placeholder="Vrijdagmiddagborrel">
+    <label>Slug (lowercase, no spaces)</label><input id="subc-modal-slug" placeholder="vrijmibo">
+    <label>Description</label><textarea id="subc-modal-desc" placeholder="Short description of the scene"></textarea>
+    <label>Signature hashtags (comma separated, no #)</label>
+    <textarea id="subc-modal-hashtags" placeholder="vrijmibo, vrijdagborrel, borrel"></textarea>
+    <label>Signature keywords (comma separated)</label>
+    <textarea id="subc-modal-keywords" placeholder="happy hour, afterwork"></textarea>
+    <label>Status</label>
+    <select id="subc-modal-status" style="width: 100%; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-size: 13px;">
+      <option value="active">Active</option>
+      <option value="paused">Paused</option>
+      <option value="archived">Archived</option>
+    </select>
+    <div class="actions">
+      <button id="subc-modal-cancel">Cancel</button>
+      <button id="subc-modal-save" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="scan-progress-modal">
+  <div class="modal" style="max-width: 600px;">
+    <h2 style="display: flex; align-items: center; gap: 10px;"><span class="scan-now-icon spin" style="font-size: 20px; color: var(--accent);">↻</span> Live scan in progress</h2>
+    <p style="color: var(--muted); font-size: 12px; margin-top: 4px;">Spot the Brand haalt verse posts op en checkt ze visueel. Modal blijft hangen tot klaar.</p>
+    <div id="scan-progress-steps" style="margin-top: 18px;"></div>
+    <div id="scan-progress-summary" style="margin-top: 14px; padding: 12px 14px; background: var(--bg); border-radius: 8px; font-size: 12px; color: var(--muted); display: none;"></div>
+    <div class="actions">
+      <button id="scan-progress-bg" class="ghost-btn">Run in background</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="scan-modal">
+  <div class="modal">
+    <h2>Run a manual scan</h2>
+    <p style="color: var(--muted); font-size: 13px; line-height: 1.6;">
+      Spot the Brand haalt direct verse posts op bij de creators die je tracked, draait Gemini Flash + Pro verify, en schrijft de hits naar het dashboard. Duurt 3-5 min. Daily auto-scan blijft gewoon doorlopen.
+    </p>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; padding: 14px; background: var(--bg); border-radius: 8px;">
+      <div>
+        <div style="color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;">Cost</div>
+        <div style="font-size: 22px; font-weight: 700; margin-top: 4px;">25 credits</div>
+      </div>
+      <div>
+        <div style="color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;">Balance after</div>
+        <div id="scan-balance-after" style="font-size: 22px; font-weight: 700; margin-top: 4px;">—</div>
+      </div>
+    </div>
+    <div id="scan-error" style="color: var(--accent); font-size: 12px; margin-top: 10px; display: none;"></div>
+    <div class="actions">
+      <button id="scan-cancel">Cancel</button>
+      <button id="scan-confirm" class="primary">Start scan</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="expand-modal">
+  <div class="modal">
+    <h2>Expand <span id="expand-modal-name"></span></h2>
+    <p style="color: var(--muted); font-size: 12px; line-height: 1.5;">
+      Spot the Brand scrapet de signature hashtags van deze scene plus de meest gebruikte hashtags van je beste creators erin. Nieuwe handles met ≥2 hits worden in de discovery queue gezet voor review.
+    </p>
+    <label>Hashtags to scrape (max)</label><input id="expand-max-tags" type="number" value="6" min="1" max="20">
+    <label>Posts per hashtag</label><input id="expand-per-tag" type="number" value="80" min="20" max="300">
+    <label>Estimated cost</label><div id="expand-cost" style="font-size: 14px; font-weight: 600; padding: 8px 0;">30 credits</div>
+    <div class="actions">
+      <button id="expand-cancel">Cancel</button>
+      <button id="expand-confirm" class="primary">Start expansion</button>
+    </div>
+  </div>
+</div>
+
+<div class="lightbox" id="lightbox">
+  <div class="lightbox-inner">
+    <button class="lightbox-close" id="lightbox-close">✕ close</button>
+    <img id="lightbox-img" referrerpolicy="no-referrer">
+    <svg class="bbox-overlay" id="lightbox-svg" viewBox="0 0 1000 1000" preserveAspectRatio="none"></svg>
+  </div>
+</div>
+
+<div class="view-section" id="view-creators">
+      <div class="controls-bar">
+        <input type="search" id="creator-search" placeholder="Search creator handle, name, category...">
+        <button id="export-creators-btn">Export CSV</button>
+        <span id="creator-result-count" style="color: var(--muted); font-size: 12px;"></span>
+      </div>
+      <div id="creators-container">
+        <div class="empty">Loading creators...</div>
+      </div>
+    </div>
+
+    <div class="view-section" id="view-discovery">
+      <div style="margin-bottom: 16px;">
+        <p style="color: var(--muted); font-size: 13px; max-width: 720px;">
+          The STELZ Resonance Algorithm (SRS) finds creators most likely to fit your brand. Every candidate scored 0-100 from six layers: graph density, hashtag fingerprint, subculture fit, comment engagement, geo/language, and visual style. Sorted desc by SRS. Click a candidate to add to creators.
+        </p>
+      </div>
+      <div class="period-bar" id="srs-band-bar" style="margin-bottom: 10px;">
+        <button class="period-btn active" data-band="all">All <span class="period-count" id="srs-count-all">0</span></button>
+        <button class="period-btn" data-band="hot">SRS ≥ 75 <span class="period-count" id="srs-count-hot">0</span></button>
+        <button class="period-btn" data-band="warm">SRS 50-75 <span class="period-count" id="srs-count-warm">0</span></button>
+        <button class="period-btn" data-band="cold">SRS 25-50 <span class="period-count" id="srs-count-cold">0</span></button>
+        <button class="period-btn" data-band="new">New (not tracked) <span class="period-count" id="srs-count-new">0</span></button>
+      </div>
+      <div class="controls-bar">
+        <input type="search" id="discovery-search" placeholder="Search candidate handle...">
+        <button id="export-discovery-btn">Export CSV</button>
+        <span id="discovery-result-count" style="color: var(--muted); font-size: 12px;"></span>
+      </div>
+      <div id="discovery-container">
+        <div class="empty">Loading resonance scores…</div>
+      </div>
+    </div>
+
+    <div class="view-section" id="view-subcultures">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <p style="color: var(--muted); font-size: 13px; max-width: 640px;">
+          Subcultures zijn de scenes waar STELZ in leeft. Per scene zie je hoeveel creators erbij horen en hoe vaak het merk er opduikt. Klik <b>Expand</b> om de "olievlek" verder uit te breiden: Spot the Brand scrapet dan signature hashtags en jouw seed-creators hun feeds om nieuwe relevante handles te vinden. Jij houdt de richting in de hand.
+        </p>
+        <button id="add-subc-btn" class="ghost-btn">+ Add subculture</button>
+      </div>
+      <div class="subc-status-tabs">
+        <button class="subc-status-tab active" data-status="active">Active</button>
+        <button class="subc-status-tab" data-status="paused">Paused</button>
+        <button class="subc-status-tab" data-status="archived">Archived</button>
+      </div>
+      <div id="subc-grid" class="subc-grid">
+        <div class="empty">Loading subcultures…</div>
+      </div>
+    </div>
+
+    <div class="view-section" id="view-insights">
+      <div class="insights-grid">
+        <div class="insight-card">
+          <h3>Since last scrape <span id="insight-since" class="card-sub"></span></h3>
+          <div id="insight-since-body" class="card-body">Loading…</div>
+        </div>
+        <div class="insight-card">
+          <h3>This week vs last week</h3>
+          <div id="insight-weekly-body" class="card-body">Loading…</div>
+        </div>
+        <div class="insight-card">
+          <h3>Coverage by category</h3>
+          <div id="insight-categories-body" class="card-body">Loading…</div>
+        </div>
+        <div class="insight-card">
+          <h3>Hashtags in our data, not yet tracked</h3>
+          <div id="insight-hashtags-body" class="card-body">Loading…</div>
+        </div>
+        <div class="insight-card insight-wide">
+          <h3>Scrape territories · hashtags from confirmed STELZ-posters</h3>
+          <p class="card-sub" style="display: block; margin-bottom: 10px; text-transform: none; letter-spacing: 0;">Hashtags die mensen met STELZ-content gebruiken. Klik <b>+ Track</b> om aan onze hashtag-pool toe te voegen — volgende scan pikt ze op.</p>
+          <div id="insight-territory-hashtags-body" class="card-body">Loading…</div>
+        </div>
+        <div class="insight-card insight-wide">
+          <h3>Scrape territories · accounts mentioned by STELZ-posters</h3>
+          <p class="card-sub" style="display: block; margin-bottom: 10px; text-transform: none; letter-spacing: 0;">Accounts die STELZ-posters tagen, die wij nog niet tracken. Klik <b>+ Queue</b> om ze in de discovery queue te zetten.</p>
+          <div id="insight-territory-mentions-body" class="card-body">Loading…</div>
+        </div>
+        <div class="insight-card insight-wide">
+          <h3>Newly discovered creators · last 7 days</h3>
+          <div id="insight-newcreators-body" class="card-body">Loading…</div>
+        </div>
+        <div class="insight-card insight-wide">
+          <h3>Web intelligence · Perplexity scout</h3>
+          <div id="insight-perplexity-body" class="card-body">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const STORAGE_BUCKET = "brand-watch-thumbnails";
+
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+function imageUrlFor(d) {
+  if (d.stored_path) {
+    return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${d.stored_path}`;
+  }
+  return d.image_url || "";
+}
+
+// Bbox arrives as array of { box_2d: [y1, x1, y2, x2], label }, coords 0-1000.
+// Returns SVG rect elements scaled to the viewBox (which the consumer chooses).
+//
+// Filtering: Gemini Pro is good at recognition, less precise at localization.
+// We only render boxes that pass sanity checks:
+//   - detection confidence >= 0.80 (low-conf detections often have bad boxes)
+//   - size_in_frame in {medium, large, dominant} (tiny/small are unreliable)
+//   - box covers between 2% and 75% of the image (too tiny or covering everything)
+// Anything else we drop — better no box than a wrong box.
+function bboxRects(d) {
+  // Confidence + size gates
+  if ((d.confidence ?? 0) < 0.80) return "";
+  const sizeOk = ["medium", "large", "dominant"].includes(d.size_in_frame);
+  if (!sizeOk) return "";
+
+  const arr = Array.isArray(d.bbox) ? d.bbox : (d.bbox && Array.isArray(d.bbox.bbox) ? d.bbox.bbox : []);
+  if (!arr || !arr.length) return "";
+
+  return arr.map(b => {
+    const box = b.box_2d || b;
+    if (!Array.isArray(box) || box.length < 4) return "";
+    let [y1, x1, y2, x2] = box.map(n => Math.max(0, Math.min(1000, Number(n) || 0)));
+    if (y2 < y1) [y1, y2] = [y2, y1];
+    if (x2 < x1) [x1, x2] = [x2, x1];
+    const w = x2 - x1;
+    const h = y2 - y1;
+    const areaPct = (w * h) / (1000 * 1000);
+    // Drop boxes that are too small (likely hallucinated) or too large (useless)
+    if (areaPct < 0.02 || areaPct > 0.75) return "";
+    const label = (b.label || "").replace(/</g, "&lt;");
+    return `<rect x="${x1}" y="${y1}" width="${w}" height="${h}"></rect>` +
+      (label ? `<text class="bbox-label" x="${x1 + 12}" y="${y1 - 12}">${label}</text>` : "");
+  }).join("");
+}
+
+function thumbWithBox(d) {
+  const url = imageUrlFor(d);
+  if (!url) return "";
+  const rects = bboxRects(d);
+  const dataAttrs = `data-img="${url}" data-detection-id="${d.detection_id}"`;
+  return `<div class="thumb-wrap" ${dataAttrs}>
+    <img class="thumb" src="${url}" loading="lazy" referrerpolicy="no-referrer">
+    ${rects ? `<svg class="bbox-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none">${rects}</svg><span class="bbox-pin" title="Gemini-pinpointed">●</span>` : ""}
+  </div>`;
+}
+
+let allDetections = [];
+const BRAND_OWNED_HANDLES = new Set([
+  "drinkstelz", "stelz_suriname", "stelzofficial",
+  "bullseyedistribution", "stanbev_international", "bavaria.bierkoerier",
+]);
+const filters = {
+  productLines: new Set(),
+  sizes: new Set(),
+  categories: new Set(),
+  platforms: new Set(),
+  sentiments: new Set(),
+  minConfidence: 0.5,
+  minRelevance: 0,
+  tiers: new Set(),
+  onlyPrimary: false,
+  onlyClear: false,
+  showFP: false,
+  hideBrand: true,
+  dateFrom: null,
+  dateTo: null,
+  search: "",
+  signalBrand: false,
+  signalHashtag: false,
+  signalMention: false,
+  signalVisual: false,
+  trust: "trusted", // 'trusted' | 'review' | 'all'
+  contentType: "all", // 'all' | 'post' | 'reel' | 'tiktok' | 'story'
+};
+
+// STËLZ is often written with a diaeresis on the E. JavaScript's regex `\b`
+// only respects ASCII word boundaries, so /\bstelz\b/i misses "STËLZ".
+// Solution: normalize the caption to strip accents before matching.
+function stripAccents(s) {
+  return (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+const STELZ_HASHTAG_RE = /(^|\W)#?(stelz|drinkstelz|stelzhardseltzer|stelzhardlemonade|stelzhardicedtea|stelzmixedclassics)(\W|$)/i;
+const STELZ_MENTION_RE = /@drinkstelz\b/i;
+const STELZ_CAPTION_RE = /\bstelz\b/i;
+
+function classifySignals(d) {
+  const isBrand = BRAND_OWNED_HANDLES.has((d.creator_handle || "").toLowerCase());
+  const captionNorm = stripAccents(d.post_caption || "");
+  const hashtags = (d.post_hashtags || []).map(h => stripAccents((h || "").toLowerCase()));
+  // Brand named via hashtag = any hashtag that STARTS with "stelz" (covers stelzfest,
+  // stelzbeuk, stelzhardseltzer, stelzhouse, stelzibiza, etc.) OR the plain word in caption.
+  const hasHashtag = hashtags.some(h => /^stelz/i.test(h))
+    || STELZ_HASHTAG_RE.test(captionNorm);
+  const hasMention = STELZ_MENTION_RE.test(captionNorm);
+  const visualOnly = !isBrand && !hasHashtag && !hasMention;
+  // stelzInCaption is the inverse signal of visualOnly (for non-brand handles): if the
+  // brand was named in any way, it's "in caption". Derived from hasHashtag/hasMention so
+  // the badges never contradict each other.
+  const stelzInCaption = !isBrand && (hasHashtag || hasMention);
+  return { isBrand, hasHashtag, hasMention, visualOnly, stelzInCaption };
+}
+
+// Trust classification is VISION-FIRST. The whole point of Spot the Brand is detecting STELZ in
+// content where the brand is shown but NOT tagged or hashtagged — captions are metadata,
+// not the trust gate. Trust = the visual evidence is strong enough to stand on its own.
+//
+// "trusted" =
+//   - Pro-verified by gemini-2.5-pro (an independent stricter model confirmed it), OR
+//   - Primary subject in frame at medium+ size (the product IS the photo), OR
+//   - Clear product line (not logo_only) at medium+ size in frame.
+// "review"  = vision evidence is weak: logo-only, small/background, or not primary.
+//             Caption mention is shown as a hint but does NOT promote into trusted.
+function trustLevel(d) {
+  if (d.is_false_positive) return "fp";
+  // Moderator's "plausible" verdict is its own tier: real hit, soft evidence,
+  // not used in training. Renders with a distinct gold badge.
+  if (d.moderation_label === "plausible") return "plausible";
+  // Pro-verified positives are the gold standard
+  if (d.verified && d.model && d.model.includes("pro")) return "trusted";
+  // Strong visual signals
+  if (d.is_primary_subject && ["medium", "large", "dominant"].includes(d.size_in_frame || "")) return "trusted";
+  if (["hard_lemonade", "hard_seltzer", "hard_iced_tea", "mixed_classics"].includes(d.product_line || "")
+      && ["medium", "large", "dominant"].includes(d.size_in_frame || "")) return "trusted";
+  return "review";
+}
+
+function badge(cls, label) {
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+function confBar(c) {
+  const pct = Math.round((c || 0) * 100);
+  const cls = c >= 0.85 ? "high" : c >= 0.7 ? "" : "low";
+  return `<div>${pct}%</div><div class="conf-bar"><div class="${cls}" style="width:${pct}%"></div></div>`;
+}
+
+function renderFilters(facets) {
+  // Map HTML id → facets key (the latter is camelCase, the former is kebab).
+  // The auto-clear logic ("all checked => no filter") needs this lookup to
+  // know how many distinct values exist for the facet. The previous
+  // implementation derived the key by stripping "filter-", which left
+  // "product-line" — undefined in facets, so the auto-clear threw silently
+  // for that specific filter only.
+  const FACET_KEY = {
+    "filter-product-line": "productLine",
+    "filter-size": "size",
+    "filter-category": "category",
+    "filter-platform": "platform",
+    "filter-tier": "tier",
+    "filter-sentiment": "sentiment",
+  };
+  const renderCheckList = (id, items, set) => {
+    const el = document.getElementById(id);
+    el.innerHTML = "";
+    for (const [val, count] of items) {
+      const checked = set.size === 0 || set.has(val);
+      const label = document.createElement("label");
+      label.innerHTML = `<input type="checkbox" data-val="${val}" ${checked ? "checked" : ""}> ${val || "(empty)"} <span class="count">${count}</span>`;
+      label.querySelector("input").addEventListener("change", (e) => {
+        if (e.target.checked) set.add(val); else set.delete(val);
+        const facetKey = FACET_KEY[id];
+        if (facetKey && facets[facetKey] && set.size === facets[facetKey].length) set.clear();
+        applyFilters();
+      });
+      el.appendChild(label);
+    }
+  };
+  renderCheckList("filter-product-line", facets.productLine, filters.productLines);
+  renderCheckList("filter-size", facets.size, filters.sizes);
+  renderCheckList("filter-category", facets.category, filters.categories);
+  renderCheckList("filter-platform", facets.platform, filters.platforms);
+  renderCheckList("filter-tier", facets.tier, filters.tiers);
+  renderCheckList("filter-sentiment", facets.sentiment, filters.sentiments);
+}
+
+function applyFilters() {
+  const minConf = filters.minConfidence;
+  // Count trust levels for tab counts (after FP / brand exclusion only).
+  let trustedCount = 0, reviewCount = 0;
+  for (const d of allDetections) {
+    if (!filters.showFP && d.is_false_positive) continue;
+    if (filters.hideBrand && BRAND_OWNED_HANDLES.has((d.creator_handle || "").toLowerCase())) continue;
+    if (trustLevel(d) === "trusted") trustedCount++; else reviewCount++;
+  }
+  document.getElementById("trust-count-trusted").textContent = trustedCount;
+  document.getElementById("trust-count-review").textContent = reviewCount;
+  document.getElementById("trust-count-all").textContent = trustedCount + reviewCount;
+  document.getElementById("trust-banner").classList.toggle("show", filters.trust === "review");
+  updatePeriodCounts();
+  updateContentTypeCounts();
+  const filtered = allDetections.filter(d => {
+    if (!filters.showFP && d.is_false_positive) return false;
+    if (filters.hideBrand && BRAND_OWNED_HANDLES.has((d.creator_handle || "").toLowerCase())) return false;
+    if (filters.trust !== "all") {
+      const t = trustLevel(d);
+      if (filters.trust === "trusted" && t !== "trusted") return false;
+      if (filters.trust === "review"  && t !== "review")  return false;
+    }
+    if (filters.productLines.size > 0 && !filters.productLines.has(d.product_line)) return false;
+    if (filters.sizes.size > 0 && !filters.sizes.has(d.size_in_frame || "(empty)")) return false;
+    if (filters.categories.size > 0 && !filters.categories.has(d.creator_category || "(empty)")) return false;
+    if (filters.platforms.size > 0 && !filters.platforms.has(d.platform)) return false;
+    if (filters.contentType !== "all" && (d.content_type || "") !== filters.contentType) return false;
+    if (filters.sentiments.size > 0 && !filters.sentiments.has(d.sentiment || "(empty)")) return false;
+    if ((d.confidence || 0) < minConf) return false;
+    if (filters.minRelevance > 0 && (d.relevance_score == null || d.relevance_score < filters.minRelevance)) return false;
+    if (filters.tiers.size > 0 && !filters.tiers.has(d.creator_tier || "(empty)")) return false;
+    if (filters.dateFrom || filters.dateTo) {
+      const dateStr = d.posted_at || d.detected_at;
+      if (!dateStr) return false;
+      const t = new Date(dateStr).getTime();
+      if (filters.dateFrom && t < filters.dateFrom) return false;
+      if (filters.dateTo && t > filters.dateTo) return false;
+    }
+    if (filters.onlyPrimary && !d.is_primary_subject) return false;
+    if (filters.onlyClear) {
+      if (!["hard_lemonade", "hard_seltzer", "hard_iced_tea", "mixed_classics", "zero_zero"].includes(d.product_line)) return false;
+      if (d.size_in_frame === "small" && !d.is_primary_subject) return false;
+    }
+    if (filters.signalBrand || filters.signalHashtag || filters.signalMention || filters.signalVisual) {
+      const s = classifySignals(d);
+      let pass = false;
+      if (filters.signalBrand && s.isBrand) pass = true;
+      if (filters.signalHashtag && s.hasHashtag) pass = true;
+      if (filters.signalMention && s.hasMention) pass = true;
+      if (filters.signalVisual && s.visualOnly) pass = true;
+      if (!pass) return false;
+    }
+    if (filters.search) {
+      const s = filters.search.toLowerCase();
+      const hashtagsStr = (d.post_hashtags || []).join(" ");
+      const hay = `${d.creator_handle} ${d.creator_name || ""} ${d.context || ""} ${d.post_caption || ""} ${hashtagsStr}`.toLowerCase();
+      if (!hay.includes(s)) return false;
+    }
+    return true;
+  });
+  renderTable(filtered);
+}
+
+// Compute period boundaries in local time so "Vandaag" matches user's clock.
+function periodBoundaries(period) {
+  const now = new Date();
+  const startToday = new Date(now); startToday.setHours(0,0,0,0);
+  const endToday = new Date(startToday.getTime() + 86400000);
+  const startYesterday = new Date(startToday.getTime() - 86400000);
+  const dayOfWeek = (now.getDay() + 6) % 7;
+  const startWeek = new Date(startToday); startWeek.setDate(startToday.getDate() - dayOfWeek);
+  const startMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startLast30 = new Date(now.getTime() - 30 * 86400000);
+  switch (period) {
+    case "today":     return [startToday.getTime(), endToday.getTime()];
+    case "yesterday": return [startYesterday.getTime(), startToday.getTime()];
+    case "week":      return [startWeek.getTime(), endToday.getTime()];
+    case "month":     return [startMonth.getTime(), endToday.getTime()];
+    case "last30":    return [startLast30.getTime(), endToday.getTime()];
+    default:          return [null, null];
+  }
+}
+
+let activePeriod = "all";
+
+function updatePeriodCounts() {
+  const periods = ["today", "yesterday", "week", "month", "last30", "all"];
+  for (const p of periods) {
+    const [from, to] = periodBoundaries(p);
+    let count;
+    if (p === "all") {
+      count = allDetections.filter(d => !d.is_false_positive && (!filters.hideBrand || !BRAND_OWNED_HANDLES.has((d.creator_handle||"").toLowerCase()))).length;
+    } else {
+      count = allDetections.filter(d => {
+        if (d.is_false_positive) return false;
+        if (filters.hideBrand && BRAND_OWNED_HANDLES.has((d.creator_handle||"").toLowerCase())) return false;
+        const t = new Date(d.posted_at || d.detected_at || 0).getTime();
+        return t >= from && t < to;
+      }).length;
+    }
+    document.getElementById("period-count-" + p).textContent = count;
+  }
+}
+
+function applyPeriod(period) {
+  activePeriod = period;
+  document.querySelectorAll("#period-bar .period-btn").forEach(b => b.classList.toggle("active", b.dataset.period === period));
+  if (period === "all") {
+    filters.dateFrom = null;
+    filters.dateTo = null;
+  } else {
+    const [from, to] = periodBoundaries(period);
+    filters.dateFrom = from;
+    filters.dateTo = to;
+  }
+  applyFilters();
+}
+
+function applyContentType(ctype) {
+  filters.contentType = ctype;
+  document.querySelectorAll("#ctype-bar .period-btn").forEach(b => b.classList.toggle("active", b.dataset.ctype === ctype));
+  const banner = document.getElementById("story-banner");
+  if (banner) banner.style.display = (ctype === "story") ? "block" : "none";
+  if (ctype === "story") updateStoryMeta();
+  applyFilters();
+}
+
+function updateStoryMeta() {
+  const meta = document.getElementById("story-meta");
+  if (!meta) return;
+  const stories = allDetections.filter(d => (d.content_type || "") === "story" && !d.is_false_positive);
+  const total = stories.length;
+  const hits = stories.filter(d => d.detected && (d.confidence || 0) >= 0.5).length;
+  // Stories captured within last 24h are "still live" (creator's audience can still see them)
+  // anything older = we caught it before it expired
+  const now = Date.now();
+  const ONE_DAY = 24 * 3600 * 1000;
+  const stillLive = stories.filter(d => {
+    const t = d.post_posted_at ? new Date(d.post_posted_at).getTime() : (d.scraped_at ? new Date(d.scraped_at).getTime() : 0);
+    return t && (now - t) < ONE_DAY;
+  }).length;
+  const captured = total - stillLive;
+  meta.innerHTML = `${total} stories tracked · <b style="color: var(--accent);">${hits}</b> STELZ hits · ${stillLive} still live · <span style="color: var(--good);">${captured} captured before expiry</span>`;
+}
+
+function updateContentTypeCounts() {
+  const types = ["all", "post", "reel", "tiktok", "story"];
+  for (const t of types) {
+    let count;
+    if (t === "all") {
+      count = allDetections.filter(d => !d.is_false_positive && (!filters.hideBrand || !BRAND_OWNED_HANDLES.has((d.creator_handle||"").toLowerCase()))).length;
+    } else {
+      count = allDetections.filter(d => {
+        if (d.is_false_positive) return false;
+        if (filters.hideBrand && BRAND_OWNED_HANDLES.has((d.creator_handle||"").toLowerCase())) return false;
+        return (d.content_type || "") === t;
+      }).length;
+    }
+    const el = document.getElementById("ctype-count-" + t);
+    if (el) el.textContent = count;
+  }
+}
+
+// Format a date as a friendly Dutch day label
+function dayLabel(d) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const yesterday = new Date(today.getTime() - 86400000);
+  const dDate = new Date(d); dDate.setHours(0,0,0,0);
+  if (dDate.getTime() === today.getTime())     return "Vandaag";
+  if (dDate.getTime() === yesterday.getTime()) return "Gisteren";
+  const days = ["zo","ma","di","wo","do","vr","za"];
+  const months = ["jan","feb","mrt","apr","mei","jun","jul","aug","sep","okt","nov","dec"];
+  return `${days[dDate.getDay()]} ${dDate.getDate()} ${months[dDate.getMonth()]}`;
+}
+
+function renderTable(rows) {
+  // Dedupe in two passes:
+  //  1. By post_url (or post_id) — every Instagram/TikTok post becomes ONE row,
+  //     even when the post is a carousel with multiple detected images. Keep
+  //     the detection with the highest trust (primary > medium+ > rest) and
+  //     highest confidence as the row representative.
+  //  2. By image_hash across DIFFERENT posts — catches the case where the
+  //     SAME image (same sha256) was reposted by the same creator under a
+  //     new shortcode. Same image, same creator → still one row.
+  // Result: a single brand moment never shows up twice.
+  function trustRank(d) {
+    if (d.is_primary_subject && ["medium","large","dominant"].includes(d.size_in_frame||"")) return 3;
+    if (["hard_lemonade","hard_seltzer","hard_iced_tea","mixed_classics"].includes(d.product_line||"")
+        && ["medium","large","dominant"].includes(d.size_in_frame||"")) return 2;
+    return 1;
+  }
+  function better(a, b) {
+    if (!a) return b;
+    const ra = trustRank(a), rb = trustRank(b);
+    if (rb !== ra) return rb > ra ? b : a;
+    return (b.confidence || 0) > (a.confidence || 0) ? b : a;
+  }
+
+  // Pass 1: collapse multi-image posts to one row per post_url.
+  const byPost = new Map();
+  for (const d of rows) {
+    const key = d.post_url || d.post_id || d.detection_id;
+    byPost.set(key, better(byPost.get(key), d));
+  }
+  // Pass 2: collapse same-image-different-post-by-same-creator.
+  const byImageAndCreator = new Map();
+  const remaining = [];
+  for (const d of byPost.values()) {
+    const visualKey = d.image_hash || d.stored_path;
+    if (!visualKey) { remaining.push(d); continue; }
+    const key = `${(d.creator_handle||"").toLowerCase()}|${visualKey}`;
+    byImageAndCreator.set(key, better(byImageAndCreator.get(key), d));
+  }
+  rows = [...remaining, ...byImageAndCreator.values()];
+  document.getElementById("result-count").textContent = `${rows.length} of ${allDetections.length} detections`;
+  if (rows.length === 0) {
+    document.getElementById("table-container").innerHTML = `<div class="empty">No detections match these filters</div>`;
+    return;
+  }
+  rows.sort((a, b) => {
+    const ta = new Date(a.posted_at || a.detected_at || 0).getTime();
+    const tb = new Date(b.posted_at || b.detected_at || 0).getTime();
+    if (tb !== ta) return tb - ta;
+    return (b.confidence || 0) - (a.confidence || 0);
+  });
+  // Build rows with day-divider rows interleaved between days
+  const visibleRows = rows.slice(0, 200);
+  // Pre-compute day buckets so we know the count per day for the divider label
+  const dayKey = (d) => new Date(d.posted_at || d.detected_at || 0).toDateString();
+  const counts = {};
+  for (const d of visibleRows) {
+    const k = dayKey(d);
+    counts[k] = (counts[k] || 0) + 1;
+  }
+  let lastDay = null;
+  const html = `
+    <table>
+      <thead>
+        <tr>
+          <th>Image</th>
+          <th>Creator</th>
+          <th>Product</th>
+          <th>Size</th>
+          <th>Conf.</th>
+          <th>Context</th>
+          <th>Post</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${visibleRows.map(d => {
+          const k = dayKey(d);
+          let divider = "";
+          if (k !== lastDay) {
+            const dateObj = new Date(d.posted_at || d.detected_at || 0);
+            divider = `<tr class="day-divider"><td colspan="7"><b>${dayLabel(dateObj)}</b>${dateObj.toISOString().slice(0,10)} · ${counts[k]} hit${counts[k]===1?"":"s"}</td></tr>`;
+            lastDay = k;
+          }
+          const sig = classifySignals(d);
+          const sigBadges = [
+            sig.isBrand ? '<span class="source-tag brand">brand-owned</span>' : '',
+            sig.hasHashtag ? '<span class="source-tag hashtag">#stelz</span>' : '',
+            sig.hasMention ? '<span class="source-tag mention">@drinkstelz</span>' : '',
+            sig.visualOnly ? '<span class="source-tag visual">visual only</span>' : '',
+          ].filter(Boolean).join("");
+          const isNew = (() => {
+            const t = new Date(d.posted_at || d.detected_at || 0).getTime();
+            return t > 0 && (Date.now() - t) < 86400000;
+          })();
+          const t = trustLevel(d);
+          const userVerified = d.verified && (d.verified_by === "moderator_review");
+          // Defensive: legacy rows confirmed by older dashboard versions never
+          // got moderation_label set. Treat verified + not-FP as confirmed.
+          const userConfirmed = userVerified && (d.moderation_label === "confirmed"
+                                                  || (!d.moderation_label && !d.is_false_positive));
+          const userPlausible = userVerified && d.moderation_label === "plausible";
+          const userRejected  = userVerified && (d.moderation_label === "rejected" || d.is_false_positive);
+          const isFresh = freshIds.has(d.detection_id);
+          return divider + `
+          <tr class="${d.is_false_positive && !userRejected ? "fp-row" : ""} ${isNew ? "is-new" : ""} ${userConfirmed ? "user-confirmed" : ""} ${userPlausible ? "user-plausible" : ""} ${userRejected ? "user-rejected" : ""} ${isFresh ? "fresh-arrival" : ""}" data-detection-id="${d.detection_id}">
+            <td>${thumbWithBox(d)}</td>
+            <td>
+              <div class="handle">@${d.creator_handle}${isFresh ? '<span class="fresh-badge">NEW</span>' : ''}</div>
+              <div style="margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap;">
+                ${badge("cat-" + (d.creator_category || "other"), d.creator_category || "other")}
+                ${d.creator_tier ? badge("tier-" + d.creator_tier, d.creator_tier.replace("_", " ")) : ""}
+              </div>
+              ${d.creator_name ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${d.creator_name}</div>` : ""}
+              ${d.relevance_score !== null && d.relevance_score !== undefined ? `<div class="score-pill s${Math.round(d.relevance_score)}">AI ${d.relevance_score}/10</div>` : ""}
+              ${d.follower_count ? `<div style="color: var(--muted); font-size: 10px; margin-top: 2px;">${d.follower_count >= 1000 ? (d.follower_count/1000).toFixed(0)+"k" : d.follower_count} followers</div>` : ""}
+              ${d.content_type === "story" ? (() => {
+                const refTime = d.posted_at ? new Date(d.posted_at).getTime() : (d.scraped_at ? new Date(d.scraped_at).getTime() : 0);
+                if (!refTime) return '<div style="margin-top: 4px;"><span class="source-tag visual" style="border-color: var(--accent); color: var(--accent);" title="Story · ephemeral content">story</span></div>';
+                const ageHours = (Date.now() - refTime) / 3600000;
+                if (ageHours < 24) {
+                  return `<div style="margin-top: 4px;"><span class="source-tag" style="border-color: var(--good); color: var(--good);" title="Posted within last 24h — story still visible to creator's audience">story · still live · ${Math.round(ageHours)}h ago</span></div>`;
+                }
+                return `<div style="margin-top: 4px;"><span class="source-tag" style="border-color: var(--accent); color: var(--accent); background: rgba(255,19,0,0.06);" title="Story expired on Instagram (24h limit). We captured it before it disappeared.">story · captured before expiry</span></div>`;
+              })() : ""}
+              ${sigBadges ? `<div style="margin-top: 4px;">${sigBadges}</div>` : ""}
+              ${t === "review" ? `<div><span class="trust-flag" title="No caption mention + not primary subject — verify manually">needs review</span></div>` : ""}
+              ${t === "plausible" ? `<div><span class="trust-flag plausible" title="Moderator labelled this as plausible — likely STELZ but not 100% visible. Excluded from training.">~ aannemelijk</span></div>` : ""}
+              ${d.sentiment ? `<div><span class="sentiment ${d.sentiment}" title="${(d.sentiment_rationale||'').replace(/"/g,'&quot;')}">${d.sentiment}</span></div>` : ""}
+            </td>
+            <td>${badge(d.product_line || "none", d.product_line || "none")}${d.is_primary_subject ? `<div style="font-size: 11px; color: var(--good); margin-top: 4px;">primary</div>` : ""}</td>
+            <td><span style="color: var(--muted); font-size: 12px;">${d.size_in_frame || "—"}</span></td>
+            <td>${confBar(d.confidence)}</td>
+            <td>
+              <div class="ctx">${d.context || ""}</div>
+              ${d.post_caption ? `<div class="caption">${(d.post_caption || "").replace(/</g, "&lt;").replace(/\n/g, " ")}</div>` : ""}
+              ${(d.post_hashtags && d.post_hashtags.length) ? `<div class="hashtags">${d.post_hashtags.slice(0, 12).map(h => `<span class="hashtag-chip${(h||"").toLowerCase().includes("stelz")?" stelz":""}">#${h}</span>`).join("")}</div>` : ""}
+            </td>
+            <td>
+              <a href="${d.post_url}" target="_blank" rel="noopener">↗ open</a>
+              ${d.posted_at ? `<div class="posted-date">${new Date(d.posted_at).toISOString().slice(0,10)}</div>` : d.detected_at ? `<div class="posted-date" title="Detected at (original post date unknown)">found ${new Date(d.detected_at).toISOString().slice(0,10)}</div>` : ""}
+              <div class="review-actions">
+                ${userVerified
+                  ? `<span class="label-mini">${userConfirmed ? "you confirmed" : userPlausible ? "you marked plausible" : userRejected ? "you rejected" : ""}</span>
+                     <button class="${userConfirmed ? "confirm done" : "confirm"}" data-action="confirm" data-detection-id="${d.detection_id}" title="Mark STELZ visible">✓</button>
+                     <button class="${userRejected  ? "reject done"  : "reject"}"  data-action="reject"  data-detection-id="${d.detection_id}" title="Mark as false positive">✗</button>`
+                  : `<button class="confirm" data-action="confirm" data-detection-id="${d.detection_id}" title="Confirm: STELZ is visible">✓ Confirm</button>
+                     <button class="reject"  data-action="reject"  data-detection-id="${d.detection_id}" title="Reject: no STELZ in image">✗ Geen STELZ</button>`
+                }
+              </div>
+            </td>
+          </tr>
+        `;}).join("")}
+      </tbody>
+    </table>
+    ${rows.length > 200 ? `<div style="padding: 20px; color: var(--muted); text-align: center;">Showing first 200 of ${rows.length}. Refine filters to narrow down.</div>` : ""}
+  `;
+  document.getElementById("table-container").innerHTML = html;
+}
+
+function computeFacets(detections) {
+  const counter = (key) => {
+    const m = new Map();
+    for (const d of detections) {
+      if (!filters.showFP && d.is_false_positive) continue;
+      const v = d[key] || "(empty)";
+      m.set(v, (m.get(v) || 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  };
+  return {
+    productLine: counter("product_line"),
+    size: counter("size_in_frame"),
+    category: counter("creator_category"),
+    platform: counter("platform"),
+    tier: counter("creator_tier"),
+    sentiment: counter("sentiment"),
+  };
+}
+
+function startOfDay(d) { d = new Date(d); d.setHours(0,0,0,0); return d; }
+function startOfWeek(d) { d = new Date(d); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); d.setHours(0,0,0,0); return d; }
+function startOfMonth(d) { d = new Date(d); d.setDate(1); d.setHours(0,0,0,0); return d; }
+
+let currentBucket = "day";
+let activeTimeTile = null;
+
+function renderTimeOverview() {
+  const now = new Date();
+  const today = startOfDay(now).getTime();
+  const yesterday = today - 86400000;
+  const weekStart = startOfWeek(now).getTime();
+  const prevWeekStart = weekStart - 7 * 86400000;
+  const monthStart = startOfMonth(now).getTime();
+  const prevMonthStart = startOfMonth(new Date(now.getFullYear(), now.getMonth() - 1, 1)).getTime();
+
+  const valid = allDetections.filter(d => {
+    if (d.is_false_positive) return false;
+    if (filters.hideBrand && BRAND_OWNED_HANDLES.has((d.creator_handle||"").toLowerCase())) return false;
+    if (filters.trust !== "all") {
+      const t = trustLevel(d);
+      if (filters.trust === "trusted" && t !== "trusted") return false;
+      if (filters.trust === "review"  && t !== "review")  return false;
+    }
+    return true;
+  });
+
+  const inRange = (d, from, to) => {
+    const dateStr = d.posted_at || d.detected_at;
+    if (!dateStr) return false;
+    const t = new Date(dateStr).getTime();
+    return t >= from && t < to;
+  };
+
+  const tDay = valid.filter(d => inRange(d, today, today + 86400000)).length;
+  const tDayPrev = valid.filter(d => inRange(d, yesterday, today)).length;
+  const tWeek = valid.filter(d => inRange(d, weekStart, weekStart + 7 * 86400000)).length;
+  const tWeekPrev = valid.filter(d => inRange(d, prevWeekStart, weekStart)).length;
+  const tMonth = valid.filter(d => inRange(d, monthStart, now.getTime() + 86400000)).length;
+  const tMonthPrev = valid.filter(d => inRange(d, prevMonthStart, monthStart)).length;
+
+  const setTile = (id, val, prev) => {
+    document.getElementById(id + "-val").textContent = val;
+    const delta = val - prev;
+    const el = document.getElementById(id + "-delta");
+    if (prev === 0 && val === 0) { el.textContent = ""; el.className = "delta"; return; }
+    const pct = prev > 0 ? Math.round((delta / prev) * 100) : null;
+    el.textContent = (delta >= 0 ? "+" : "") + delta + (pct !== null ? ` (${pct >= 0 ? "+" : ""}${pct}%)` : "") + " vs prev";
+    el.className = "delta " + (delta > 0 ? "up" : delta < 0 ? "down" : "");
+  };
+  setTile("tile-day", tDay, tDayPrev);
+  setTile("tile-week", tWeek, tWeekPrev);
+  setTile("tile-month", tMonth, tMonthPrev);
+
+  renderTrendChart();
+}
+
+function renderTrendChart() {
+  const svg = document.getElementById("trend-svg");
+  const title = document.getElementById("chart-title");
+  const valid = allDetections.filter(d => {
+    if (d.is_false_positive) return false;
+    if (!d.posted_at) return false;
+    if (filters.hideBrand && BRAND_OWNED_HANDLES.has((d.creator_handle||"").toLowerCase())) return false;
+    if (filters.trust !== "all") {
+      const t = trustLevel(d);
+      if (filters.trust === "trusted" && t !== "trusted") return false;
+      if (filters.trust === "review"  && t !== "review")  return false;
+    }
+    return true;
+  });
+
+  let bucketStart, bucketSize, count, label;
+  const now = Date.now();
+  if (currentBucket === "day") { bucketSize = 86400000; count = 30; label = "Hits per day, last 30 days"; }
+  else if (currentBucket === "week") { bucketSize = 7 * 86400000; count = 12; label = "Hits per week, last 12 weeks"; }
+  else { bucketSize = 30 * 86400000; count = 12; label = "Hits per month, last 12 months"; }
+  title.textContent = label;
+
+  const buckets = new Array(count).fill(0);
+  const startTime = now - count * bucketSize;
+  for (const d of valid) {
+    const t = new Date(d.posted_at).getTime();
+    if (t < startTime || t > now) continue;
+    const i = Math.floor((t - startTime) / bucketSize);
+    if (i >= 0 && i < count) buckets[i]++;
+  }
+  const max = Math.max(1, ...buckets);
+  const w = 600 / count;
+  const bars = buckets.map((c, i) => {
+    const h = (c / max) * 56;
+    return `<rect class="bar" x="${i * w + 1}" y="${60 - h - 2}" width="${w - 2}" height="${h}"><title>${c} hits</title></rect>`;
+  }).join("");
+  svg.innerHTML = bars;
+}
+
+function setTimeFilter(period) {
+  const now = new Date();
+  let from, to;
+  if (period === "day") { from = startOfDay(now).getTime(); to = from + 86400000; }
+  else if (period === "week") { from = startOfWeek(now).getTime(); to = from + 7 * 86400000; }
+  else if (period === "month") { from = startOfMonth(now).getTime(); to = startOfMonth(new Date(now.getFullYear(), now.getMonth() + 1, 1)).getTime(); }
+  filters.dateFrom = from;
+  filters.dateTo = to;
+  document.getElementById("filter-date-from").value = new Date(from).toISOString().slice(0,10);
+  document.getElementById("filter-date-to").value = new Date(to - 86400000).toISOString().slice(0,10);
+  document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".time-tile").forEach(t => t.classList.remove("active"));
+  if (activeTimeTile === period) {
+    filters.dateFrom = null;
+    filters.dateTo = null;
+    document.getElementById("filter-date-from").value = "";
+    document.getElementById("filter-date-to").value = "";
+    activeTimeTile = null;
+  } else {
+    document.getElementById("tile-" + period).classList.add("active");
+    activeTimeTile = period;
+  }
+  applyFilters();
+}
+
+function formatAgo(iso) {
+  if (!iso) return "—";
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60) return Math.round(diff) + "s ago";
+  if (diff < 3600) return Math.round(diff/60) + "m ago";
+  if (diff < 86400) return Math.round(diff/3600) + "h ago";
+  return Math.round(diff/86400) + "d ago";
+}
+
+async function loadScanHistory() {
+  const { data } = await sb.from("v_scan_history").select("*").limit(15);
+  if (!data || !data.length) return;
+  const latest = data[0];
+  document.getElementById("last-scan-label").textContent =
+    latest.status === "running" ? `Scan running…` : `Last scan ${formatAgo(latest.completed_at || latest.started_at)} · ${latest.results_count ?? 0} new`;
+  const list = document.getElementById("scan-history-list");
+  list.innerHTML = data.map(r => `
+    <div class="scan-row">
+      <div class="left">
+        <span class="type">${(r.source_type || "").replace(/_/g, " ")}</span>
+        <span class="meta">${formatAgo(r.started_at)} · ${r.duration_seconds ? r.duration_seconds + "s" : ""}</span>
+      </div>
+      <div class="right ${r.status}">${r.status === "completed" ? (r.results_count ?? 0) + " items" : r.status}</div>
+    </div>
+  `).join("");
+}
+
+let allCreators = [];
+let creatorSearch = "";
+
+async function loadCreators() {
+  // The v_creator_stats view does a wide join over detections+content_items
+  // which times out on Supabase's free tier when we have thousands of rows.
+  // Instead: load the flat creators table (fast, no joins) and aggregate the
+  // detection counts client-side from allDetections (already in memory).
+  const { data, error } = await sb
+    .from("creators")
+    .select("id, handle, platform, category, tier, follower_count, status, first_seen_at, last_scraped_at")
+    .limit(5000);
+  if (error) {
+    document.getElementById("creators-container").innerHTML =
+      `<div class="empty">Error loading creators: ${error.message}</div>`;
+    return;
+  }
+  if (!data || !data.length) {
+    document.getElementById("creators-container").innerHTML =
+      `<div class="empty">No creators yet</div>`;
+    return;
+  }
+  // Build creator -> aggregate stats map from allDetections.
+  const statsByHandle = new Map();
+  for (const d of allDetections) {
+    if (d.is_false_positive) continue;
+    const h = (d.creator_handle || "").toLowerCase();
+    if (!h) continue;
+    let s = statsByHandle.get(h);
+    if (!s) {
+      s = { handle: h, posts: new Set(), total: 0, clear: 0, latestPostedAt: null };
+      statsByHandle.set(h, s);
+    }
+    if (d.post_id) s.posts.add(d.post_id);
+    s.total++;
+    const isClear =
+      ["hard_lemonade","hard_seltzer","hard_iced_tea","mixed_classics"].includes(d.product_line) &&
+      (d.is_primary_subject || ["medium","large","dominant"].includes(d.size_in_frame || ""));
+    if (isClear) s.clear++;
+    const pt = new Date(d.posted_at || d.detected_at || 0).getTime();
+    if (!s.latestPostedAt || pt > s.latestPostedAt) s.latestPostedAt = pt;
+  }
+  allCreators = data.map(c => {
+    const s = statsByHandle.get((c.handle || "").toLowerCase());
+    return {
+      creator_id: c.id,
+      handle: c.handle,
+      platform: c.platform,
+      category: c.category,
+      tier: c.tier,
+      follower_count: c.follower_count,
+      posts_scraped: s ? s.posts.size : 0,
+      total_detections: s ? s.total : 0,
+      clear_visibility_hits: s ? s.clear : 0,
+      latest_post_at: s && s.latestPostedAt ? new Date(s.latestPostedAt).toISOString() : null,
+      first_seen_at: c.first_seen_at,
+      status: c.status,
+    };
+  }).sort((a, b) => (b.total_detections || 0) - (a.total_detections || 0));
+  document.getElementById("creators-count").textContent = `(${allCreators.length})`;
+  renderCreators();
+}
+
+function renderCreators() {
+  const s = creatorSearch.toLowerCase();
+  const rows = allCreators.filter(c => !s || (
+    (c.handle || "").toLowerCase().includes(s) ||
+    (c.full_name || "").toLowerCase().includes(s) ||
+    (c.category || "").toLowerCase().includes(s)
+  ));
+  document.getElementById("creator-result-count").textContent = `${rows.length} of ${allCreators.length}`;
+  if (rows.length === 0) {
+    document.getElementById("creators-container").innerHTML = `<div class="empty">No creators match your search</div>`;
+    return;
+  }
+  const html = `
+    <table>
+      <thead><tr>
+        <th>Creator</th><th>Platform</th><th>Category</th><th>Tier</th><th>AI score</th>
+        <th>Followers</th><th>Posts scanned</th><th>Hits</th><th>Clear hits</th><th>Latest post</th><th>Actions</th>
+      </tr></thead>
+      <tbody>
+        ${rows.slice(0, 500).map(c => `
+          <tr>
+            <td class="creator-cell" data-handle="${c.handle}">
+              <div class="handle">@${c.handle}</div>
+              ${c.full_name ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${c.full_name}</div>` : ""}
+            </td>
+            <td><span class="badge">${c.platform || ""}</span></td>
+            <td>${c.category ? `<span class="badge cat-${c.category}">${c.category}</span>` : "—"}</td>
+            <td>${c.tier ? `<span class="badge tier-${c.tier}">${c.tier.replace("_", " ")}</span>` : "—"}</td>
+            <td>${c.relevance_score != null ? `<span class="score-pill s${Math.round(c.relevance_score)}">AI ${c.relevance_score}/10</span>` : "—"}</td>
+            <td style="color: var(--muted); font-size: 12px;">${c.follower_count != null ? (c.follower_count >= 1000 ? (c.follower_count/1000).toFixed(0)+"k" : c.follower_count) : "—"}</td>
+            <td style="font-variant-numeric: tabular-nums;">${c.posts_scraped || 0}</td>
+            <td style="font-variant-numeric: tabular-nums; color: ${c.total_detections > 0 ? "var(--good)" : "var(--muted)"};">${c.total_detections || 0}</td>
+            <td style="font-variant-numeric: tabular-nums; color: ${c.clear_visibility_hits > 0 ? "var(--good)" : "var(--muted)"};">${c.clear_visibility_hits || 0}</td>
+            <td class="last-scraped">${c.latest_post_at ? formatAgo(c.latest_post_at) : "—"}</td>
+            <td><button class="view-tab" style="padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px;" data-creator-jump="${c.handle}">View hits →</button></td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+    ${rows.length > 500 ? `<div style="padding: 20px; color: var(--muted); text-align: center;">Showing first 500 of ${rows.length}</div>` : ""}
+  `;
+  document.getElementById("creators-container").innerHTML = html;
+}
+
+function formatAgo2(iso) {
+  if (!iso) return "—";
+  const d = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (d < 60) return Math.round(d) + "s ago";
+  if (d < 3600) return Math.round(d/60) + "m ago";
+  if (d < 86400) return Math.round(d/3600) + "h ago";
+  return Math.round(d/86400) + "d ago";
+}
+
+async function loadInsights() {
+  // Pull in parallel: discovery_runs, creators, perplexity_findings,
+  // and use already-loaded allDetections + allCreators for diff computations.
+  const now = Date.now();
+  const d7  = new Date(now - 7  * 86400000).toISOString();
+  const d14 = new Date(now - 14 * 86400000).toISOString();
+
+  const [runsRes, newCreatorsRes, perplexityRes, terrTagsRes, terrMentionsRes] = await Promise.all([
+    sb.from("discovery_runs").select("*").order("started_at", { ascending: false }).limit(30),
+    sb.from("creators").select("handle, platform, category, tier, follower_count, first_seen_at, status").gte("first_seen_at", d7).order("first_seen_at", { ascending: false }).limit(200),
+    sb.from("discovery_queue").select("*").eq("source", "perplexity_scout").order("last_seen_at", { ascending: false }).limit(20).then(r => r, () => ({ data: [], error: null })),
+    sb.from("v_territory_hashtag_suggestions").select("*").limit(40).then(r => r, () => ({ data: [], error: null })),
+    sb.from("v_territory_mention_suggestions").select("*").limit(30).then(r => r, () => ({ data: [], error: null })),
+  ]);
+
+  // --- 1. Since last scrape ---
+  const runs = runsRes.data || [];
+  const scrapes = runs.filter(r => ["daily_scan", "hashtag_scrape", "profile_scrape", "auto_add"].includes(r.source_type));
+  const last = scrapes[0];
+  const prev = scrapes[1];
+  const sinceEl = document.getElementById("insight-since");
+  const sinceBody = document.getElementById("insight-since-body");
+  if (last) {
+    sinceEl.textContent = `${formatAgo2(last.completed_at || last.started_at)} · ${last.source_type.replace("_"," ")}`;
+    const newPosts = last.results_count || 0;
+    const prevPosts = prev?.results_count || 0;
+    const delta = newPosts - prevPosts;
+    const dCls = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
+    const ago = new Date(last.started_at).getTime();
+    const newDetect = allDetections.filter(d => new Date(d.detected_at).getTime() >= ago && !d.is_false_positive).length;
+    const newCreatorsCount = (newCreatorsRes.data || []).filter(c => new Date(c.first_seen_at).getTime() >= ago).length;
+    sinceBody.innerHTML = `
+      <div class="stat-row"><span class="label">Items scraped</span><span class="val">${newPosts}<span class="delta ${dCls}">${delta >= 0 ? "+" : ""}${delta} vs prev</span></span></div>
+      <div class="stat-row"><span class="label">New detections registered</span><span class="val">${newDetect}</span></div>
+      <div class="stat-row"><span class="label">New creators discovered</span><span class="val">${newCreatorsCount}</span></div>
+      <div class="stat-row"><span class="label">Run duration</span><span class="val">${last.completed_at && last.started_at ? Math.round((new Date(last.completed_at) - new Date(last.started_at))/1000) + "s" : "—"}</span></div>`;
+  } else {
+    sinceBody.innerHTML = `<div class="empty-mini">No scrape runs logged yet</div>`;
+  }
+
+  // --- 2. Week-over-week ---
+  const inWindow = (d, from, to) => {
+    const t = new Date(d.posted_at || d.detected_at).getTime();
+    return t >= from && t < to;
+  };
+  const t7  = now - 7  * 86400000;
+  const t14 = now - 14 * 86400000;
+  const valid = allDetections.filter(d => !d.is_false_positive);
+  const thisWk = valid.filter(d => inWindow(d, t7, now));
+  const prevWk = valid.filter(d => inWindow(d, t14, t7));
+  const thisCreators = new Set(thisWk.map(d => d.creator_handle)).size;
+  const prevCreators = new Set(prevWk.map(d => d.creator_handle)).size;
+  const dPosts = thisWk.length - prevWk.length;
+  const dCre   = thisCreators - prevCreators;
+  const pct = (a, b) => b > 0 ? Math.round((a/b - 1) * 100) : null;
+  const fmt = (delta, pctV) => `<span class="delta ${delta>0?"up":delta<0?"down":"flat"}">${delta>=0?"+":""}${delta}${pctV !== null ? ` (${pctV>=0?"+":""}${pctV}%)` : ""}</span>`;
+  document.getElementById("insight-weekly-body").innerHTML = `
+    <div class="stat-row"><span class="label">Detections this week</span><span class="val">${thisWk.length}${fmt(dPosts, pct(thisWk.length, prevWk.length))}</span></div>
+    <div class="stat-row"><span class="label">Unique creators</span><span class="val">${thisCreators}${fmt(dCre, pct(thisCreators, prevCreators))}</span></div>
+    <div class="stat-row"><span class="label">Posts last week</span><span class="val" style="color: var(--muted);">${prevWk.length}</span></div>
+    <div class="stat-row"><span class="label">Unique creators last week</span><span class="val" style="color: var(--muted);">${prevCreators}</span></div>`;
+
+  // --- 3. Coverage by category (where are creators we found) ---
+  const cats = {};
+  for (const c of allCreators) {
+    const k = c.category || "(unknown)";
+    cats[k] = (cats[k] || 0) + 1;
+  }
+  const sortedCats = Object.entries(cats).sort((a, b) => b[1] - a[1]);
+  const totalC = allCreators.length || 1;
+  document.getElementById("insight-categories-body").innerHTML = sortedCats.map(([k, n]) => {
+    const pct = Math.round(n / totalC * 100);
+    return `<div class="stat-row"><span class="label">${k}</span><span class="val">${n} <span style="color: var(--muted); font-weight: 400; font-size: 11px;">${pct}%</span></span></div>`;
+  }).join("") || `<div class="empty-mini">No creators</div>`;
+
+  // --- 4. Hashtags trending in our data, not yet tracked ---
+  const trackedRes = await sb.from("brand_hashtag_pools").select("hashtag");
+  const tracked = new Set((trackedRes.data || []).map(r => (r.hashtag || "").toLowerCase()));
+  const recentHashtags = {};
+  const t30 = now - 30 * 86400000;
+  for (const d of valid) {
+    if (new Date(d.posted_at || d.detected_at).getTime() < t30) continue;
+    for (const h of (d.post_hashtags || [])) {
+      const tag = (h || "").toLowerCase();
+      if (!tag || tag.length < 3 || tag.length > 40) continue;
+      if (tracked.has(tag)) continue;
+      // Skip common noise
+      if (/^(stelz|drinkstelz|fyp|foryou|viral|trending|reels?|tiktok|instagram|love|happy|life|amsterdam|nederland)$/i.test(tag)) continue;
+      recentHashtags[tag] = (recentHashtags[tag] || 0) + 1;
+    }
+  }
+  const topNew = Object.entries(recentHashtags).filter(([_, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 25);
+  document.getElementById("insight-hashtags-body").innerHTML = topNew.length
+    ? topNew.map(([t, n]) => `<span class="tag-pill suggest">#${t}<span class="count">${n}</span></span>`).join("")
+    : `<div class="empty-mini">No fresh hashtag suggestions from the last 30 days</div>`;
+
+  // --- 5. Newly discovered creators (last 7d) ---
+  const newCre = newCreatorsRes.data || [];
+  document.getElementById("insights-badge")?.replaceChildren();
+  document.getElementById("insights-badge").textContent = newCre.length ? `${newCre.length} new` : "";
+  document.getElementById("insight-newcreators-body").innerHTML = newCre.length
+    ? newCre.slice(0, 30).map(c => `
+        <div class="creator-mini">
+          <div style="flex: 1;">
+            <div class="handle">@${c.handle}</div>
+            <div class="meta">${c.platform || ""} · ${c.category || "uncategorized"} · ${c.tier || "no tier"} · ${c.follower_count ? (c.follower_count >= 1000 ? (c.follower_count/1000).toFixed(0)+"k" : c.follower_count) + " followers" : "—"} · added ${formatAgo2(c.first_seen_at)}</div>
+          </div>
+          <span class="badge ${c.status === "archived" ? "" : ""}">${c.status || ""}</span>
+        </div>`).join("")
+    : `<div class="empty-mini">No new creators in last 7 days</div>`;
+
+  // --- 5b. Territory: hashtags from STELZ-posters ---
+  const terrTags = terrTagsRes.data || [];
+  document.getElementById("insight-territory-hashtags-body").innerHTML = terrTags.length
+    ? terrTags.slice(0, 30).map(t => `
+        <span class="tag-pill suggest" style="margin: 4px 4px 4px 0; display: inline-flex; align-items: center; gap: 8px;">
+          #${t.tag}
+          <span class="count">${t.unique_creators} creators · ${t.total_uses}×</span>
+          <button class="ghost-btn" style="padding: 2px 8px; font-size: 10px; margin-left: 4px;" data-action="track-tag" data-tag="${t.tag}">+ Track</button>
+        </span>`).join("")
+    : `<div class="empty-mini">No territory suggestions yet. Confirm some STELZ detections first.</div>`;
+
+  // --- 5c. Territory: mentions from STELZ-posters ---
+  const terrMentions = terrMentionsRes.data || [];
+  document.getElementById("insight-territory-mentions-body").innerHTML = terrMentions.length
+    ? terrMentions.slice(0, 20).map(m => `
+        <div class="creator-mini">
+          <div style="flex: 1;">
+            <a href="https://www.instagram.com/${m.handle}" target="_blank" rel="noopener" class="handle" style="color: var(--text); text-decoration: none;">@${m.handle}</a>
+            <div class="meta">mentioned by ${m.mentioned_by_creators} STELZ-posters · ${m.mentions} total</div>
+          </div>
+          <button class="ghost-btn" data-action="queue-handle" data-handle="${m.handle}" style="padding: 4px 10px; font-size: 11px;">+ Queue</button>
+        </div>`).join("")
+    : `<div class="empty-mini">No mention suggestions yet.</div>`;
+
+  // --- 6. Perplexity findings — Perplexity scout writes its suggested
+  //         handles to discovery_queue with source='perplexity_scout'.
+  const pp = perplexityRes.data || [];
+  document.getElementById("insight-perplexity-body").innerHTML = pp.length
+    ? pp.slice(0, 12).map(f => `
+        <div class="perplexity-bullet">
+          <a href="https://www.${f.platform === "tiktok" ? "tiktok.com/@" : "instagram.com/"}${f.handle}" target="_blank" rel="noopener" style="color: var(--text); text-decoration: none; font-weight: 600;">@${f.handle}</a>
+          <span class="badge" style="margin-left: 8px;">${f.platform}</span>
+          <span class="badge" style="margin-left: 4px;">${f.status}</span>
+          <div class="meta">found ${formatAgo2(f.last_seen_at || f.first_seen_at)} · ${f.signal_count || 1} signal${f.signal_count > 1 ? "s" : ""}</div>
+        </div>`).join("")
+    : `<div class="empty-mini">Perplexity scout suggestions will appear here after the weekly run</div>`;
+}
+
+// ============================================================
+// SUBCULTURES
+// ============================================================
+let allSubcultures = [];
+let subcStatusFilter = "active";
+let cachedBrandId = null;
+
+// Auth-aware brand resolution with multi-tenant support.
+//
+// Resolution order:
+// 1. If URL has ?brand=<slug>, use it (requires brand_users access OR is_public_demo).
+// 2. Otherwise: signed-in users get their first linked brand.
+// 3. Anon fall back to STELZ public demo.
+//
+// RLS is the actual security boundary — the URL slug is UX, not auth.
+let cachedSession = null;
+let cachedBrandSlug = null;
+let cachedBrandOptions = null;       // brand_users rows for the switcher
+
+async function getBrandId() {
+  if (cachedBrandId) return cachedBrandId;
+  if (!cachedSession) {
+    const { data: { session } } = await sb.auth.getSession();
+    cachedSession = session;
+  }
+  const requestedSlug = new URL(location.href).searchParams.get("brand");
+
+  if (cachedSession?.user) {
+    const { data: links } = await sb.from("brand_users")
+      .select("brand_id, role, brand:brands(slug, name, is_public_demo)")
+      .eq("user_id", cachedSession.user.id)
+      .order("created_at", { ascending: true });
+    cachedBrandOptions = links || [];
+
+    if (requestedSlug) {
+      const match = cachedBrandOptions.find(l => l.brand?.slug === requestedSlug);
+      if (match) {
+        cachedBrandId = match.brand_id;
+        cachedBrandSlug = requestedSlug;
+        return cachedBrandId;
+      }
+      // User has no access to requested slug — silently fall back
+    }
+    if (cachedBrandOptions.length) {
+      cachedBrandId = cachedBrandOptions[0].brand_id;
+      cachedBrandSlug = cachedBrandOptions[0].brand?.slug;
+      return cachedBrandId;
+    }
+    if (!location.pathname.includes("onboarding")) {
+      location.href = "/onboarding.html";
+      return null;
+    }
+  }
+
+  // Anon: only load a brand if it's a public demo
+  if (requestedSlug) {
+    const { data } = await sb.from("brands")
+      .select("id, slug, is_public_demo")
+      .eq("slug", requestedSlug).maybeSingle();
+    if (data?.is_public_demo) {
+      cachedBrandId = data.id;
+      cachedBrandSlug = data.slug;
+      return cachedBrandId;
+    }
+  }
+  const { data } = await sb.from("brands").select("id, slug").eq("slug", "stelz").maybeSingle();
+  cachedBrandId = data?.id || null;
+  cachedBrandSlug = data?.slug || null;
+  return cachedBrandId;
+}
+
+async function loadSubcultures() {
+  const grid = document.getElementById("subc-grid");
+  const brandId = await getBrandId();
+  if (!brandId) {
+    grid.innerHTML = `<div class="empty">No brand context</div>`;
+    return;
+  }
+  const { data, error } = await sb
+    .from("v_subculture_stats")
+    .select("*")
+    .eq("brand_id", brandId);
+  if (error) {
+    grid.innerHTML = `<div class="empty">Error: ${error.message}. Run db/06_subcultures.sql + tools/stelz_brand_watch/30_seed_subcultures.py first.</div>`;
+    return;
+  }
+  allSubcultures = data || [];
+  document.getElementById("subc-count").textContent = `(${allSubcultures.filter(s => s.status === "active").length})`;
+  renderSubcultures();
+}
+
+function renderSubcultures() {
+  const grid = document.getElementById("subc-grid");
+  const filtered = allSubcultures.filter(s => s.status === subcStatusFilter);
+  if (!filtered.length) {
+    grid.innerHTML = `<div class="empty">No subcultures in this state. ${subcStatusFilter === "active" ? "Add one or seed via <code>python3 tools/stelz_brand_watch/30_seed_subcultures.py</code>" : ""}</div>`;
+    return;
+  }
+  filtered.sort((a, b) => (b.detections_last_7d || 0) - (a.detections_last_7d || 0));
+  grid.innerHTML = filtered.map(s => `
+    <div class="subc-card" style="${s.color ? `border-top: 3px solid ${s.color};` : ""}">
+      <div class="head">
+        <span class="emoji">${s.emoji || "🏷️"}</span>
+        <div>
+          <div class="name">${s.name}</div>
+          <div class="slug">${s.slug}</div>
+        </div>
+      </div>
+      <div class="desc">${s.description || ""}</div>
+      <div class="metrics">
+        <div class="metric"><div class="v">${s.creators_count || 0}</div><div class="l">Creators</div></div>
+        <div class="metric"><div class="v">${s.detections_last_7d || 0}</div><div class="l">7-day hits</div></div>
+        <div class="metric"><div class="v">${s.detections_total || 0}</div><div class="l">Total</div></div>
+      </div>
+      <div class="tags">
+        ${(s.signature_hashtags || []).slice(0, 6).map(t => `<span class="tag">#${t}</span>`).join("")}
+        ${(s.signature_hashtags || []).length > 6 ? `<span class="tag">+${s.signature_hashtags.length - 6}</span>` : ""}
+      </div>
+      ${s.last_expansion_at ? `<div class="last-exp">Last expansion ${formatAgo2(s.last_expansion_at)} · ${s.last_expansion_added || 0} added</div>` : ""}
+      <div class="actions">
+        <button class="ghost" data-action="subc-view" data-id="${s.id}">View creators</button>
+        <button class="ghost" data-action="subc-edit" data-id="${s.id}">Edit</button>
+        <button class="primary" data-action="subc-expand" data-id="${s.id}" data-slug="${s.slug}" data-name="${s.name}">↗ Expand</button>
+      </div>
+    </div>`).join("");
+}
+
+function openSubcModal(subc) {
+  const m = document.getElementById("subc-modal");
+  document.getElementById("subc-modal-title").textContent = subc ? `Edit: ${subc.name}` : "New subculture";
+  document.getElementById("subc-modal-id").value     = subc?.id || "";
+  document.getElementById("subc-modal-emoji").value  = subc?.emoji || "";
+  document.getElementById("subc-modal-name").value   = subc?.name || "";
+  document.getElementById("subc-modal-slug").value   = subc?.slug || "";
+  document.getElementById("subc-modal-desc").value   = subc?.description || "";
+  document.getElementById("subc-modal-hashtags").value = (subc?.signature_hashtags || []).join(", ");
+  document.getElementById("subc-modal-keywords").value = (subc?.signature_keywords || []).join(", ");
+  document.getElementById("subc-modal-status").value = subc?.status || "active";
+  m.classList.add("open");
+}
+
+async function saveSubc() {
+  const id   = document.getElementById("subc-modal-id").value || null;
+  const brandId = await getBrandId();
+  const split = v => v.split(",").map(s => s.trim().replace(/^#/, "")).filter(Boolean);
+  const row = {
+    brand_id: brandId,
+    emoji:       document.getElementById("subc-modal-emoji").value || null,
+    name:        document.getElementById("subc-modal-name").value,
+    slug:        document.getElementById("subc-modal-slug").value.toLowerCase().replace(/\s+/g, "_"),
+    description: document.getElementById("subc-modal-desc").value || null,
+    signature_hashtags: split(document.getElementById("subc-modal-hashtags").value),
+    signature_keywords: split(document.getElementById("subc-modal-keywords").value),
+    status:      document.getElementById("subc-modal-status").value,
+    updated_at:  new Date().toISOString(),
+  };
+  if (id) {
+    await sb.from("subcultures").update(row).eq("id", id);
+  } else {
+    await sb.from("subcultures").upsert(row, { onConflict: "brand_id,slug" });
+  }
+  document.getElementById("subc-modal").classList.remove("open");
+  loadSubcultures();
+}
+
+async function viewSubcCreators(subcId) {
+  // Find creators belonging to this subculture and jump to Creators tab filtered by them.
+  const { data } = await sb.from("creator_subcultures").select("creator_id").eq("subculture_id", subcId).limit(2000);
+  const idSet = new Set((data || []).map(r => r.creator_id));
+  const matchingHandles = new Set();
+  // We need handle, but allCreators uses creator_id; cross-ref
+  for (const c of allCreators) {
+    if (idSet.has(c.creator_id)) matchingHandles.add(c.handle);
+  }
+  // Switch to creators tab and pre-fill search with a list-OR via custom filter
+  document.querySelector('.view-tab[data-view="creators"]').click();
+  // Filter client-side by setting search to handles separated by | — but search is single-string;
+  // for now we just show the count in a toast and rely on filtering by tier/category.
+  alert(`${matchingHandles.size} creators in this subculture. Use the search box to find specific handles.`);
+}
+
+async function triggerExpansion(subc) {
+  const maxTags = parseInt(document.getElementById("expand-max-tags").value, 10);
+  const perTag  = parseInt(document.getElementById("expand-per-tag").value, 10);
+  const brandId = await getBrandId();
+  const btn = document.getElementById("expand-confirm");
+  btn.disabled = true;
+  btn.textContent = "Charging…";
+
+  const { data, error } = await sb.rpc("request_subculture_expansion", {
+    p_brand_id: brandId,
+    p_subculture_id: subc.id,
+    p_max_tags: maxTags,
+    p_per_tag: perTag,
+    p_requested_by: "dashboard",
+  });
+  btn.disabled = false;
+  btn.textContent = "Start expansion";
+
+  if (error) {
+    alert("Expansion failed: " + error.message);
+    return;
+  }
+  const r = Array.isArray(data) ? data[0] : data;
+  if (!r?.ok) {
+    alert(r?.error_msg || "Expansion failed");
+    return;
+  }
+  // Update balance immediately
+  document.getElementById("header-credits-num").textContent = (r.balance_after ?? 0).toLocaleString("nl-NL");
+  currentBalance = r.balance_after;
+  document.getElementById("expand-modal").classList.remove("open");
+  alert(`Expansion gestart voor "${subc.name}" (${maxTags * 20} credits afgeschreven).\n\nDe queue-processor pakt 'm op zodra die draait. Status zie je terug op de subculture card.`);
+  loadSubcultures();
+}
+
+// ============================================================
+// MANUAL SCAN
+// ============================================================
+const SCAN_COST = 25;
+let currentBalance = null;
+
+async function openScanModal() {
+  const errEl = document.getElementById("scan-error");
+  errEl.style.display = "none";
+  const confirmBtn = document.getElementById("scan-confirm");
+  confirmBtn.disabled = false;
+
+  // Concurrency guard: re-check server-side that no scan is already running.
+  const brandId = await getBrandId();
+  if (brandId) {
+    const { data: existing } = await sb.from("scan_requests")
+      .select("id, status, requested_at")
+      .eq("brand_id", brandId)
+      .in("status", ["pending", "running"])
+      .order("requested_at", { ascending: false })
+      .limit(1);
+    if (existing && existing.length) {
+      // Re-open the running scan's progress modal instead of starting another
+      document.getElementById("scan-modal").classList.remove("open");
+      setScanBtnRunning(true);
+      pollScanStatus(existing[0].id);
+      return;
+    }
+  }
+
+  const after = (currentBalance || 0) - SCAN_COST;
+  const afterEl = document.getElementById("scan-balance-after");
+  afterEl.textContent = after.toLocaleString("nl-NL");
+  afterEl.style.color = after < 0 ? "var(--accent)" : "var(--text)";
+  confirmBtn.disabled = after < 0;
+  if (after < 0) {
+    errEl.textContent = `Te weinig credits: je hebt ${currentBalance}, hebt ${SCAN_COST} nodig.`;
+    errEl.style.display = "block";
+  }
+  document.getElementById("scan-modal").classList.add("open");
+}
+
+async function confirmScan() {
+  const btn = document.getElementById("scan-confirm");
+  const errEl = document.getElementById("scan-error");
+  btn.disabled = true;
+  btn.textContent = "Requesting…";
+  const brandId = await getBrandId();
+  const { data, error } = await sb.rpc("request_manual_scan", {
+    p_brand_id: brandId,
+    p_cost: SCAN_COST,
+    p_requested_by: "dashboard",
+  });
+  if (error) {
+    errEl.textContent = `Error: ${error.message}`;
+    errEl.style.display = "block";
+    btn.disabled = false;
+    btn.textContent = "Start scan";
+    return;
+  }
+  const result = Array.isArray(data) ? data[0] : data;
+  if (!result?.ok) {
+    // If RPC returns "scan already in progress", scan_id will hold the
+    // existing scan id — switch to live progress for that one.
+    if (result?.scan_id) {
+      document.getElementById("scan-modal").classList.remove("open");
+      btn.disabled = false;
+      btn.textContent = "Start scan";
+      setScanBtnRunning(true);
+      pollScanStatus(result.scan_id);
+      return;
+    }
+    errEl.textContent = result?.error_msg || "Scan request failed";
+    errEl.style.display = "block";
+    btn.disabled = false;
+    btn.textContent = "Start scan";
+    return;
+  }
+  // Credit was deducted, scan queued
+  document.getElementById("scan-modal").classList.remove("open");
+  btn.disabled = false;
+  btn.textContent = "Start scan";
+  setScanBtnRunning(true);
+  document.getElementById("header-credits-num").textContent = (result.balance_after ?? 0).toLocaleString("nl-NL");
+  currentBalance = result.balance_after;
+  pollScanStatus(result.scan_id);
+}
+
+function setScanBtnRunning(running) {
+  const btn = document.getElementById("scan-now-btn");
+  const icon = btn.querySelector(".scan-now-icon");
+  const cost = btn.querySelector(".scan-now-cost");
+  const label = btn.querySelector(".scan-label");
+  if (running) {
+    btn.disabled = true;
+    icon.classList.add("spin");
+    if (label) label.textContent = "Running";
+    if (cost) cost.textContent = "…";
+  } else {
+    btn.disabled = false;
+    icon.classList.remove("spin");
+    if (label) label.textContent = "Scan";
+    if (cost) cost.textContent = `${SCAN_COST} cr`;
+  }
+}
+
+// Persistent banner so the user always sees scan progress, even when the
+// modal is dismissed via "Run in background". Click anywhere on the banner
+// to reopen the full modal.
+let currentScanId = null;
+let bannerStartedAt = null;
+
+function showScanBanner(scanId) {
+  const banner = document.getElementById("scan-banner");
+  banner.classList.add("show");
+  currentScanId = scanId;
+  bannerStartedAt = Date.now();
+}
+function hideScanBanner() {
+  document.getElementById("scan-banner").classList.remove("show");
+  currentScanId = null;
+  bannerStartedAt = null;
+}
+function updateScanBanner(data) {
+  const progress = data.progress || {};
+  const steps = progress.steps || [];
+  const total = steps.length || 3;
+  const doneCount = steps.filter(s => s.status === "completed").length;
+  const running = steps.find(s => s.status === "running");
+  const current = running || steps.find(s => s.status === "pending");
+  const labelEl   = document.getElementById("banner-step-label");
+  const counterEl = document.getElementById("banner-step-counter");
+  const fillEl    = document.getElementById("banner-progress-fill");
+  const totalsEl  = document.getElementById("banner-totals");
+  const elapsedEl = document.getElementById("banner-elapsed");
+  if (current) {
+    labelEl.textContent = current.label || current.key;
+    counterEl.textContent = `step ${Math.min(doneCount + (running ? 1 : 0), total)}/${total}`;
+  } else if (data.status === "completed") {
+    labelEl.textContent = "Scan complete";
+    counterEl.textContent = `${total}/${total}`;
+  } else if (data.status === "failed") {
+    labelEl.textContent = "Scan failed";
+    counterEl.textContent = "";
+  }
+  // Approximate fill: each completed step is 1 chunk; running step counts as half.
+  const fillPct = ((doneCount + (running ? 0.5 : 0)) / total) * 100;
+  fillEl.style.width = fillPct + "%";
+
+  // Live totals across the steps we've finished
+  let posts = 0, dets = 0, cre = 0;
+  for (const s of steps) {
+    const d = s.delta || {};
+    posts += d.content_items || 0;
+    dets  += d.detections    || 0;
+    cre   += d.creators      || 0;
+  }
+  if (posts || dets || cre) {
+    totalsEl.style.display = "block";
+    totalsEl.innerHTML = `<b>+${posts}</b> posts · <b>+${dets}</b> detections · <b>+${cre}</b> creators`;
+  } else {
+    totalsEl.style.display = "none";
+  }
+  // Elapsed time since banner appeared
+  if (bannerStartedAt) {
+    const secs = Math.round((Date.now() - bannerStartedAt) / 1000);
+    elapsedEl.textContent = secs < 60 ? `${secs}s` : `${Math.floor(secs/60)}m${secs%60}s`;
+  }
+}
+
+function renderScanProgress(data) {
+  updateScanBanner(data);
+  const stepsEl = document.getElementById("scan-progress-steps");
+  const summaryEl = document.getElementById("scan-progress-summary");
+  const progress = data.progress || {};
+  const steps = progress.steps || [
+    {key: "auto_add",   label: "Adding new creators from hashtags",   status: "pending"},
+    {key: "daily_scan", label: "Scraping latest posts + Flash detection", status: "pending"},
+    {key: "pro_verify", label: "Pro verification of new hits",        status: "pending"},
+  ];
+
+  const iconFor = (s) => s.status === "completed" ? "✓" : s.status === "failed" ? "✗" : s.status === "running" ? "↻" : "○";
+  const timeFor = (s) => {
+    if (!s.started_at) return "";
+    const end = s.completed_at || (Date.now() / 1000);
+    const secs = Math.round(end - s.started_at);
+    return secs > 0 ? `${secs}s` : "";
+  };
+  stepsEl.innerHTML = steps.map(s => {
+    const delta = s.delta || {};
+    const deltaParts = [];
+    if (delta.creators)      deltaParts.push(`+${delta.creators} creators`);
+    if (delta.content_items) deltaParts.push(`+${delta.content_items} posts`);
+    if (delta.detections)    deltaParts.push(`+${delta.detections} detections`);
+    return `<div class="progress-step ${s.status}">
+      <span class="step-icon">${iconFor(s)}</span>
+      <div class="step-body">
+        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+          <span class="step-label">${s.label}</span>
+          <span class="step-time">${timeFor(s)}</span>
+        </div>
+        ${deltaParts.length ? `<div class="step-delta">${deltaParts.join(" · ")}</div>` : ""}
+        ${s.log && s.status !== "completed" ? `<div class="step-log">${(s.log || "").replace(/</g, "&lt;")}</div>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+
+  // Aggregate live summary across completed steps
+  const totals = {creators: 0, content_items: 0, detections: 0};
+  for (const s of steps) {
+    const d = s.delta || {};
+    totals.creators      += d.creators      || 0;
+    totals.content_items += d.content_items || 0;
+    totals.detections    += d.detections    || 0;
+  }
+  if (totals.creators || totals.content_items || totals.detections) {
+    summaryEl.style.display = "block";
+    summaryEl.innerHTML = `So far: <b style="color: var(--text);">+${totals.content_items} posts</b> · <b style="color: var(--text);">+${totals.detections} detections</b> · <b style="color: var(--text);">+${totals.creators} creators</b>`;
+  } else {
+    summaryEl.style.display = "none";
+  }
+}
+
+async function pollScanStatus(scanId, openModal = true) {
+  // Idempotent: if we're already polling this scan, don't start a second loop.
+  // This prevents the 60s dashboard refresh from stacking multiple pollers.
+  if (currentScanId === scanId) return;
+  let attempts = 0;
+  const max = 300; // ~10 minutes at 2s
+  showScanBanner(scanId);
+  if (openModal) document.getElementById("scan-progress-modal").classList.add("open");
+  const poll = async () => {
+    attempts++;
+    const { data } = await sb.from("scan_requests").select("*").eq("id", scanId).maybeSingle();
+    if (!data) {
+      setTimeout(poll, 2000);
+      return;
+    }
+    renderScanProgress(data);
+    if (data.status === "completed") {
+      setScanBtnRunning(false);
+      currentScanId = null;
+      setTimeout(() => {
+        document.getElementById("scan-progress-modal").classList.remove("open");
+        hideScanBanner();
+        load();
+      }, 1500);
+      return;
+    }
+    if (data.status === "failed") {
+      setScanBtnRunning(false);
+      currentScanId = null;
+      const stepsEl = document.getElementById("scan-progress-steps");
+      stepsEl.insertAdjacentHTML("afterend",
+        `<div style="color: var(--bad); font-size: 12px; margin-top: 8px;">Scan failed: ${(data.error || "unknown").replace(/</g, "&lt;")}. Credits zijn automatisch teruggeboekt.</div>`);
+      setTimeout(hideScanBanner, 8000);
+      return;
+    }
+    if (attempts >= max) {
+      setScanBtnRunning(false);
+      currentScanId = null;
+      hideScanBanner();
+      console.warn("Scan poll gave up after 10min");
+      return;
+    }
+    setTimeout(poll, 2000);
+  };
+  poll();
+}
+
+// Check for any in-progress scan on page load (resume polling).
+// Called on first load and on every 60s refresh — must be idempotent.
+// Only shows the banner (not the modal) so we don't pop the modal back open
+// every minute when the user has dismissed it.
+async function resumeRunningScan() {
+  const brandId = await getBrandId();
+  if (!brandId) return;
+  const { data } = await sb.from("scan_requests")
+    .select("*")
+    .eq("brand_id", brandId)
+    .in("status", ["pending", "running"])
+    .order("requested_at", { ascending: false })
+    .limit(1);
+  if (data && data.length) {
+    setScanBtnRunning(true);
+    // pollScanStatus is idempotent via currentScanId check
+    pollScanStatus(data[0].id, false /* don't open modal */);
+  } else if (currentScanId) {
+    // No scan running anymore but we still have a stale currentScanId.
+    // Tear down the banner so it doesn't linger.
+    hideScanBanner();
+    setScanBtnRunning(false);
+  }
+}
+
+// Brand switcher: visible when the signed-in user has access to >1 brand,
+// OR when an authenticated user wants to view the public STELZ demo.
+async function renderBrandSwitcher() {
+  await getBrandId();  // ensures cachedBrandOptions + cachedBrandSlug populated
+  const sel = document.getElementById("brand-switcher");
+  const title = document.getElementById("brand-title");
+
+  // Header title is brand-first now: "Spot the Brand. · <Brand Name>".
+  // The product is the brand; the customer name is contextual.
+  if (cachedBrandSlug) {
+    const match = (cachedBrandOptions || []).find(l => l.brand?.slug === cachedBrandSlug);
+    let display = match?.brand?.name;
+    if (!display) {
+      // Anon fallback: fetch by slug
+      const { data: b } = await sb.from("brands").select("name").eq("slug", cachedBrandSlug).maybeSingle();
+      display = b?.name || cachedBrandSlug.toUpperCase();
+    }
+    title.innerHTML = `Spot the Brand<span>.</span> <span style="color: var(--muted); font-weight: 400; margin-left: 8px;">${display}</span>`;
+    document.title = `${display} · Spot the Brand`;
+  }
+
+  // Only render the dropdown when the user has multiple brands.
+  const opts = cachedBrandOptions || [];
+  if (opts.length <= 1) {
+    sel.style.display = "none";
+    return;
+  }
+  sel.innerHTML = opts.map(o =>
+    `<option value="${o.brand?.slug}" ${o.brand?.slug === cachedBrandSlug ? "selected" : ""}>${o.brand?.name || o.brand?.slug}</option>`
+  ).join("");
+  sel.style.display = "inline-block";
+  sel.onchange = () => {
+    const slug = sel.value;
+    const url = new URL(location.href);
+    url.searchParams.set("brand", slug);
+    location.href = url.toString();
+  };
+}
+
+async function renderAuthPill() {
+  const pill = document.getElementById("auth-pill");
+  const { data: { session } } = await sb.auth.getSession();
+  cachedSession = session;
+  if (session?.user) {
+    // Signed-in: tiny ⏏ sign-out icon on hover. The brand name is already
+    // visible via the credits widget tooltip; no need to duplicate it.
+    pill.innerHTML = `<a href="#" id="sign-out-link" title="Sign out · ${session.user.email}">⏏</a>`;
+    pill.querySelector("a").onclick = async (e) => {
+      e.preventDefault();
+      if (!confirm("Sign out?")) return;
+      await sb.auth.signOut();
+      location.reload();
+    };
+  } else {
+    // Anonymous: explicit, calm sign-in link.
+    pill.innerHTML = `<a href="/login.html">Sign in</a>`;
+  }
+}
+
+// ============================================================
+// Low-balance banner. Shows when:
+//   - balance < 50 cr (critical, red)
+//   - OR burn-rate forecast exceeds balance within 7 days (warn, yellow)
+// Click X to dismiss for this browser session.
+// ============================================================
+async function renderCreditBanner() {
+  if (sessionStorage.getItem("credit_banner_dismissed") === "1") return;
+  const brandId = await getBrandId();
+  if (!brandId) return;
+  const [{ data: balRow }, { data: tx }] = await Promise.all([
+    sb.from("credit_balances").select("balance").eq("brand_id", brandId).maybeSingle(),
+    sb.from("credit_transactions").select("amount, created_at").eq("brand_id", brandId)
+      .lt("amount", 0)
+      .gte("created_at", new Date(Date.now() - 30 * 86400000).toISOString())
+      .limit(500),
+  ]);
+  const balance = balRow?.balance ?? null;
+  if (balance == null) return;
+  const banner = document.getElementById("credit-banner");
+  const text   = document.getElementById("credit-banner-text");
+
+  // Compute 7d burn-rate
+  const last7d = (tx || []).filter(t => new Date(t.created_at).getTime() > Date.now() - 7 * 86400000);
+  const burn7d = last7d.reduce((s, t) => s + Math.abs(t.amount), 0);
+  const dailyBurn = burn7d / 7;
+  const daysLeft = dailyBurn > 0 ? Math.floor(balance / dailyBurn) : Infinity;
+
+  if (balance === 0) {
+    banner.classList.add("show", "critical");
+    text.innerHTML = `<b>0 credits remaining.</b> Scan & expansion features are paused until you top up.`;
+  } else if (balance < 50) {
+    banner.classList.add("show", "critical");
+    text.innerHTML = `<b>${balance} credits left.</b> Top-up now to avoid scan interruptions.`;
+  } else if (daysLeft < 7 && dailyBurn > 0) {
+    banner.classList.add("show");
+    text.innerHTML = `<b>${balance.toLocaleString("nl-NL")} credits</b> · at current pace (${Math.round(dailyBurn)}/day) you'll run out in ~${daysLeft} days.`;
+  }
+}
+
+document.getElementById("credit-banner-dismiss")?.addEventListener("click", () => {
+  document.getElementById("credit-banner").classList.remove("show");
+  sessionStorage.setItem("credit_banner_dismissed", "1");
+});
+
+async function loadCreditsHeader() {
+  // Compact widget: just the credit number + a coloured plan dot.
+  // Full plan info (renewal date, trial countdown, etc.) lives on /account.html.
+  try {
+    const brandId = await getBrandId();
+    if (!brandId) return;
+    const [subRes, credRes] = await Promise.all([
+      sb.from("subscriptions").select("status, current_period_end, plan:plans(name)").eq("brand_id", brandId).maybeSingle(),
+      sb.from("credit_balances").select("balance").eq("brand_id", brandId).maybeSingle(),
+    ]);
+    const sub = subRes.data;
+    const credits = credRes.data?.balance ?? null;
+    const numEl = document.getElementById("header-credits-num");
+    const dotEl = document.getElementById("credits-plan-dot");
+    if (credits != null) {
+      numEl.textContent = credits.toLocaleString("nl-NL") + " cr";
+      numEl.className = "credits-num" + (credits === 0 ? " empty" : credits < 500 ? " low" : "");
+      currentBalance = credits;
+    } else {
+      numEl.textContent = "—";
+    }
+    if (sub) {
+      const cls = sub.status === "active" ? "" : sub.status === "trial" ? "trial" : "expired";
+      dotEl.className = "credits-plan-dot " + cls;
+      const planName = sub.plan?.name || "—";
+      // Only show trial expiry if it's within 14 days, otherwise no clutter.
+      let title = planName + " · " + sub.status;
+      if (sub.current_period_end) {
+        const daysLeft = Math.round((new Date(sub.current_period_end) - Date.now()) / 86400000);
+        if (daysLeft >= 0 && daysLeft <= 14) title += ` · expires in ${daysLeft}d`;
+      }
+      dotEl.title = title;
+    }
+  } catch (e) {
+    console.warn("credits widget load failed", e);
+  }
+}
+
+// ============================================================
+// REALTIME FEED — Supabase pushes new detection rows as they land in
+// the table. We enrich each one via v_detections_full, prepend to the
+// in-memory list, and animate it into the table. No more 60s polling.
+// ============================================================
+const freshIds = new Set();
+let unseenSince = 0;
+let realtimeChannel = null;
+
+function startRealtimeFeed() {
+  if (realtimeChannel) return;
+  realtimeChannel = sb.channel("detections-feed")
+    .on("postgres_changes", {
+      event: "INSERT",
+      schema: "public",
+      table: "detections",
+      filter: "detected=eq.true",
+    }, async (payload) => {
+      const row = payload.new;
+      if (!row || row.is_false_positive) return;
+      // Enrich the bare detection row via the view so we get creator handle,
+      // image URL, caption etc.
+      const { data } = await sb.from("v_detections_full")
+        .select("*")
+        .eq("detection_id", row.id)
+        .maybeSingle();
+      if (!data) return;
+      // Prepend if not already known
+      if (allDetections.find(d => d.detection_id === data.detection_id)) return;
+      allDetections.unshift(data);
+      freshIds.add(data.detection_id);
+      unseenSince++;
+      // Refresh active view if user is on detections tab
+      const detectionsActive = document.getElementById("view-detections").classList.contains("active");
+      if (detectionsActive && !isUserScrolledDown()) {
+        applyFilters();
+      } else {
+        // Only update the live pill so the user knows about the new content
+        const pill = document.getElementById("live-feed-pill");
+        document.getElementById("live-feed-count").textContent =
+          unseenSince + (unseenSince === 1 ? " new" : " new");
+        pill.classList.add("show");
+      }
+    })
+    .subscribe();
+}
+
+function isUserScrolledDown() {
+  // Considered "scrolled" if more than half a viewport from top
+  return window.scrollY > window.innerHeight * 0.5;
+}
+
+document.addEventListener("scroll", () => {
+  // Reset unseen counter when user returns to top
+  if (window.scrollY < 80 && unseenSince > 0) {
+    unseenSince = 0;
+    document.getElementById("live-feed-pill").classList.remove("show");
+  }
+}, { passive: true });
+
+document.getElementById("live-feed-pill").addEventListener("click", () => {
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  unseenSince = 0;
+  document.getElementById("live-feed-pill").classList.remove("show");
+  applyFilters(); // re-render so prepended items show up at top
+});
+
+async function load() {
+  // Resolve brand context first — required for the brand_id filter below.
+  // Without that filter we'd load ALL brands' detections, and the PostgREST
+  // default max-rows cap of 1000 truncates the tail (sorted by confidence
+  // DESC). Lisa's 0.9-confidence hit sat below the 1000-row cutoff and so
+  // never appeared in the feed. Brand-scoped loads bring this back well
+  // under the cap (STELZ has ~815 hits today).
+  const brandId = await getBrandId();
+  if (!brandId) {
+    document.getElementById("table-container").innerHTML = `<div class="empty">No brand context — sign in or set ?brand=&lt;slug&gt; in the URL</div>`;
+    return;
+  }
+  // Page in chunks of 1000 (the PostgREST default cap) using .range() until
+  // we've collected every row. Keeps us safe even when a single brand
+  // eventually exceeds 1000 hits.
+  allDetections = [];
+  const pageSize = 1000;
+  let offset = 0;
+  while (true) {
+    const res = await sb
+      .from("v_detections_full")
+      .select("*")
+      .eq("brand_id", brandId)
+      .eq("detected", true)
+      .order("confidence", { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (res.error) {
+      document.getElementById("table-container").innerHTML = `<div class="empty">Error loading: ${res.error.message}</div>`;
+      return;
+    }
+    const batch = res.data || [];
+    allDetections = allDetections.concat(batch);
+    if (batch.length < pageSize) break;
+    offset += pageSize;
+    if (offset >= 10000) break;  // hard safety cap
+  }
+
+  const summary = {
+    total: allDetections.length,
+    creators: new Set(allDetections.map(d => d.creator_handle)).size,
+    clear: allDetections.filter(d =>
+      ["hard_lemonade", "hard_seltzer", "hard_iced_tea"].includes(d.product_line) &&
+      !(d.size_in_frame === "small" && !d.is_primary_subject) &&
+      !d.is_false_positive
+    ).length,
+    fp: allDetections.filter(d => d.is_false_positive).length,
+  };
+  // Two essential metrics only — header isn't a stats dashboard.
+  // Clear hits + FP are still computed below for the detections tab filters.
+  document.getElementById("stats").innerHTML =
+    `<span><b>${summary.total.toLocaleString("nl-NL")}</b>hits</span>` +
+    `<span><b>${summary.creators.toLocaleString("nl-NL")}</b>creators</span>`;
+
+  renderFilters(computeFacets(allDetections));
+  renderTimeOverview();
+  loadScanHistory();
+  loadCreators();
+  loadCreditsHeader();
+  renderAuthPill();
+  renderBrandSwitcher();
+  renderCreditBanner();
+  resumeRunningScan();
+  startRealtimeFeed();
+  applyFilters();
+}
+
+let insightsLoaded = false;
+document.querySelectorAll(".view-tab[data-view]").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".view-tab[data-view]").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    const view = tab.dataset.view;
+    document.querySelectorAll(".view-section").forEach(s => s.classList.remove("active"));
+    document.getElementById("view-" + view).classList.add("active");
+    if (view === "insights" && !insightsLoaded) {
+      insightsLoaded = true;
+      loadInsights().catch(e => {
+        console.error("loadInsights failed", e);
+        document.getElementById("insight-since-body").innerHTML = `<div class="empty-mini">Error: ${e.message}</div>`;
+      });
+    }
+    if (view === "subcultures") {
+      loadSubcultures().catch(e => console.error("loadSubcultures failed", e));
+    }
+    if (view === "discovery" && !discoveryLoaded) {
+      discoveryLoaded = true;
+      loadDiscovery().catch(e => {
+        console.error("loadDiscovery failed", e);
+        document.getElementById("discovery-container").innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+      });
+    }
+  });
+});
+
+// ─── Discovery (SRS) tab ────────────────────────────────────
+let discoveryLoaded = false;
+let allSrsRows = [];
+let srsBand = "all";
+let srsSearch = "";
+
+async function loadDiscovery() {
+  const brandId = await getBrandId();
+  const { data, error } = await sb
+    .from("v_resonance_ranked")
+    .select("creator_handle, platform, srs, graph, hashtag, subculture, comment, geo, visual, bootstrap_mode, full_name, follower_count, tier, status, category, clear_visibility_hits, latest_post_at, posts_scraped")
+    .eq("brand_id", brandId)
+    .order("srs", { ascending: false })
+    .limit(1000);
+  if (error) throw error;
+  allSrsRows = data || [];
+  renderDiscovery();
+}
+
+function renderDiscovery() {
+  const search = (srsSearch || "").trim().toLowerCase();
+  let rows = allSrsRows.filter(r => {
+    if (search && !(r.creator_handle.toLowerCase().includes(search) ||
+                    (r.full_name || "").toLowerCase().includes(search))) return false;
+    return true;
+  });
+  // Band filter
+  if (srsBand === "hot")  rows = rows.filter(r => r.srs >= 75);
+  else if (srsBand === "warm") rows = rows.filter(r => r.srs >= 50 && r.srs < 75);
+  else if (srsBand === "cold") rows = rows.filter(r => r.srs >= 25 && r.srs < 50);
+  else if (srsBand === "new")  rows = rows.filter(r => !r.tier || r.status !== "promoted");
+
+  // Counts in chips
+  const c = (fn) => allSrsRows.filter(fn).length;
+  document.getElementById("srs-count-all").textContent  = allSrsRows.length;
+  document.getElementById("srs-count-hot").textContent  = c(r => r.srs >= 75);
+  document.getElementById("srs-count-warm").textContent = c(r => r.srs >= 50 && r.srs < 75);
+  document.getElementById("srs-count-cold").textContent = c(r => r.srs >= 25 && r.srs < 50);
+  document.getElementById("srs-count-new").textContent  = c(r => !r.tier || r.status !== "promoted");
+  document.getElementById("discovery-count").textContent = allSrsRows.length;
+  document.getElementById("discovery-result-count").textContent = `${rows.length} candidates`;
+
+  const layerBar = (label, val, color) => {
+    if (val == null || val === 0) return `<span class="srs-bar-cell"><span class="srs-bar-label">${label}</span><span class="srs-bar-empty">·</span></span>`;
+    const w = Math.max(2, Math.round(val));
+    return `<span class="srs-bar-cell" title="${label}: ${val.toFixed(1)}"><span class="srs-bar-label">${label}</span><span class="srs-bar-track"><span class="srs-bar-fill" style="width:${w}%; background:${color}"></span></span></span>`;
+  };
+
+  const html = `
+    <table>
+      <thead>
+        <tr>
+          <th style="width:28px;">#</th>
+          <th>Creator</th>
+          <th style="width:90px;">SRS</th>
+          <th>Layer breakdown</th>
+          <th>Stats</th>
+          <th style="width:60px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((r, idx) => {
+          const known = r.tier && r.status === "promoted";
+          const srsColor = r.srs >= 75 ? "var(--accent)" : r.srs >= 50 ? "#fbbf24" : r.srs >= 25 ? "#60a5fa" : "var(--muted)";
+          const platformIcon = r.platform === "tiktok" ? "TT" : r.platform === "instagram" ? "IG" : (r.platform||"").slice(0,2).toUpperCase();
+          return `
+          <tr>
+            <td style="color: var(--muted); font-family: var(--font-mono); font-size: 11px;">${idx+1}</td>
+            <td>
+              <div class="handle">@${r.creator_handle}
+                <span class="platform-mini">${platformIcon}</span>
+                ${r.tier ? `<span class="source-tag tier-${r.tier}">${(r.tier||'').replace('_',' ')}</span>` : `<span class="source-tag" style="color: var(--accent); border-color: var(--accent);">NEW</span>`}
+              </div>
+              ${r.full_name ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${r.full_name}</div>` : ""}
+              ${r.follower_count ? `<div style="color: var(--muted); font-size: 10px; margin-top: 2px; font-family: var(--font-mono);">${r.follower_count >= 1000 ? (r.follower_count/1000).toFixed(0)+"k" : r.follower_count} followers</div>` : ""}
+            </td>
+            <td>
+              <div style="font-size: 22px; font-weight: 800; color: ${srsColor}; line-height: 1; font-variant-numeric: tabular-nums;">${(r.srs||0).toFixed(1)}</div>
+              <div style="font-family: var(--font-mono); font-size: 9px; color: var(--muted); letter-spacing: 0.08em; margin-top: 4px;">${(r.bootstrap_mode||"").toUpperCase()}</div>
+            </td>
+            <td>
+              <div class="srs-bar-row">
+                ${layerBar("graph", r.graph, "var(--accent)")}
+                ${layerBar("hash",  r.hashtag, "#60a5fa")}
+                ${layerBar("sub",   r.subculture, "#c084fc")}
+                ${layerBar("cmnt",  r.comment, "#fbbf24")}
+                ${layerBar("geo",   r.geo, "#4ade80")}
+                ${layerBar("vis",   r.visual, "#f472b6")}
+              </div>
+            </td>
+            <td>
+              ${r.clear_visibility_hits ? `<div style="font-size: 12px;">${r.clear_visibility_hits} clear hit${r.clear_visibility_hits===1?"":"s"}</div>` : '<div style="color: var(--muted); font-size: 11px;">no hits yet</div>'}
+              ${r.posts_scraped ? `<div style="font-size: 11px; color: var(--muted);">${r.posts_scraped} posts scraped</div>` : ""}
+              ${r.latest_post_at ? `<div style="font-size: 10px; color: var(--muted); font-family: var(--font-mono);">last: ${new Date(r.latest_post_at).toISOString().slice(0,10)}</div>` : ""}
+            </td>
+            <td>
+              <a href="https://www.${r.platform === 'tiktok' ? 'tiktok.com/@' : 'instagram.com/'}${r.creator_handle}" target="_blank" rel="noopener" style="font-size: 11px;">↗</a>
+            </td>
+          </tr>
+        `;}).join("")}
+      </tbody>
+    </table>
+  `;
+  document.getElementById("discovery-container").innerHTML = html;
+}
+
+document.querySelectorAll("#srs-band-bar .period-btn").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("#srs-band-bar .period-btn").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    srsBand = b.dataset.band;
+    renderDiscovery();
+  });
+});
+document.getElementById("discovery-search").addEventListener("input", e => {
+  srsSearch = e.target.value;
+  renderDiscovery();
+});
+document.getElementById("export-discovery-btn").addEventListener("click", () => {
+  const search = (srsSearch || "").trim().toLowerCase();
+  let rows = allSrsRows.filter(r => !search || r.creator_handle.toLowerCase().includes(search) || (r.full_name||"").toLowerCase().includes(search));
+  if (srsBand === "hot")  rows = rows.filter(r => r.srs >= 75);
+  else if (srsBand === "warm") rows = rows.filter(r => r.srs >= 50 && r.srs < 75);
+  else if (srsBand === "cold") rows = rows.filter(r => r.srs >= 25 && r.srs < 50);
+  else if (srsBand === "new")  rows = rows.filter(r => !r.tier || r.status !== "promoted");
+  const header = ["handle","platform","srs","graph","hashtag","subculture","comment","geo","visual","bootstrap","tier","status","followers","clear_hits"];
+  const csv = [header.join(",")].concat(rows.map(r => [
+    r.creator_handle, r.platform, r.srs, r.graph, r.hashtag, r.subculture,
+    r.comment, r.geo, r.visual, r.bootstrap_mode, r.tier || "", r.status || "",
+    r.follower_count || "", r.clear_visibility_hits || 0
+  ].join(","))).join("\n");
+  const blob = new Blob([csv], {type: "text/csv"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "resonance_scores.csv";
+  a.click();
+});
+
+// Subculture status tabs
+document.querySelectorAll(".subc-status-tab").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".subc-status-tab").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    subcStatusFilter = b.dataset.status;
+    renderSubcultures();
+  });
+});
+
+// Track-a-territory-hashtag: insert into brand_hashtag_pools
+async function trackTerritoryHashtag(tag, btn) {
+  const brandId = await getBrandId();
+  if (!brandId) return;
+  btn.disabled = true;
+  btn.textContent = "…";
+  const { error } = await sb.from("brand_hashtag_pools").upsert({
+    brand_id: brandId,
+    hashtag: tag,
+    platform: "instagram",
+    priority: 6,
+    group_label: "territory_promoted",
+    active: true,
+  }, { onConflict: "brand_id,hashtag,platform" });
+  if (error) {
+    btn.disabled = false;
+    btn.textContent = "+ Track";
+    alert("Failed: " + error.message);
+    return;
+  }
+  btn.textContent = "✓ Tracked";
+  btn.style.background = "rgba(74,222,128,0.1)";
+  btn.style.color = "var(--good)";
+  btn.style.borderColor = "var(--good)";
+}
+
+// Queue-a-mentioned-handle: insert into discovery_queue
+async function queueTerritoryHandle(handle, btn) {
+  const brandId = await getBrandId();
+  if (!brandId) return;
+  btn.disabled = true;
+  btn.textContent = "…";
+  const { error } = await sb.from("discovery_queue").upsert({
+    brand_id: brandId,
+    platform: "instagram",
+    handle: handle,
+    source: "territory_mention",
+    signal_count: 1,
+    status: "pending",
+  }, { onConflict: "brand_id,platform,handle" });
+  if (error) {
+    btn.disabled = false;
+    btn.textContent = "+ Queue";
+    alert("Failed: " + error.message);
+    return;
+  }
+  btn.textContent = "✓ Queued";
+  btn.style.background = "rgba(74,222,128,0.1)";
+  btn.style.color = "var(--good)";
+  btn.style.borderColor = "var(--good)";
+}
+
+// Subculture card actions
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-action]");
+  if (!b) return;
+  // Territory actions intercept first
+  if (b.dataset.action === "track-tag")   { trackTerritoryHashtag(b.dataset.tag, b);    return; }
+  if (b.dataset.action === "queue-handle"){ queueTerritoryHandle(b.dataset.handle, b);  return; }
+  const id = b.dataset.id;
+  if (b.dataset.action === "subc-edit") {
+    const subc = allSubcultures.find(s => s.id === id);
+    if (subc) openSubcModal(subc);
+  } else if (b.dataset.action === "subc-view") {
+    viewSubcCreators(id);
+  } else if (b.dataset.action === "subc-expand") {
+    const subc = allSubcultures.find(s => s.id === id);
+    if (!subc) return;
+    document.getElementById("expand-modal-name").textContent = subc.name;
+    document.getElementById("expand-confirm").onclick = () => triggerExpansion(subc);
+    const updateCost = () => {
+      const max = parseInt(document.getElementById("expand-max-tags").value || "0", 10);
+      document.getElementById("expand-cost").textContent = `${max * 5} credits`;
+    };
+    updateCost();
+    document.getElementById("expand-max-tags").oninput = updateCost;
+    document.getElementById("expand-modal").classList.add("open");
+  }
+});
+
+// Scan split-button: chevron opens the variant menu (Deep scan + future)
+document.getElementById("scan-split-toggle").addEventListener("click", (e) => {
+  e.stopPropagation();
+  document.getElementById("scan-split-menu").classList.toggle("open");
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".scan-split")) {
+    document.getElementById("scan-split-menu")?.classList.remove("open");
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.getElementById("scan-split-menu")?.classList.remove("open");
+});
+
+// Scan now button
+document.getElementById("scan-now-btn").addEventListener("click", openScanModal);
+// Deep scan button (4x bigger, fresh sweep, includes TikTok)
+document.getElementById("deep-scan-btn").addEventListener("click", async () => {
+  if (!confirm("Deep scan: 100 credits. Geen skip-recent, 25 posts per creator, inclusief TikTok. Doorgaan?")) return;
+  const brandId = await getBrandId();
+  const { data, error } = await sb.rpc("request_deep_scan", {
+    p_brand_id: brandId,
+    p_requested_by: "dashboard_deep",
+  });
+  if (error) { alert("Deep scan failed: " + error.message); return; }
+  const r = Array.isArray(data) ? data[0] : data;
+  if (!r?.ok) {
+    if (r?.scan_id) { setScanBtnRunning(true); pollScanStatus(r.scan_id); return; }
+    alert(r?.error_msg || "Deep scan failed");
+    return;
+  }
+  document.getElementById("header-credits-num").textContent = (r.balance_after ?? 0).toLocaleString("nl-NL");
+  currentBalance = r.balance_after;
+  setScanBtnRunning(true);
+  pollScanStatus(r.scan_id);
+});
+document.getElementById("scan-cancel").addEventListener("click", () => document.getElementById("scan-modal").classList.remove("open"));
+document.getElementById("scan-confirm").addEventListener("click", confirmScan);
+document.getElementById("scan-modal").addEventListener("click", (e) => { if (e.target.id === "scan-modal") e.target.classList.remove("open"); });
+// Progress modal: backdrop click + background-button just hide modal; polling continues.
+// Banner stays visible so the user always sees scan progress.
+document.getElementById("scan-progress-bg").addEventListener("click", () => document.getElementById("scan-progress-modal").classList.remove("open"));
+document.getElementById("scan-progress-modal").addEventListener("click", (e) => { if (e.target.id === "scan-progress-modal") e.target.classList.remove("open"); });
+// Click anywhere on the banner reopens the full progress modal.
+document.getElementById("scan-banner").addEventListener("click", () => {
+  if (!currentScanId) return;
+  document.getElementById("scan-progress-modal").classList.add("open");
+});
+
+// Add subculture
+document.getElementById("add-subc-btn").addEventListener("click", () => openSubcModal(null));
+document.getElementById("subc-modal-cancel").addEventListener("click", () => document.getElementById("subc-modal").classList.remove("open"));
+document.getElementById("subc-modal-save").addEventListener("click", saveSubc);
+document.getElementById("expand-cancel").addEventListener("click", () => document.getElementById("expand-modal").classList.remove("open"));
+// Close modal on backdrop click
+["subc-modal", "expand-modal"].forEach(id => {
+  document.getElementById(id).addEventListener("click", (e) => {
+    if (e.target.id === id) e.target.classList.remove("open");
+  });
+});
+document.getElementById("creator-search").addEventListener("input", (e) => {
+  creatorSearch = e.target.value;
+  renderCreators();
+});
+document.addEventListener("click", (e) => {
+  const handle = e.target.closest("[data-creator-jump]")?.dataset.creatorJump
+    || e.target.closest("[data-handle]")?.dataset.handle;
+  if (handle && e.target.closest("[data-creator-jump]")) {
+    document.querySelector('.view-tab[data-view="detections"]').click();
+    document.getElementById("search").value = handle;
+    filters.search = handle;
+    applyFilters();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+});
+document.getElementById("export-creators-btn").addEventListener("click", () => {
+  const keys = ["handle", "platform", "category", "tier", "relevance_score", "follower_count", "posts_scraped", "total_detections", "clear_visibility_hits", "latest_post_at"];
+  const csv = [keys.join(",")].concat(allCreators.map(r => keys.map(k => `"${(r[k] ?? "").toString().replaceAll('"', '""')}"`).join(","))).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "creators.csv";
+  a.click();
+});
+
+// Story "Scan now" button — currently shows last-scan info and stories cadence.
+// Triggering a fresh scan from the dashboard would need an RPC + worker hook;
+// for now we surface what we know so the demo conversation has the right data.
+document.getElementById("scan-stories-now")?.addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "⏳ Checking…";
+  try {
+    const brandId = await getBrandId();
+    const { data } = await sb
+      .from("content_items")
+      .select("scraped_at")
+      .eq("brand_id", brandId)
+      .eq("content_type", "story")
+      .order("scraped_at", { ascending: false })
+      .limit(1);
+    const last = data && data[0]?.scraped_at;
+    const ageMin = last ? Math.round((Date.now() - new Date(last).getTime()) / 60000) : null;
+    const msg = last
+      ? `Last story scan: ${ageMin < 60 ? ageMin + ' min ago' : Math.round(ageMin/60) + 'h ago'}.\nScans run automatically every 4h. Trigger a manual run from the CLI if needed.`
+      : "No story scans on record yet. Cron picks up tier_1+tier_2 every 4h.";
+    alert(msg);
+  } catch (err) {
+    alert("Scan check failed: " + err.message);
+  }
+  btn.textContent = original;
+  btn.disabled = false;
+});
+
+document.getElementById("scan-history-btn").addEventListener("click", () => {
+  document.getElementById("scan-history-panel").classList.toggle("open");
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".scan-history")) {
+    document.getElementById("scan-history-panel").classList.remove("open");
+  }
+});
+
+document.getElementById("filter-confidence").addEventListener("input", (e) => {
+  filters.minConfidence = parseInt(e.target.value, 10) / 100;
+  document.getElementById("filter-confidence-val").textContent = filters.minConfidence.toFixed(2);
+  applyFilters();
+});
+document.getElementById("filter-relevance").addEventListener("input", (e) => {
+  filters.minRelevance = parseInt(e.target.value, 10);
+  document.getElementById("filter-relevance-val").textContent = filters.minRelevance;
+  applyFilters();
+});
+document.getElementById("filter-primary").addEventListener("change", (e) => { filters.onlyPrimary = e.target.checked; applyFilters(); });
+document.getElementById("filter-clear").addEventListener("change", (e) => { filters.onlyClear = e.target.checked; applyFilters(); });
+document.getElementById("filter-fp").addEventListener("change", (e) => {
+  filters.showFP = e.target.checked;
+  renderFilters(computeFacets(allDetections));
+  applyFilters();
+});
+document.getElementById("filter-hide-brand").addEventListener("change", (e) => {
+  filters.hideBrand = e.target.checked;
+  renderFilters(computeFacets(allDetections));
+  applyFilters();
+});
+document.getElementById("filter-date-from").addEventListener("change", (e) => {
+  filters.dateFrom = e.target.value ? new Date(e.target.value).getTime() : null;
+  document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
+  applyFilters();
+});
+document.getElementById("filter-date-to").addEventListener("change", (e) => {
+  filters.dateTo = e.target.value ? new Date(e.target.value).getTime() + 86399000 : null;
+  document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
+  applyFilters();
+});
+document.querySelectorAll(".preset-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    const preset = btn.dataset.preset;
+    if (preset === "all") {
+      filters.dateFrom = null;
+      filters.dateTo = null;
+      document.getElementById("filter-date-from").value = "";
+      document.getElementById("filter-date-to").value = "";
+    } else {
+      const days = parseInt(preset, 10);
+      const now = Date.now();
+      filters.dateFrom = now - days * 86400000;
+      filters.dateTo = now;
+      document.getElementById("filter-date-from").value = new Date(filters.dateFrom).toISOString().slice(0,10);
+      document.getElementById("filter-date-to").value = new Date(filters.dateTo).toISOString().slice(0,10);
+    }
+    applyFilters();
+  });
+});
+document.getElementById("search").addEventListener("input", (e) => { filters.search = e.target.value; applyFilters(); });
+document.getElementById("export-btn").addEventListener("click", () => {
+  const rows = allDetections.filter(() => true);
+  const keys = ["creator_handle", "creator_category", "platform", "product_line", "confidence", "size_in_frame", "is_primary_subject", "context", "post_url", "image_url"];
+  const csv = [keys.join(",")].concat(rows.map(r => keys.map(k => `"${(r[k] ?? "").toString().replaceAll('"', '""')}"`).join(","))).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "stelz_detections.csv";
+  a.click();
+});
+
+["signal-brand", "signal-hashtag", "signal-mention", "signal-visual"].forEach(id => {
+  const key = id.replace("signal-", "signal").charAt(0).toUpperCase() + id.replace("signal-", "signal").slice(1);
+  document.getElementById(id).addEventListener("change", (e) => {
+    const k = id === "signal-brand" ? "signalBrand" : id === "signal-hashtag" ? "signalHashtag" : id === "signal-mention" ? "signalMention" : "signalVisual";
+    filters[k] = e.target.checked;
+    applyFilters();
+  });
+});
+
+document.addEventListener("click", (e) => {
+  const wrap = e.target.closest(".thumb-wrap");
+  if (!wrap) return;
+  if (e.target.closest("[data-action]")) return;
+  const id = wrap.dataset.detectionId;
+  const det = allDetections.find(d => d.detection_id === id);
+  if (!det) return;
+  const lb = document.getElementById("lightbox");
+  document.getElementById("lightbox-img").src = imageUrlFor(det);
+  document.getElementById("lightbox-svg").innerHTML = bboxRects(det);
+  lb.classList.add("open");
+});
+document.getElementById("lightbox-close").addEventListener("click", () => {
+  document.getElementById("lightbox").classList.remove("open");
+});
+document.getElementById("lightbox").addEventListener("click", (e) => {
+  if (e.target.id === "lightbox") e.target.classList.remove("open");
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.getElementById("lightbox").classList.remove("open");
+});
+
+document.querySelectorAll(".trust-tab").forEach(t => {
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".trust-tab").forEach(x => x.classList.remove("active"));
+    t.classList.add("active");
+    filters.trust = t.dataset.trust;
+    applyFilters();
+    renderTimeOverview();
+  });
+});
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  // Skip subculture / modal actions
+  if (btn.dataset.action && btn.dataset.action.startsWith("subc-")) return;
+  const action = btn.dataset.action;
+  const detId  = btn.dataset.detectionId;
+  if (!detId) return;
+  if (action !== "confirm" && action !== "reject") return;
+  const isFP = action === "reject";
+
+  // Find detection to check whether this is a high-signal disagreement
+  // (rejecting a trusted hit = strong training signal: model+Pro both wrong).
+  const det = allDetections.find(d => d.detection_id === detId);
+  const trust = det ? trustLevel(det) : "unknown";
+  const noteParts = [];
+  noteParts.push(isFP ? "moderator rejected: no STELZ visible" : "moderator confirmed: STELZ visible");
+  noteParts.push(`source=dashboard`);
+  noteParts.push(`trust_at_decision=${trust}`);
+  if (isFP && trust === "trusted") noteParts.push("HIGH_SIGNAL: rejected despite trusted classification");
+
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = isFP ? "…" : "…";
+
+  // Use moderator_review so the training script (29_train_from_moderator.py)
+  // picks up dashboard rejections alongside moderator-page decisions. ALSO set
+  // moderation_label explicitly so the row's rendered status (you confirmed /
+  // you rejected) stays correct: the display logic checks moderation_label
+  // first, so leaving it null after a confirm-click would mis-label the row
+  // as "you rejected" even though is_false_positive=false.
+  const { error } = await sb.from("detections").update({
+    is_false_positive: isFP,
+    verified: true,
+    verified_by: "moderator_review",
+    verified_at: new Date().toISOString(),
+    moderation_label: isFP ? "rejected" : "confirmed",
+    notes: noteParts.join(" | "),
+  }).eq("id", detId);
+
+  // Sticky reject: when marking FP, also exclude the underlying content_image
+  // so future scans can't resurrect this hit in the feed.
+  if (!error && isFP) {
+    try {
+      const { data: detRow } = await sb.from("detections")
+        .select("content_image_id").eq("id", detId).maybeSingle();
+      if (detRow?.content_image_id) {
+        await sb.from("content_images").update({
+          excluded_at: new Date().toISOString(),
+          excluded_by: "moderator_review",
+          excluded_reason: "dashboard:rejected",
+        }).eq("id", detRow.content_image_id).is("excluded_at", null);
+      }
+    } catch (e) {
+      console.warn("content_images exclude failed:", e);
+    }
+  }
+
+  if (error) {
+    btn.disabled = false;
+    btn.textContent = origText;
+    alert("Update failed: " + error.message);
+    return;
+  }
+  if (det) {
+    det.is_false_positive = isFP;
+    det.verified = true;
+    det.verified_by = "moderator_review";
+    det.moderation_label = isFP ? "rejected" : "confirmed";
+  }
+  applyFilters();
+});
+
+document.querySelectorAll(".time-tile").forEach(t => {
+  t.addEventListener("click", () => setTimeFilter(t.dataset.period));
+});
+
+// Period quick-filter buttons (Vandaag / Gisteren / Deze week / Deze maand / Laatste 30d / Alles)
+document.querySelectorAll("#period-bar .period-btn").forEach(b => {
+  b.addEventListener("click", () => applyPeriod(b.dataset.period));
+});
+// Content-type filter buttons (All / Posts / Reels / TikToks / Stories)
+document.querySelectorAll("#ctype-bar .period-btn").forEach(b => {
+  b.addEventListener("click", () => applyContentType(b.dataset.ctype));
+});
+document.querySelectorAll(".trend-chart .chart-toggle button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".trend-chart .chart-toggle button").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    currentBucket = b.dataset.bucket;
+    renderTrendChart();
+  });
+});
+
+// Demo mode: ?demo=1 surfaces a sales banner above the dashboard. Doesn't
+// change any data — just frames the page for prospects.
+(function () {
+  const isDemo = new URL(location.href).searchParams.get("demo") === "1";
+  if (isDemo) {
+    const b = document.getElementById("demo-banner");
+    if (b) b.style.display = "flex";
+  }
+})();
+
+load();
+
+let lastRefreshIds = new Set();
+setInterval(async () => {
+  document.getElementById("live-status").textContent = "REFRESHING";
+  const prevCount = allDetections.length;
+  await load();
+  const newOnes = allDetections.filter(d => !lastRefreshIds.has(d.detection_id)).length;
+  lastRefreshIds = new Set(allDetections.map(d => d.detection_id));
+  const since = newOnes > 0 ? `+${newOnes} new` : "LIVE";
+  document.getElementById("live-status").textContent = since;
+}, 60000);
+setTimeout(() => { lastRefreshIds = new Set(allDetections.map(d => d.detection_id)); }, 5000);
+</script>
+
+</body>
+</html>

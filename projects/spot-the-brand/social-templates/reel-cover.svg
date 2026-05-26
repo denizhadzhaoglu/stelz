@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920" style="font-family: -apple-system, Helvetica, sans-serif;">
+  <!-- Reel cover: 9:16, 1080×1920. Use for grid thumbnail when reel is in the grid. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0A0A0A"/>
+      <stop offset="100%" stop-color="#1a0000"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="55%" r="55%">
+      <stop offset="0%" stop-color="#FF1300" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#FF1300" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1080" height="1920" fill="url(#bg)"/>
+  <rect width="1080" height="1920" fill="url(#glow)"/>
+
+  <!-- scan crosshair -->
+  <line x1="0" y1="960" x2="1080" y2="960" stroke="#FF1300" stroke-opacity="0.12"/>
+  <line x1="540" y1="0" x2="540" y2="1920" stroke="#FF1300" stroke-opacity="0.12"/>
+  <circle cx="540" cy="960" r="220" fill="none" stroke="#FF1300" stroke-opacity="0.14"/>
+  <circle cx="540" cy="960" r="340" fill="none" stroke="#FF1300" stroke-opacity="0.08"/>
+  <circle cx="540" cy="960" r="6" fill="#FF1300"/>
+
+  <!-- Top label -->
+  <text x="540" y="120" text-anchor="middle" font-family="monospace" font-size="22" fill="#FF1300" letter-spacing="3">DETECTION DROP · 04/06</text>
+
+  <!-- Bounding box around middle product placeholder -->
+  <rect x="290" y="700" width="500" height="500" fill="none" stroke="#FF1300" stroke-width="3" stroke-dasharray="10 6"/>
+  <text x="290" y="690" font-family="monospace" font-size="22" fill="#FF1300" letter-spacing="1">DETECTED · 0.94</text>
+  <!-- placeholder for product -->
+  <text x="540" y="970" text-anchor="middle" font-family="monospace" font-size="20" fill="#FF1300" fill-opacity="0.45">[ STELZ packshot ]</text>
+
+  <!-- Big headline lower -->
+  <text x="540" y="1370" text-anchor="middle" font-size="78" font-weight="800" fill="white" letter-spacing="-2.5">Your brand is in</text>
+  <text x="540" y="1450" text-anchor="middle" font-size="78" font-weight="800" fill="white" letter-spacing="-2.5">more posts than</text>
+  <text x="540" y="1530" text-anchor="middle" font-size="78" font-weight="800" fill="#FF1300" letter-spacing="-2.5">you think.</text>
+
+  <!-- bottom wordmark -->
+  <text x="540" y="1820" text-anchor="middle" font-size="32" font-weight="800" fill="white">Spot the Brand<tspan fill="#FF1300">.</tspan></text>
+  <text x="540" y="1862" text-anchor="middle" font-size="14" font-weight="500" fill="white" fill-opacity="0.6" letter-spacing="2">SPOTYOURBRAND.COM</text>
+</svg>

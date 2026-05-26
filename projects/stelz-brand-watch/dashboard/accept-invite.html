@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Accept invite · Spot the Brand</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --bg: #0a0a0a; --panel: #141414; --border: #2a2a2a; --text: #ededed; --muted: #888; --accent: #FF1300; --good: #4ade80; --warn: #fbbf24; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; line-height: 1.55; min-height: 100vh; }
+  body { display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 36px; max-width: 460px; width: 100%; }
+  .logo { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  .logo span { color: var(--accent); }
+  h1 { font-size: 22px; margin: 18px 0 8px; letter-spacing: -0.02em; }
+  p { color: var(--muted); font-size: 14px; margin-bottom: 18px; }
+  .invite-detail { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 18px; font-size: 13px; }
+  .invite-detail b { color: var(--text); font-weight: 600; }
+  input { width: 100%; padding: 11px 13px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: 14px; font-family: inherit; margin-bottom: 12px; }
+  input:focus { outline: none; border-color: var(--accent); }
+  button { width: 100%; padding: 12px 18px; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 4px; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
+  .status { font-size: 13px; min-height: 18px; margin-top: 12px; text-align: center; }
+  .status.error { color: var(--accent); }
+  .status.good { color: var(--good); }
+  .divider { text-align: center; color: var(--muted); font-size: 11px; margin: 16px 0; text-transform: uppercase; letter-spacing: 0.1em; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">Spot the Brand<span>.</span></div>
+  <h1 id="title">Joining team…</h1>
+  <p id="subtitle">Verifying your invite.</p>
+
+  <div id="invite-box" style="display: none;">
+    <div class="invite-detail" id="invite-detail"></div>
+
+    <div id="auth-section">
+      <p>Sign in to accept this invite.</p>
+      <input id="auth-email" type="email" placeholder="Your email">
+      <button id="send-magic-link">Email me a sign-in link</button>
+      <div class="divider">or</div>
+      <button id="google-signin" class="ghost">Continue with Google</button>
+    </div>
+
+    <div id="accept-section" style="display: none;">
+      <button id="accept-btn">Accept invite</button>
+      <button id="decline-btn" class="ghost" style="margin-top: 8px;">Decline</button>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+</div>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+const token = new URL(location.href).searchParams.get("token");
+const $ = id => document.getElementById(id);
+
+function setStatus(msg, cls = "") {
+  const s = $("status");
+  s.textContent = msg;
+  s.className = "status " + cls;
+}
+
+if (!token) {
+  $("title").textContent = "Invalid invite";
+  $("subtitle").textContent = "This link is missing a token. Ask the person who invited you to resend it.";
+} else {
+  load();
+}
+
+async function load() {
+  const { data: inv, error } = await sb.from("brand_invites")
+    .select("id, email, role, status, expires_at, brand:brands(name, slug)")
+    .eq("token", token).maybeSingle();
+
+  if (error || !inv) {
+    $("title").textContent = "Invite not found";
+    $("subtitle").textContent = "This invite link is invalid or has been revoked.";
+    return;
+  }
+  if (inv.status !== "pending") {
+    $("title").textContent = "Invite already used";
+    $("subtitle").textContent = `Status: ${inv.status}. Ask for a new invite if needed.`;
+    return;
+  }
+  if (new Date(inv.expires_at) < new Date()) {
+    $("title").textContent = "Invite expired";
+    $("subtitle").textContent = `This invite expired on ${new Date(inv.expires_at).toISOString().slice(0,10)}. Ask the person who invited you to resend it.`;
+    return;
+  }
+
+  $("title").textContent = `Join ${inv.brand?.name || "this brand"}`;
+  $("subtitle").textContent = `You've been invited as ${inv.role}.`;
+  $("invite-detail").innerHTML = `
+    <b>${inv.brand?.name || "Brand"}</b><br>
+    Role: ${inv.role}<br>
+    For: ${inv.email}
+  `;
+  $("invite-box").style.display = "block";
+  $("auth-email").value = inv.email;
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) showAcceptSection(session, inv);
+
+  sb.auth.onAuthStateChange((_evt, sess) => { if (sess) showAcceptSection(sess, inv); });
+}
+
+function showAcceptSection(session, inv) {
+  if (session.user.email?.toLowerCase() !== inv.email.toLowerCase()) {
+    $("auth-section").style.display = "block";
+    $("accept-section").style.display = "none";
+    setStatus(`This invite is for ${inv.email}, but you're signed in as ${session.user.email}.`, "error");
+    return;
+  }
+  $("auth-section").style.display = "none";
+  $("accept-section").style.display = "block";
+  setStatus(`Signed in as ${session.user.email}.`, "good");
+}
+
+$("send-magic-link").addEventListener("click", async () => {
+  const email = $("auth-email").value.trim().toLowerCase();
+  if (!email) { setStatus("Enter your email first.", "error"); return; }
+  setStatus("Sending sign-in link…");
+  const { error } = await sb.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: location.href },
+  });
+  setStatus(error ? "Failed: " + error.message : "Check your inbox for the sign-in link.", error ? "error" : "good");
+});
+
+$("google-signin").addEventListener("click", async () => {
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: location.href },
+  });
+  if (error) setStatus("Google sign-in failed: " + error.message, "error");
+});
+
+$("accept-btn").addEventListener("click", async (e) => {
+  e.target.disabled = true; e.target.textContent = "Accepting…";
+  const { data, error } = await sb.rpc("accept_brand_invite", { p_token: token });
+  if (error) {
+    e.target.disabled = false; e.target.textContent = "Accept invite";
+    setStatus("Failed: " + error.message, "error");
+    return;
+  }
+  const slug = data?.slug || data;
+  setStatus("Accepted. Redirecting…", "good");
+  setTimeout(() => location.href = `/?brand=${slug || ""}`, 800);
+});
+
+$("decline-btn").addEventListener("click", async (e) => {
+  if (!confirm("Decline this invite? You can ask for a new one later.")) return;
+  e.target.disabled = true;
+  await sb.from("brand_invites").update({ status: "declined" }).eq("token", token);
+  setStatus("Invite declined.", "good");
+  $("accept-section").style.display = "none";
+});
+</script>
+
+</body>
+</html>

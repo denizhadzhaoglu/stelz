@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Checkout · Spot the Brand</title>
+<script src="https://js.stripe.com/v3/"></script>
+<style>
+  :root { --bg: #0a0a0a; --panel: #141414; --border: #2a2a2a; --text: #ededed; --muted: #888; --accent: #FF1300; --good: #4ade80; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; line-height: 1.55; }
+  .container { max-width: 520px; margin: 80px auto; padding: 0 24px; }
+  .logo { font-size: 20px; font-weight: 700; margin-bottom: 30px; text-align: center; }
+  .logo span { color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 36px; text-align: center; }
+  h1 { font-size: 26px; margin-bottom: 12px; letter-spacing: -0.02em; }
+  p { color: var(--muted); margin-bottom: 24px; font-size: 15px; }
+  .plan-summary { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 22px 0; text-align: left; }
+  .plan-summary .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+  .plan-summary .row.total { font-weight: 600; font-size: 16px; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 10px; }
+  button { width: 100%; padding: 14px 22px; background: var(--accent); color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 500; cursor: pointer; }
+  button:hover { opacity: 0.9; }
+  .small { font-size: 12px; color: var(--muted); margin-top: 18px; }
+  .test-banner { background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); padding: 10px; border-radius: 8px; font-size: 12px; color: var(--good); margin-bottom: 20px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="logo">Spot the Brand<span>.</span></div>
+  <div class="panel">
+    <div class="test-banner">⚙️ Stripe TEST mode — no real charges</div>
+    <h1>Confirm your subscription</h1>
+    <p>Your 14-day free trial starts after this confirmation.</p>
+
+    <div class="plan-summary">
+      <div class="row"><span>Plan</span><strong id="plan-name">Pro</strong></div>
+      <div class="row"><span>Trial</span><strong>14 days free</strong></div>
+      <div class="row"><span>After trial</span><strong id="plan-price">€1.500 / month</strong></div>
+      <div class="row"><span>Backfill</span><strong id="backfill-line">Standard 90 days</strong></div>
+      <div class="row total"><span>Due today</span><strong>€0,00</strong></div>
+    </div>
+
+    <button id="checkout-btn">Continue to Stripe →</button>
+    <p class="small">By continuing you agree to our terms. Cancel any time during trial — no charge.</p>
+    <p class="small" id="status"></p>
+  </div>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const plan = params.get("plan") || "pro";
+const backfill = params.get("backfill") === "premium";
+const PRICES = {
+  starter: { name: "Starter", price: "€500 / month" },
+  pro: { name: "Pro", price: "€1.500 / month" },
+  enterprise: { name: "Enterprise", price: "Custom contract" },
+};
+document.getElementById("plan-name").textContent = PRICES[plan].name;
+document.getElementById("plan-price").textContent = PRICES[plan].price;
+document.getElementById("backfill-line").textContent = backfill ? "Premium 1 year (+€2.500)" : "Standard 7-90 days";
+
+document.getElementById("checkout-btn").addEventListener("click", async () => {
+  const status = document.getElementById("status");
+  status.textContent = "Redirecting to Stripe Checkout...";
+
+  // PROD: this would POST to a Supabase Edge Function that creates a Stripe Checkout Session
+  // server-side using the secret key and returns the session URL.
+  // For now: simulated redirect.
+  setTimeout(() => {
+    status.textContent = "🚧 Stripe webhook + Edge Function not yet wired. In production: redirect to checkout.stripe.com/c/pay/...";
+    status.style.color = "#fbbf24";
+  }, 600);
+});
+</script>
+
+</body>
+</html>

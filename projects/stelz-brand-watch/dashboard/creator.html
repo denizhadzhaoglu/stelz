@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Creator profile · Spot the Brand</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --bg: #0a0a0a; --panel: #141414; --border: #2a2a2a; --text: #ededed; --muted: #888; --accent: #FF1300; --good: #4ade80; --warn: #fbbf24; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; line-height: 1.5; min-height: 100vh; }
+  .topbar { padding: 14px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .logo { font-size: 18px; font-weight: 700; }
+  .logo span { color: var(--accent); }
+  .topbar a { color: var(--muted); font-size: 13px; text-decoration: none; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; }
+  .topbar a:hover { color: var(--accent); border-color: var(--accent); }
+  .container { max-width: 1080px; margin: 0 auto; padding: 32px 24px; }
+  .hero { display: grid; grid-template-columns: 220px 1fr; gap: 32px; align-items: start; margin-bottom: 38px; }
+  .hero .avatar { aspect-ratio: 1; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 56px; font-weight: 800; color: var(--muted); }
+  .hero .avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .hero h1 { font-size: 36px; letter-spacing: -0.02em; margin-bottom: 6px; }
+  .hero .platform { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .hero .stat-row { display: flex; gap: 28px; flex-wrap: wrap; }
+  .hero .stat .num { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .hero .stat .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+  .badges { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); }
+  .badge.tier-tier_1 { color: #fbbf24; border-color: #fbbf24; }
+  .badge.tier-tier_2 { color: #60a5fa; border-color: #60a5fa; }
+  .badge.tier-tier_3 { color: var(--muted); }
+  .badge.score { color: var(--accent); border-color: var(--accent); }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 32px 0 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .hit { aspect-ratio: 1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); position: relative; cursor: pointer; }
+  .hit img { width: 100%; height: 100%; object-fit: cover; }
+  .hit .pill { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.7); backdrop-filter: blur(6px); color: white; padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; }
+  .hit .conf { position: absolute; bottom: 8px; right: 8px; background: var(--accent); color: white; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+  .empty { text-align: center; padding: 40px 24px; color: var(--muted); border: 1px dashed var(--border); border-radius: 12px; }
+  .timeline { position: relative; padding-left: 22px; }
+  .timeline::before { content: ""; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 1px; background: var(--border); }
+  .timeline-item { padding: 6px 0 14px; position: relative; }
+  .timeline-item::before { content: ""; position: absolute; left: -22px; top: 11px; width: 11px; height: 11px; background: var(--accent); border-radius: 50%; }
+  .timeline-item .date { font-size: 11px; color: var(--muted); }
+  .timeline-item .what { font-size: 13px; margin-top: 2px; }
+  .cta-row { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px; margin-top: 36px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .cta-row .copy { font-size: 13px; color: var(--muted); }
+  .cta-row a { background: var(--accent); color: white; padding: 9px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">Spot the Brand<span>.</span></div>
+  <div>
+    <a id="back-link" href="/">Back to dashboard</a>
+    <a href="/landing.html">Try for your brand</a>
+  </div>
+</div>
+
+<div class="container" id="container"><div class="empty">Loading creator profile…</div></div>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+const params = new URL(location.href).searchParams;
+const HANDLE = (params.get("handle") || "").replace(/^@/, "");
+const BRAND_SLUG = params.get("brand") || "stelz";
+
+function fmt(n) { return n != null ? n.toLocaleString("nl-NL") : "—"; }
+
+async function load() {
+  const container = document.getElementById("container");
+  if (!HANDLE) { container.innerHTML = `<div class="empty">No creator handle specified. Use ?handle=name</div>`; return; }
+  document.getElementById("back-link").href = `/?brand=${BRAND_SLUG}`;
+
+  const { data: brand } = await sb.from("brands").select("id, name, slug").eq("slug", BRAND_SLUG).maybeSingle();
+  if (!brand) { container.innerHTML = `<div class="empty">Brand not found.</div>`; return; }
+
+  // Creator core info
+  const { data: creators } = await sb.from("creators")
+    .select("id, handle, platform, category, tier, relevance_score, ai_summary, follower_count, last_scraped_at, archived_at")
+    .eq("brand_id", brand.id).ilike("handle", HANDLE).limit(1);
+  const c = (creators || [])[0];
+  if (!c) { container.innerHTML = `<div class="empty">No creator @${HANDLE} found for brand ${brand.name}.</div>`; return; }
+
+  // All hits via the rich view
+  const { data: hits } = await sb.from("v_detections_full")
+    .select("detection_id, creator_handle, platform, product_line, confidence, image_url, stored_path, post_url, post_caption, posted_at, likes_count, comments_count, size_in_frame, is_false_positive, detected")
+    .eq("brand_id", brand.id)
+    .eq("creator_handle", c.handle)
+    .eq("detected", true)
+    .order("posted_at", { ascending: false })
+    .limit(120);
+
+  const validHits = (hits || []).filter(h => !h.is_false_positive);
+  const totalHits = validHits.length;
+  const totalReach = validHits.reduce((s, h) => s + (h.likes_count || 0), 0);
+  const productMix = {};
+  for (const h of validHits) productMix[h.product_line || "logo_only"] = (productMix[h.product_line || "logo_only"] || 0) + 1;
+  const firstSeen = validHits.length ? validHits[validHits.length - 1].posted_at : null;
+  const lastSeen = validHits.length ? validHits[0].posted_at : null;
+
+  const avatarLetter = (c.handle || "?")[0].toUpperCase();
+  const previewImg = validHits.find(h => h.stored_path || h.image_url);
+  const heroImg = previewImg
+    ? (previewImg.stored_path
+        ? `${SUPABASE_URL}/storage/v1/object/public/brand-watch-thumbnails/${previewImg.stored_path}`
+        : previewImg.image_url)
+    : null;
+
+  container.innerHTML = `
+    <div class="hero">
+      <div class="avatar">${heroImg ? `<img src="${heroImg}" referrerpolicy="no-referrer">` : avatarLetter}</div>
+      <div>
+        <h1>@${c.handle}</h1>
+        <div class="platform">${c.platform || ""}${c.category ? " · " + c.category : ""}${c.archived_at ? ' · <span style="color:var(--warn);">archived</span>' : ""}</div>
+        <div class="stat-row">
+          <div class="stat"><div class="num">${fmt(totalHits)}</div><div class="lbl">${BRAND_SLUG.toUpperCase()} hits</div></div>
+          <div class="stat"><div class="num">${fmt(c.follower_count)}</div><div class="lbl">Followers</div></div>
+          <div class="stat"><div class="num">${fmt(totalReach)}</div><div class="lbl">Combined likes</div></div>
+          ${c.relevance_score != null ? `<div class="stat"><div class="num">${Number(c.relevance_score).toFixed(1)}</div><div class="lbl">AI relevance</div></div>` : ""}
+        </div>
+        <div class="badges">
+          ${c.tier ? `<span class="badge tier-${c.tier}">${c.tier.replace("_", " ")}</span>` : ""}
+          ${Object.entries(productMix).map(([k, v]) => `<span class="badge">${k.replace(/_/g, " ")} × ${v}</span>`).join("")}
+        </div>
+        ${c.ai_summary?.audience_fit_rationale ? `<p style="color: var(--muted); font-size: 13px; margin-top: 14px; line-height: 1.6;">${c.ai_summary.audience_fit_rationale.replace(/</g, "&lt;").slice(0, 320)}</p>` : ""}
+      </div>
+    </div>
+
+    <h2>Detection gallery (${totalHits} hits)</h2>
+    ${validHits.length ? `<div class="grid">
+      ${validHits.slice(0, 24).map(h => {
+        const img = h.stored_path
+          ? `${SUPABASE_URL}/storage/v1/object/public/brand-watch-thumbnails/${h.stored_path}`
+          : h.image_url;
+        const product = (h.product_line || "logo_only").replace(/_/g, " ");
+        return `<a class="hit" href="${h.post_url || '#'}" target="_blank" rel="noopener noreferrer">
+          <img src="${img}" referrerpolicy="no-referrer" loading="lazy">
+          <span class="pill">${product}</span>
+          <span class="conf">${Math.round((h.confidence || 0) * 100)}%</span>
+        </a>`;
+      }).join("")}
+    </div>` : `<div class="empty">No verified hits yet.</div>`}
+
+    <h2>Timeline</h2>
+    <div class="timeline">
+      ${validHits.slice(0, 12).map(h => {
+        const d = h.posted_at ? new Date(h.posted_at).toLocaleDateString("nl-NL", { day: "numeric", month: "short", year: "numeric" }) : "";
+        const product = (h.product_line || "logo_only").replace(/_/g, " ");
+        const cap = (h.post_caption || "").slice(0, 80).replace(/</g, "&lt;");
+        return `<div class="timeline-item">
+          <div class="date">${d}</div>
+          <div class="what"><b>${product}</b> · ${cap || '<i>no caption</i>'} <a href="${h.post_url || '#'}" target="_blank" style="color: var(--accent); text-decoration: none;">→</a></div>
+        </div>`;
+      }).join("")}
+      ${firstSeen ? `<div class="timeline-item"><div class="date">${new Date(firstSeen).toLocaleDateString("nl-NL", { day: "numeric", month: "short", year: "numeric" })}</div><div class="what" style="color: var(--muted);">First seen for ${brand.name}</div></div>` : ""}
+    </div>
+
+    <div class="cta-row">
+      <div class="copy">Want this kind of intel for your brand?</div>
+      <a href="/landing.html">Start free trial →</a>
+    </div>
+
+    <div class="section" style="margin-top: 22px; padding: 22px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px;">
+      <h2 style="margin: 0 0 8px;">Outreach DM helper</h2>
+      <p style="color: var(--muted); font-size: 13px; margin-bottom: 14px;">Generate three personalized DM drafts based on this creator's brand activity. Edit before sending.</p>
+      <button id="gen-dm-btn" style="padding: 10px 18px; background: var(--accent); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">Generate DM drafts</button>
+      <div id="dm-status" style="font-size: 12px; color: var(--muted); margin-top: 10px; min-height: 16px;"></div>
+      <div id="dm-drafts" style="margin-top: 14px;"></div>
+    </div>`;
+
+  document.getElementById("gen-dm-btn")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget; btn.disabled = true; btn.textContent = "Generating…";
+    const status = document.getElementById("dm-status");
+    const dest = document.getElementById("dm-drafts");
+    status.textContent = "";
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) { status.textContent = "Sign in first to generate DMs."; status.style.color = "var(--accent)"; btn.disabled = false; btn.textContent = "Generate DM drafts"; return; }
+    try {
+      const r = await fetch(`${SUPABASE_URL}/functions/v1/creator-dm-draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ creator_id: c.id }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.error) { status.textContent = data.error || "Failed"; status.style.color = "var(--accent)"; return; }
+      dest.innerHTML = (data.drafts || []).map((d, i) => `
+        <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 10px;">
+          <div style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;">${d.tone || ('Draft ' + (i+1))}</div>
+          <div style="white-space: pre-wrap; font-size: 14px; line-height: 1.6;">${(d.message || '').replace(/</g, '&lt;')}</div>
+          <button data-copy="${i}" style="margin-top: 10px; padding: 6px 12px; font-size: 12px; background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer;">Copy</button>
+        </div>`).join("");
+      dest.querySelectorAll("[data-copy]").forEach((cBtn, idx) => {
+        cBtn.addEventListener("click", async () => {
+          try { await navigator.clipboard.writeText(data.drafts[idx].message); cBtn.textContent = "Copied ✓"; setTimeout(() => cBtn.textContent = "Copy", 1500); } catch {}
+        });
+      });
+    } catch (err) {
+      status.textContent = "Error: " + err.message; status.style.color = "var(--accent)";
+    } finally {
+      btn.disabled = false; btn.textContent = "Generate DM drafts";
+    }
+  });
+}
+
+load().catch(e => {
+  document.getElementById("container").innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+});
+</script>
+
+</body>
+</html>

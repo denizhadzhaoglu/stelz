@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>This week on Spot the Brand</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --accent: #FF1300; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #000; color: #fff; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; min-height: 100vh; overflow: hidden; touch-action: pan-x; }
+  .stage { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .progress-bar { position: fixed; top: 8px; left: 8px; right: 8px; display: flex; gap: 4px; z-index: 30; }
+  .progress-bar .seg { flex: 1; height: 3px; background: rgba(255,255,255,0.25); border-radius: 999px; overflow: hidden; }
+  .progress-bar .seg .fill { height: 100%; background: white; width: 0; transition: width 0.1s linear; }
+  .progress-bar .seg.done .fill { width: 100%; }
+  .topbar { position: fixed; top: 24px; left: 16px; right: 16px; display: flex; justify-content: space-between; align-items: center; z-index: 30; }
+  .logo { font-size: 14px; font-weight: 700; color: white; opacity: 0.9; }
+  .logo span { color: var(--accent); }
+  .close { color: white; opacity: 0.7; font-size: 22px; text-decoration: none; padding: 4px 10px; }
+  .slide { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+  .slide.active { opacity: 1; pointer-events: auto; }
+  .slide .hero-img { position: absolute; inset: 0; background-size: cover; background-position: center; filter: brightness(0.55); }
+  .slide .content { position: relative; z-index: 2; max-width: 480px; padding: 32px; text-align: center; }
+  .slide .pill { display: inline-block; background: rgba(255,255,255,0.18); backdrop-filter: blur(8px); padding: 5px 14px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 20px; }
+  .slide h1 { font-size: 46px; letter-spacing: -0.025em; line-height: 1.05; margin-bottom: 16px; }
+  .slide h1 b { color: var(--accent); font-weight: 800; }
+  .slide .creator { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+  .slide .caption { font-size: 14px; color: rgba(255,255,255,0.85); line-height: 1.55; max-height: 100px; overflow: hidden; }
+  .slide .meta { font-size: 11px; color: rgba(255,255,255,0.65); margin-top: 22px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .slide .cta { margin-top: 26px; display: inline-block; background: var(--accent); color: white; padding: 13px 24px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; }
+  .slide .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 20px; }
+  .slide .stat-grid .stat .num { font-size: 36px; font-weight: 800; line-height: 1; }
+  .slide .stat-grid .stat .lbl { font-size: 10px; opacity: 0.7; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+  .tap-zone { position: fixed; top: 0; bottom: 0; width: 35%; z-index: 20; cursor: pointer; }
+  .tap-zone.left { left: 0; }
+  .tap-zone.right { right: 0; }
+  .empty { color: rgba(255,255,255,0.6); text-align: center; padding: 40px; }
+  .email-form { margin-top: 22px; display: flex; gap: 8px; max-width: 360px; margin-left: auto; margin-right: auto; }
+  .email-form input { flex: 1; padding: 11px 13px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.25); color: white; border-radius: 8px; font-size: 13px; }
+  .email-form input::placeholder { color: rgba(255,255,255,0.5); }
+  .email-form button { padding: 11px 18px; background: white; color: black; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="progress-bar" id="progress-bar"></div>
+<div class="topbar">
+  <div class="logo">Spot the Brand<span>.</span></div>
+  <a class="close" href="/" id="close">✕</a>
+</div>
+
+<div class="tap-zone left" id="tap-prev"></div>
+<div class="tap-zone right" id="tap-next"></div>
+
+<div class="stage" id="stage"><div class="empty">Loading…</div></div>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+const BRAND_SLUG = new URL(location.href).searchParams.get("brand") || "stelz";
+const SLIDE_MS = 6000;
+
+let slides = [];
+let idx = 0;
+let timer = null;
+let progressTimer = null;
+let progressStart = 0;
+let paused = false;
+
+function fmt(n) { return n != null ? n.toLocaleString("nl-NL") : "—"; }
+
+async function load() {
+  const { data: brand } = await sb.from("brands").select("id, name").eq("slug", BRAND_SLUG).maybeSingle();
+  if (!brand) { document.getElementById("stage").innerHTML = `<div class="empty">Brand not found.</div>`; return; }
+
+  const since = new Date(Date.now() - 7 * 86400000).toISOString();
+  const { data: hits } = await sb.from("v_detections_full")
+    .select("detection_id, creator_handle, platform, product_line, confidence, stored_path, image_url, post_url, post_caption, posted_at, follower_count, creator_tier, size_in_frame, is_primary_subject, likes_count, is_false_positive")
+    .eq("brand_id", brand.id)
+    .eq("detected", true)
+    .gte("posted_at", since)
+    .gte("confidence", 0.7)
+    .order("posted_at", { ascending: false })
+    .limit(150);
+
+  const sizeRank = { dominant: 3, large: 2, medium: 1 };
+  const tierRank = { tier_1: 3, tier_2: 2, tier_3: 1 };
+  const scored = (hits || []).filter(h => !h.is_false_positive && (h.image_url || h.stored_path))
+    .map(h => ({ ...h, _score: (tierRank[h.creator_tier] || 0) * 100 + (sizeRank[h.size_in_frame] || 0) * 25 + (h.confidence || 0) * 10 + Math.min(40, (h.likes_count || 0) / 200) }))
+    .sort((a, b) => b._score - a._score);
+  // Dedup creators
+  const seen = new Set();
+  const top = [];
+  for (const h of scored) { if (seen.has(h.creator_handle)) continue; seen.add(h.creator_handle); top.push(h); if (top.length >= 8) break; }
+
+  // Build intro + outro slides
+  const totalHits = scored.length;
+  const uniq = new Set(scored.map(s => s.creator_handle)).size;
+  const reach = scored.reduce((s, h) => s + (h.follower_count || 0), 0);
+
+  slides = [
+    {
+      type: "intro",
+      bgImage: top[0] ? imgUrlOf(top[0]) : null,
+      html: `<div class="content">
+        <div class="pill">This week · ${brand.name}</div>
+        <h1>The brand was <b>spotted</b> ${fmt(totalHits)} times</h1>
+        <div class="stat-grid">
+          <div class="stat"><div class="num">${fmt(totalHits)}</div><div class="lbl">hits</div></div>
+          <div class="stat"><div class="num">${fmt(uniq)}</div><div class="lbl">creators</div></div>
+          <div class="stat"><div class="num">${reach >= 1000 ? Math.round(reach/1000) + "k" : fmt(reach)}</div><div class="lbl">combined reach</div></div>
+        </div>
+        <div class="meta">Curated by Spot the Brand · refreshed daily</div>
+      </div>`,
+    },
+    ...top.map(h => ({
+      type: "hit",
+      bgImage: imgUrlOf(h),
+      html: `<div class="content">
+        <div class="pill">${(h.product_line || "logo only").replace(/_/g, " ")} · ${Math.round((h.confidence || 0) * 100)}% confidence</div>
+        <div class="creator">@${h.creator_handle}</div>
+        <p class="caption">${(h.post_caption || "").slice(0, 180).replace(/</g, "&lt;") || "<i style='opacity:.6;'>No caption</i>"}</p>
+        <div class="meta">${h.platform || ""}${h.posted_at ? " · " + new Date(h.posted_at).toLocaleDateString("nl-NL", { day: "numeric", month: "short" }) : ""}${h.follower_count ? " · " + fmt(h.follower_count) + " followers" : ""}</div>
+        <a class="cta" href="${h.post_url || '#'}" target="_blank">View the post →</a>
+      </div>`,
+    })),
+    {
+      type: "outro",
+      bgImage: top[0] ? imgUrlOf(top[0]) : null,
+      html: `<div class="content">
+        <div class="pill">Spot the Brand</div>
+        <h1>This is what <b>your brand</b> could be seeing.</h1>
+        <p class="caption">Computer vision plus AI relevance scoring. We find every mention of your product in social content — no tagging required.</p>
+        <form class="email-form" id="email-form" onsubmit="event.preventDefault(); window.parent.postMessage({type:'spot_email_signup',email:document.getElementById('outro-email').value}, '*'); document.getElementById('email-status').textContent='Thanks — we'll be in touch.';">
+          <input id="outro-email" type="email" placeholder="you@brand.com" required>
+          <button type="submit">Get a demo</button>
+        </form>
+        <div class="meta" id="email-status" style="color: rgba(255,255,255,0.85);"></div>
+        <div style="margin-top:18px;"><a class="cta" href="/landing.html" style="background:white;color:black;">Open the platform →</a></div>
+      </div>`,
+    },
+  ];
+
+  render();
+  startTimer();
+}
+
+function imgUrlOf(h) {
+  return h.stored_path
+    ? `${SUPABASE_URL}/storage/v1/object/public/brand-watch-thumbnails/${h.stored_path}`
+    : h.image_url;
+}
+
+function render() {
+  const stage = document.getElementById("stage");
+  stage.innerHTML = slides.map((s, i) => `
+    <div class="slide ${i === idx ? "active" : ""}" data-idx="${i}">
+      ${s.bgImage ? `<div class="hero-img" style="background-image: url('${s.bgImage}');"></div>` : '<div class="hero-img" style="background:linear-gradient(135deg,#FF1300,#0a0a0a);"></div>'}
+      ${s.html}
+    </div>`).join("");
+
+  const pb = document.getElementById("progress-bar");
+  pb.innerHTML = slides.map((_, i) => `<div class="seg ${i < idx ? 'done' : ''}"><div class="fill"></div></div>`).join("");
+  if (slides[idx]) {
+    const fills = pb.querySelectorAll(".seg .fill");
+    if (fills[idx]) fills[idx].style.width = "0%";
+  }
+}
+
+function startTimer() {
+  clearInterval(progressTimer);
+  clearTimeout(timer);
+  progressStart = Date.now();
+  progressTimer = setInterval(() => {
+    if (paused) { progressStart = Date.now() - elapsed; return; }
+    const elapsed = Date.now() - progressStart;
+    const fills = document.querySelectorAll(".progress-bar .seg .fill");
+    if (fills[idx]) fills[idx].style.width = Math.min(100, (elapsed / SLIDE_MS) * 100) + "%";
+  }, 80);
+  timer = setTimeout(() => next(), SLIDE_MS);
+}
+
+function next() {
+  if (idx < slides.length - 1) { idx++; render(); startTimer(); }
+  else { clearInterval(progressTimer); clearTimeout(timer); }
+}
+function prev() {
+  if (idx > 0) { idx--; render(); startTimer(); }
+}
+
+document.getElementById("tap-next").addEventListener("click", next);
+document.getElementById("tap-prev").addEventListener("click", prev);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowRight" || e.key === " ") next();
+  if (e.key === "ArrowLeft") prev();
+  if (e.key === "Escape") location.href = "/";
+});
+
+load().catch(e => {
+  document.getElementById("stage").innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,490 @@
+openapi: 3.0.3
+info:
+  title: Spot the Brand API
+  description: |
+    Visual brand monitoring as a service.
+
+    This API exposes a curated set of brand monitoring operations:
+    pulling recent hits, inspecting creators, triggering scans,
+    and managing brand configuration. It is the source of truth for
+    both the `spot` CLI and the MCP server (`mcp.spotyourbrand.com`).
+
+    Most endpoints scope by `brand_slug`. Authentication is via Bearer
+    token (either a Supabase JWT for end-users, or a service token
+    for staff/agent integrations).
+  version: 0.1.0
+  contact:
+    name: Spot the Brand
+    url: https://spotyourbrand.com
+servers:
+  - url: https://spotyourbrand.com/api/v1
+    description: Production
+  - url: http://localhost:3000/api/v1
+    description: Local dev
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: hits
+    description: Detection hits — the core monitoring surface
+  - name: creators
+    description: Creators tracked for a brand
+  - name: brand
+    description: Brand-level configuration and stats
+  - name: ops
+    description: Operations and pipeline triggers
+  - name: discovery
+    description: Discovery / candidate management
+  - name: system
+    description: System-wide health and diagnostics
+
+paths:
+  /system/health:
+    get:
+      tags: [system]
+      operationId: get_system_health
+      summary: Live system health snapshot across all invariants
+      description: |
+        Runs every structural and freshness check the QA harness runs
+        (`tests/run_all.sh`), live, and returns the result as JSON. Use
+        this to drive uptime monitors, status pages, or `spot system
+        health` from a CLI.
+
+        Returns HTTP 200 when overall status is ok or warn; HTTP 503
+        when any check has severity=fail.
+      responses:
+        '200':
+          description: Healthy or has warnings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemHealth' }
+        '503':
+          description: One or more critical invariants failing
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemHealth' }
+
+  /brands:
+    get:
+      tags: [brand]
+      operationId: list_brands
+      summary: List brands the caller has access to
+      description: |
+        Returns all brands the authenticated caller has membership for.
+        Staff tokens see every brand. Anonymous tokens see only brands
+        marked `is_public_demo=true`.
+      responses:
+        '200':
+          description: List of accessible brands
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Brand' }
+
+  /brands/{brand_slug}:
+    get:
+      tags: [brand]
+      operationId: get_brand
+      summary: Get a brand's profile + headline stats
+      parameters:
+        - $ref: '#/components/parameters/BrandSlug'
+      responses:
+        '200':
+          description: Brand profile with stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BrandWithStats' }
+        '404': { description: Brand not found or no access }
+
+  /brands/{brand_slug}/health:
+    get:
+      tags: [brand, ops]
+      operationId: get_brand_health
+      summary: Scan throughput, pending detections, FP rate
+      description: |
+        Useful for ops dashboards and "is the monitoring tool actually
+        running?" sanity checks. Returns aggregate counters for the
+        last 24h and last 7d windows.
+      parameters:
+        - $ref: '#/components/parameters/BrandSlug'
+      responses:
+        '200':
+          description: Health snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BrandHealth' }
+
+  /brands/{brand_slug}/hits:
+    get:
+      tags: [hits]
+      operationId: list_recent_hits
+      summary: Recent detection hits for a brand
+      description: |
+        Returns the most recent verified or pending hits. Defaults to
+        last 7 days, only "meaningful" hits (size_in_frame in {medium,
+        large, dominant} OR is_primary_subject=true), confidence >= 0.7.
+      parameters:
+        - $ref: '#/components/parameters/BrandSlug'
+        - name: days
+          in: query
+          schema: { type: integer, default: 7, minimum: 1, maximum: 90 }
+          description: Look-back window in days
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+        - name: min_confidence
+          in: query
+          schema: { type: number, default: 0.7, minimum: 0, maximum: 1 }
+        - name: tier
+          in: query
+          schema: { type: string, enum: [tier_1, tier_2, tier_3, all], default: all }
+          description: Filter by creator tier
+        - name: include_unverified
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Hit list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Hit' }
+
+  /brands/{brand_slug}/top-creators:
+    get:
+      tags: [creators]
+      operationId: list_top_creators
+      summary: Top hit-producing creators for a brand
+      description: |
+        Sorted by hits_seen desc. Useful for "who is our biggest
+        organic advocate" reports and outreach prioritization.
+      parameters:
+        - $ref: '#/components/parameters/BrandSlug'
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, minimum: 1, maximum: 200 }
+        - name: tier
+          in: query
+          schema: { type: string, enum: [tier_1, tier_2, tier_3, all], default: all }
+        - name: min_hits
+          in: query
+          schema: { type: integer, default: 1, minimum: 0 }
+      responses:
+        '200':
+          description: Creator list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CreatorSummary' }
+
+  /brands/{brand_slug}/creators/{handle}:
+    get:
+      tags: [creators]
+      operationId: get_creator_detail
+      summary: Full creator profile + recent hits
+      parameters:
+        - $ref: '#/components/parameters/BrandSlug'
+        - name: handle
+          in: path
+          required: true
+          schema: { type: string }
+          description: Creator handle (no @, no slash)
+      responses:
+        '200':
+          description: Creator detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatorDetail' }
+        '404': { description: Creator not found }
+
+  /brands/{brand_slug}/fp-analysis:
+    get:
+      tags: [ops]
+      operationId: get_fp_analysis
+      summary: False positive breakdown by bucket
+      description: |
+        Returns FP rate split by size_in_frame, product_line, and
+        confidence band. Useful for prompt-tuning sprints.
+      parameters:
+        - $ref: '#/components/parameters/BrandSlug'
+      responses:
+        '200':
+          description: FP buckets
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/FpBucket' }
+
+  /brands/{brand_slug}/subcultures:
+    get:
+      tags: [discovery]
+      operationId: list_subcultures
+      summary: Subculture stats for a brand
+      parameters:
+        - $ref: '#/components/parameters/BrandSlug'
+      responses:
+        '200':
+          description: Subculture list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SubcultureStat' }
+
+  /brands/{brand_slug}/hashtags:
+    get:
+      tags: [discovery]
+      operationId: list_brand_hashtags
+      summary: Brand hashtag pool
+      parameters:
+        - $ref: '#/components/parameters/BrandSlug'
+      responses:
+        '200':
+          description: Hashtag pool
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Hashtag' }
+    post:
+      tags: [discovery]
+      operationId: add_brand_hashtag
+      summary: Add a hashtag to the brand pool
+      parameters:
+        - $ref: '#/components/parameters/BrandSlug'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hashtag]
+              properties:
+                hashtag: { type: string, example: nieuwetag }
+                group_label: { type: string, example: lifestyle }
+                priority: { type: integer, default: 5, minimum: 1, maximum: 10 }
+                platform: { type: string, enum: [instagram, tiktok], default: instagram }
+      responses:
+        '201':
+          description: Added
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hashtag' }
+
+  /brands/{brand_slug}/scans:
+    post:
+      tags: [ops]
+      operationId: trigger_scan
+      summary: Queue a scan request
+      description: |
+        Enqueues a scan_request for the brand. The Railway worker
+        picks it up within ~30 seconds. Returns the scan_request id
+        so the caller can poll for progress.
+      parameters:
+        - $ref: '#/components/parameters/BrandSlug'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  enum: [daily, full, priority]
+                  default: priority
+                  description: |
+                    `daily` = standard 8 posts/creator with 6h skip.
+                    `full` = no skip, 25 posts/creator (expensive).
+                    `priority` = top hit-producers first, 8 posts/creator.
+      responses:
+        '202':
+          description: Scan queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scan_request_id: { type: string, format: uuid }
+                  status: { type: string, example: pending }
+
+  /detections/{detection_id}/false-positive:
+    post:
+      tags: [ops]
+      operationId: mark_false_positive
+      summary: Mark a detection as a false positive
+      description: |
+        Used by moderators or programmatic FP-filters. Sets verified=true,
+        is_false_positive=true, verified_by=<caller>. Idempotent.
+      parameters:
+        - name: detection_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Marked
+        '404': { description: Detection not found }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Supabase JWT for end-users. Custom service token for staff
+        and automation (set via STAFF_API_TOKEN env var on the API).
+
+  parameters:
+    BrandSlug:
+      name: brand_slug
+      in: path
+      required: true
+      schema: { type: string, example: stelz }
+      description: Brand slug (lowercase, hyphenated)
+
+  schemas:
+    Brand:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string, example: stelz }
+        name: { type: string, example: STËLZ }
+        is_public_demo: { type: boolean }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    BrandWithStats:
+      allOf:
+        - $ref: '#/components/schemas/Brand'
+        - type: object
+          properties:
+            creators_total: { type: integer }
+            hits_total: { type: integer }
+            hits_last_7d: { type: integer }
+            tier_1_creators: { type: integer }
+
+    BrandHealth:
+      type: object
+      properties:
+        brand_slug: { type: string }
+        last_detection_at: { type: string, format: date-time, nullable: true }
+        last_scan_completed_at: { type: string, format: date-time, nullable: true }
+        detections_last_24h: { type: integer }
+        hits_last_24h: { type: integer }
+        hit_rate_24h_pct: { type: number, format: float }
+        creators_total: { type: integer }
+        creators_pending_detection: { type: integer }
+        scan_requests_pending: { type: integer }
+        scan_requests_stuck_30m: { type: integer }
+        fp_rate_verified_pct: { type: number, format: float }
+
+    Hit:
+      type: object
+      properties:
+        detection_id: { type: string, format: uuid }
+        detected_at: { type: string, format: date-time }
+        confidence: { type: number, format: float }
+        size_in_frame: { type: string, enum: [small, medium, large, dominant, null] }
+        product_line: { type: string }
+        is_primary_subject: { type: boolean }
+        is_false_positive: { type: boolean, nullable: true }
+        verified: { type: boolean }
+        creator_handle: { type: string }
+        creator_tier: { type: string, nullable: true }
+        platform: { type: string, enum: [instagram, tiktok] }
+        post_url: { type: string, format: uri }
+        image_url: { type: string, format: uri }
+        post_caption: { type: string, nullable: true }
+        likes_count: { type: integer, nullable: true }
+        sentiment: { type: string, nullable: true }
+
+    CreatorSummary:
+      type: object
+      properties:
+        handle: { type: string }
+        full_name: { type: string, nullable: true }
+        platform: { type: string }
+        category: { type: string, nullable: true }
+        tier: { type: string, nullable: true }
+        follower_count: { type: integer, nullable: true }
+        hits_seen: { type: integer }
+        posts_seen: { type: integer }
+        last_hit_at: { type: string, format: date-time, nullable: true }
+        relevance_score: { type: number, nullable: true }
+        auto_added_via: { type: string, nullable: true }
+
+    CreatorDetail:
+      allOf:
+        - $ref: '#/components/schemas/CreatorSummary'
+        - type: object
+          properties:
+            bio: { type: string, nullable: true }
+            ai_summary: { type: object, nullable: true }
+            recent_hits:
+              type: array
+              items: { $ref: '#/components/schemas/Hit' }
+
+    FpBucket:
+      type: object
+      properties:
+        bucket: { type: string, example: small_logo_lowconf }
+        total: { type: integer }
+        verified: { type: integer }
+        fps: { type: integer }
+        tps: { type: integer }
+        fp_pct: { type: number, format: float }
+
+    SubcultureStat:
+      type: object
+      properties:
+        slug: { type: string }
+        label: { type: string }
+        creator_count: { type: integer }
+        hits_total: { type: integer }
+        latest_hit_at: { type: string, format: date-time, nullable: true }
+
+    Hashtag:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        hashtag: { type: string }
+        group_label: { type: string, nullable: true }
+        platform: { type: string }
+        priority: { type: integer }
+        active: { type: boolean }
+
+    SystemHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, warn, fail]
+        summary:
+          type: object
+          properties:
+            checks_total: { type: integer }
+            checks_ok: { type: integer }
+            checks_warn: { type: integer }
+            checks_fail: { type: integer }
+        checks:
+          type: array
+          items: { $ref: '#/components/schemas/SystemCheck' }
+        timestamp: { type: string, format: date-time }
+
+    SystemCheck:
+      type: object
+      properties:
+        name: { type: string }
+        status: { type: string, enum: [ok, warn, fail] }
+        value: { type: number, nullable: true }
+        threshold: { type: number }
+        op: { type: string, enum: ['<=', '>='] }
+        severity: { type: string, enum: [fail, warn] }
+        error: { type: string, nullable: true }

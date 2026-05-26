@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Highlights · Spot the Brand</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --bg: #0a0a0a; --panel: #141414; --border: #2a2a2a; --text: #ededed; --muted: #888; --accent: #FF1300; --good: #4ade80; --warn: #fbbf24; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; line-height: 1.55; }
+  .topbar { padding: 14px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .logo { font-size: 18px; font-weight: 700; }
+  .logo span { color: var(--accent); }
+  .topbar a { color: var(--muted); font-size: 13px; text-decoration: none; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; }
+  .topbar a:hover { color: var(--accent); border-color: var(--accent); }
+  .hero { padding: 50px 24px 32px; text-align: center; border-bottom: 1px solid var(--border); }
+  .hero .demo-pill { display: inline-block; background: rgba(255,19,0,0.1); color: var(--accent); border: 1px solid var(--accent); padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 14px; }
+  .hero h1 { font-size: 38px; letter-spacing: -0.02em; font-weight: 700; margin-bottom: 10px; }
+  .hero h1 b { color: var(--accent); }
+  .hero p { color: var(--muted); font-size: 15px; max-width: 580px; margin: 0 auto; }
+  .stat-row { display: flex; gap: 32px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
+  .stat-row .stat { text-align: center; }
+  .stat-row .stat .num { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat-row .stat .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+  .grid { max-width: 1280px; margin: 0 auto; padding: 36px 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 22px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; transition: border-color 0.15s; cursor: pointer; }
+  .card:hover { border-color: var(--accent); }
+  .card .img-wrap { aspect-ratio: 1; background: var(--bg); overflow: hidden; position: relative; }
+  .card .img-wrap img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.4s; }
+  .card:hover .img-wrap img { transform: scale(1.05); }
+  .card .product-pill { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); color: white; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .card .tier-pill { position: absolute; top: 12px; right: 12px; background: rgba(251,191,36,0.95); color: #1a1a00; padding: 4px 10px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; }
+  .card .body { padding: 16px 18px; }
+  .card .creator { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+  .card .meta { display: flex; gap: 10px; font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .card .meta b { color: var(--text); font-weight: 600; }
+  .card .caption { font-size: 12px; color: var(--muted); line-height: 1.5; height: 36px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .empty { text-align: center; padding: 60px 24px; color: var(--muted); }
+  .cta-bottom { background: var(--panel); border-top: 1px solid var(--border); padding: 50px 24px; text-align: center; }
+  .cta-bottom h2 { font-size: 26px; letter-spacing: -0.02em; margin-bottom: 8px; }
+  .cta-bottom p { color: var(--muted); margin-bottom: 22px; }
+  .cta-bottom .btn { display: inline-block; padding: 12px 28px; background: var(--accent); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; }
+  .cta-bottom .btn:hover { opacity: 0.92; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">Spot the Brand<span>.</span></div>
+  <div>
+    <a href="/?demo=1">Back to dashboard</a>
+    <a href="/landing.html">Try for your brand</a>
+  </div>
+</div>
+
+<div class="hero">
+  <div class="demo-pill">Live STËLZ data · refreshed daily</div>
+  <h1>The best <b>STËLZ</b> moments<br>this month</h1>
+  <p>A curated highlight reel of the strongest brand mentions detected by Spot the Brand in the last 30 days. Real creators, real product visibility, zero manual tagging.</p>
+  <div class="stat-row">
+    <div class="stat"><div class="num" id="stat-hits">—</div><div class="lbl">Verified hits</div></div>
+    <div class="stat"><div class="num" id="stat-creators">—</div><div class="lbl">Unique creators</div></div>
+    <div class="stat"><div class="num" id="stat-reach">—</div><div class="lbl">Combined followers</div></div>
+  </div>
+</div>
+
+<div class="grid" id="grid"><div class="empty">Loading highlights…</div></div>
+
+<div class="cta-bottom">
+  <h2>This could be your brand.</h2>
+  <p>Spot the Brand finds these moments while you sleep. Daily scans, AI-verified, ready for outreach.</p>
+  <a href="/landing.html" class="btn">Start free trial →</a>
+</div>
+
+<script type="module">
+const SUPABASE_URL = "https://menaatbeoeutywulcdvv.supabase.co";
+const SUPABASE_ANON = "sb_publishable_Xo1fjg6JZF5yUBASwaMhcg_tddVt79z";
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+const BRAND_SLUG = new URL(location.href).searchParams.get("brand") || "stelz";
+
+function fmt(n) { return n != null ? n.toLocaleString("nl-NL") : "—"; }
+
+async function load() {
+  const { data: brand } = await sb.from("brands").select("id, name").eq("slug", BRAND_SLUG).maybeSingle();
+  if (!brand) { document.getElementById("grid").innerHTML = `<div class="empty">Brand not found.</div>`; return; }
+
+  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+  // Pull rich detections, prefer tier_1, large/dominant, high confidence.
+  // Order is intentional: tier first, then size, then engagement.
+  const { data, error } = await sb.from("v_detections_full")
+    .select("detection_id, creator_handle, platform, product_line, confidence, size_in_frame, is_primary_subject, image_url, stored_path, post_url, post_caption, posted_at, likes_count, comments_count, follower_count, creator_tier")
+    .eq("brand_id", brand.id)
+    .eq("detected", true)
+    .gte("posted_at", since)
+    .gte("confidence", 0.7)
+    .in("size_in_frame", ["medium", "large", "dominant"])
+    .order("posted_at", { ascending: false })
+    .limit(200);
+
+  if (error) { document.getElementById("grid").innerHTML = `<div class="empty">Failed to load: ${error.message}</div>`; return; }
+  // Hand-pick: rank by tier_1 first, then size, then likes
+  const sizeRank = { dominant: 3, large: 2, medium: 1 };
+  const tierRank = { tier_1: 3, tier_2: 2, tier_3: 1 };
+  const scored = (data || [])
+    .filter(d => d.image_url || d.stored_path)
+    .map(d => ({
+      ...d,
+      _score: (tierRank[d.creator_tier] || 0) * 100
+            + (sizeRank[d.size_in_frame] || 0) * 30
+            + (d.is_primary_subject ? 20 : 0)
+            + Math.min(50, (d.likes_count || 0) / 100)
+            + (d.confidence || 0) * 10,
+    }))
+    .sort((a, b) => b._score - a._score);
+
+  // Dedup by creator: 1 best post per handle
+  const seen = new Set();
+  const picked = [];
+  for (const d of scored) {
+    if (seen.has(d.creator_handle)) continue;
+    seen.add(d.creator_handle);
+    picked.push(d);
+    if (picked.length >= 12) break;
+  }
+
+  if (!picked.length) {
+    document.getElementById("grid").innerHTML = `<div class="empty">No highlight-worthy hits in the last 30 days.</div>`;
+    return;
+  }
+
+  // Stats from the full filtered set (not just the 12 displayed)
+  const hits = scored.length;
+  const creators = new Set(scored.map(d => d.creator_handle)).size;
+  const reach = scored.reduce((s, d) => s + (d.follower_count || 0), 0);
+  document.getElementById("stat-hits").textContent = fmt(hits);
+  document.getElementById("stat-creators").textContent = fmt(creators);
+  document.getElementById("stat-reach").textContent = reach >= 1000 ? `${Math.round(reach/1000)}k` : fmt(reach);
+
+  const grid = document.getElementById("grid");
+  grid.innerHTML = picked.map(d => {
+    const imgUrl = d.stored_path
+      ? `${SUPABASE_URL}/storage/v1/object/public/brand-watch-thumbnails/${d.stored_path}`
+      : d.image_url;
+    const productLabel = (d.product_line || "logo_only").replace(/_/g, " ");
+    const tierBadge = d.creator_tier === "tier_1" ? `<div class="tier-pill">TIER 1</div>` : "";
+    const caption = (d.post_caption || "").slice(0, 140).replace(/</g, "&lt;");
+    const date = d.posted_at ? new Date(d.posted_at).toLocaleDateString("nl-NL", { day: "numeric", month: "short" }) : "";
+    return `<a class="card" href="${d.post_url || '#'}" target="_blank" rel="noopener noreferrer">
+      <div class="img-wrap">
+        <img src="${imgUrl}" referrerpolicy="no-referrer" loading="lazy">
+        <div class="product-pill">${productLabel}</div>
+        ${tierBadge}
+      </div>
+      <div class="body">
+        <div class="creator">@${d.creator_handle}</div>
+        <div class="meta">
+          <span><b>${d.platform || ""}</b></span>
+          <span>${date}</span>
+          ${d.follower_count ? `<span><b>${fmt(d.follower_count)}</b> followers</span>` : ""}
+        </div>
+        <div class="caption">${caption || "<i>No caption</i>"}</div>
+      </div>
+    </a>`;
+  }).join("");
+}
+
+load().catch(e => {
+  document.getElementById("grid").innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+});
+</script>
+
+</body>
+</html>

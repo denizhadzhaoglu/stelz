@@ -1,0 +1,2626 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>STELZ × Spot the Brand · Pitch · 22 May 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #050505;
+    --bg-2: #0a0a0a;
+    --surface: #111;
+    --surface-2: #161616;
+    --border: #1f1f1f;
+    --border-bright: #2e2e2e;
+    --text: #FFFDF3;
+    --dim: #b8b3a8;
+    --muted: #6f6a60;
+    --accent: #FF1300;
+    --accent-glow: rgba(255, 19, 0, 0.4);
+    --good: #4ade80;
+    --gold: #fbbf24;
+    --font-display: 'Inter', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-grotesk: 'Space Grotesk', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-display);
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* ─── DECK SHELL ─── */
+  .deck {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+  }
+
+  /* ─── STELZ MOOD: cinematic gradient orbs + scene atmosphere ─── */
+  .mood-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.45;
+    pointer-events: none;
+    z-index: 0;
+    will-change: transform;
+    animation: float 18s ease-in-out infinite;
+  }
+  .mood-orb.red {
+    background: radial-gradient(circle, #FF1300, transparent 70%);
+    width: 600px; height: 600px;
+  }
+  .mood-orb.orange {
+    background: radial-gradient(circle, #FF6B35, transparent 70%);
+    width: 480px; height: 480px;
+  }
+  .mood-orb.pink {
+    background: radial-gradient(circle, #E91E63, transparent 70%);
+    width: 380px; height: 380px;
+  }
+  .mood-orb.purple {
+    background: radial-gradient(circle, #7C3AED, transparent 70%);
+    width: 360px; height: 360px;
+  }
+  .mood-orb.gold {
+    background: radial-gradient(circle, #fbbf24, transparent 70%);
+    width: 320px; height: 320px;
+  }
+  @keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(40px, -30px) scale(1.06); }
+    66% { transform: translate(-30px, 40px) scale(0.96); }
+  }
+  .noise {
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence baseFrequency='0.9' /><feColorMatrix values='0 0 0 0 1, 0 0 0 0 1, 0 0 0 0 1, 0 0 0 0.15 0'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='0.5'/></svg>");
+    mix-blend-mode: overlay;
+    opacity: 0.4;
+    pointer-events: none;
+    z-index: 98;
+  }
+  .scene-tags {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    overflow: hidden;
+  }
+  .scene-tags span {
+    position: absolute;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: rgba(255, 253, 243, 0.06);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    font-weight: 700;
+  }
+  .scene-tags span:nth-child(1) { top: 12%; left: 4%; transform: rotate(-8deg); font-size: 14px; color: rgba(255,19,0,0.18); }
+  .scene-tags span:nth-child(2) { top: 22%; right: 5%; transform: rotate(6deg); }
+  .scene-tags span:nth-child(3) { top: 38%; left: 78%; }
+  .scene-tags span:nth-child(4) { bottom: 18%; left: 6%; transform: rotate(-3deg); font-size: 13px; color: rgba(251,191,36,0.14); }
+  .scene-tags span:nth-child(5) { bottom: 30%; right: 12%; transform: rotate(4deg); }
+  .scene-tags span:nth-child(6) { top: 55%; left: 2%; transform: rotate(-90deg); }
+  .scene-tags span:nth-child(7) { bottom: 8%; right: 30%; }
+  .scene-tags span:nth-child(8) { top: 70%; right: 4%; transform: rotate(90deg); font-size: 12px; color: rgba(255,107,53,0.16); }
+  .glow-edge {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+    background:
+      radial-gradient(ellipse at top right, rgba(255,107,53,0.10), transparent 50%),
+      radial-gradient(ellipse at bottom left, rgba(124,58,237,0.08), transparent 50%);
+  }
+  .slide {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.5s ease;
+    overflow: hidden;
+  }
+  .slide.active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .slide.exiting {
+    opacity: 0;
+    transform: scale(0.98);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+  }
+
+  /* ─── CINEMATIC EFFECTS ─── */
+  .scanlines::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px,
+      transparent 2px,
+      rgba(255, 255, 255, 0.012) 3px,
+      rgba(255, 255, 255, 0.012) 4px
+    );
+    pointer-events: none;
+    z-index: 100;
+  }
+  .vignette::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.55) 100%);
+    pointer-events: none;
+    z-index: 99;
+  }
+  .grid-bg {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,253,243,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,253,243,0.02) 1px, transparent 1px);
+    background-size: 80px 80px;
+    pointer-events: none;
+  }
+  .crosshair {
+    position: absolute;
+    pointer-events: none;
+  }
+  .crosshair.v { width: 1px; background: var(--border-bright); top: 0; bottom: 0; }
+  .crosshair.h { height: 1px; background: var(--border-bright); left: 0; right: 0; }
+
+  /* ─── CHROME ─── */
+  .chrome {
+    position: absolute;
+    top: 30px; left: 60px; right: 60px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 50;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .chrome .brand {
+    color: var(--text);
+    font-weight: 700;
+    font-family: var(--font-display);
+    font-size: 14px;
+    letter-spacing: -0.01em;
+  }
+  .chrome .brand .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    margin-left: 2px;
+    box-shadow: 0 0 12px var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 12px var(--accent); }
+    50% { box-shadow: 0 0 20px var(--accent), 0 0 30px var(--accent); }
+  }
+
+  .footer-chrome {
+    position: absolute;
+    bottom: 30px; left: 60px; right: 60px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 50;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .footer-chrome .progress-bar {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+    margin: 0 40px;
+    position: relative;
+    overflow: hidden;
+  }
+  .footer-chrome .progress-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent);
+    transition: width 0.5s ease;
+  }
+
+  /* ─── COMMON ELEMENTS ─── */
+  .section-label {
+    position: absolute;
+    top: 100px; left: 60px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .section-label::before {
+    content: '◢';
+    margin-right: 8px;
+    display: inline-block;
+    animation: blink 1.4s ease-in-out infinite;
+  }
+  @keyframes blink {
+    0%, 50%, 100% { opacity: 1; }
+    25%, 75% { opacity: 0.3; }
+  }
+
+  /* ─── SLIDE 1 · TITLE ─── */
+  .s1 { background: var(--bg); }
+  .s1 .hero-bg {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    opacity: 0.45;
+    filter: contrast(1.1) saturate(1.1);
+    z-index: 0;
+  }
+  .s1 .hero-fade {
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(180deg, rgba(5,5,5,0.85) 0%, rgba(5,5,5,0.6) 50%, rgba(5,5,5,0.95) 100%),
+      linear-gradient(90deg, rgba(5,5,5,0.7) 0%, rgba(5,5,5,0) 60%);
+    z-index: 1;
+  }
+  .s1 .hero {
+    position: absolute;
+    top: 50%; left: 60px; right: 60px;
+    transform: translateY(-50%);
+    z-index: 5;
+  }
+  .s1 .corner-frame, .s1 .chrome, .s1 .footer-chrome {
+    z-index: 6;
+  }
+  .s1 .targeting {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    margin-bottom: 24px;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .s1 .targeting .corners {
+    position: relative;
+    padding: 8px 14px;
+    border: 1px solid var(--accent);
+  }
+  .s1 .targeting .corners::before,
+  .s1 .targeting .corners::after {
+    content: '';
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+  }
+  .s1 .targeting .corners::before { top: -3px; left: -3px; }
+  .s1 .targeting .corners::after { bottom: -3px; right: -3px; }
+
+  .s1 h1 {
+    font-size: 140px;
+    font-weight: 900;
+    line-height: 0.9;
+    letter-spacing: -0.04em;
+    margin-bottom: 30px;
+  }
+  .s1 h1 .x {
+    color: var(--accent);
+    font-style: italic;
+    display: inline-block;
+    transform: scaleY(1.05);
+  }
+  .s1 .subtitle {
+    font-size: 30px;
+    font-weight: 400;
+    color: var(--text);
+    line-height: 1.25;
+    max-width: 980px;
+    margin-bottom: 18px;
+  }
+  .s1 .tag {
+    font-size: 18px;
+    color: var(--muted);
+    font-style: italic;
+    letter-spacing: 0.01em;
+  }
+  .s1 .corner-frame {
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--accent);
+  }
+  .s1 .corner-frame.tl { top: 90px; left: 60px; border-right: none; border-bottom: none; }
+  .s1 .corner-frame.tr { top: 90px; right: 60px; border-left: none; border-bottom: none; }
+  .s1 .corner-frame.bl { bottom: 90px; left: 60px; border-right: none; border-top: none; }
+  .s1 .corner-frame.br { bottom: 90px; right: 60px; border-left: none; border-top: none; }
+
+  /* ─── SLIDE 2 · BELIEF ─── */
+  .s2 h2 {
+    position: absolute;
+    top: 200px; left: 60px;
+    font-size: 110px;
+    font-weight: 900;
+    line-height: 0.95;
+    letter-spacing: -0.04em;
+  }
+  .s2 h2 .red { color: var(--accent); }
+  .s2 .lines {
+    position: absolute;
+    top: 480px; left: 60px;
+    max-width: 1100px;
+  }
+  .s2 .lines p {
+    font-size: 26px;
+    color: var(--text);
+    line-height: 1.4;
+    margin-bottom: 14px;
+    opacity: 0;
+    transform: translateX(-20px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .s2.active .lines p { opacity: 1; transform: translateX(0); }
+  .s2.active .lines p:nth-child(1) { transition-delay: 0.3s; }
+  .s2.active .lines p:nth-child(2) { transition-delay: 0.55s; }
+  .s2.active .lines p:nth-child(3) { transition-delay: 0.8s; }
+  .s2 .closer {
+    position: absolute;
+    bottom: 90px; left: 60px; right: 60px;
+    font-size: 17px;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* ─── SLIDE 3 · GAP ─── */
+  .s3 h2 {
+    position: absolute;
+    top: 180px; left: 60px;
+    font-size: 88px;
+    font-weight: 900;
+    line-height: 0.95;
+    letter-spacing: -0.03em;
+  }
+  .s3 .columns {
+    position: absolute;
+    top: 400px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 36px;
+  }
+  .s3 .col {
+    position: relative;
+    padding: 36px 32px;
+    background: var(--surface);
+    border-left: 4px solid var(--muted);
+    overflow: hidden;
+  }
+  .s3 .col.spot { border-left-color: var(--accent); }
+  .s3 .col.spot::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 0% 50%, var(--accent-glow), transparent 60%);
+    opacity: 0.4;
+    pointer-events: none;
+  }
+  .s3 .col .label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.15em;
+    margin-bottom: 20px;
+    text-transform: uppercase;
+  }
+  .s3 .col.spot .label { color: var(--accent); }
+  .s3 .col h3 {
+    font-size: 32px;
+    font-weight: 700;
+    margin-bottom: 14px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+  }
+  .s3 .col .sub {
+    font-size: 15px;
+    color: var(--dim);
+    margin-bottom: 18px;
+  }
+  .s3 .col .stat {
+    font-size: 14px;
+    color: var(--muted);
+    font-style: italic;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+  }
+  .s3 .col.spot .stat { color: var(--text); font-style: normal; }
+
+  /* ─── SLIDE 4 · LIVE DATA ─── */
+  .s4 h2 {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 64px;
+    font-weight: 900;
+    line-height: 1;
+    letter-spacing: -0.03em;
+  }
+  .s4 .live-tag {
+    position: absolute;
+    top: 100px; right: 60px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--good);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .s4 .live-tag::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    background: var(--good);
+    border-radius: 50%;
+    box-shadow: 0 0 12px var(--good);
+    animation: pulse-green 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse-green {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.3); }
+  }
+
+  .s4 .grid {
+    position: absolute;
+    top: 290px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+  }
+  .s4 .stat-card {
+    position: relative;
+    padding: 24px 22px 22px;
+    background: var(--surface);
+    border-left: 3px solid var(--accent);
+    overflow: hidden;
+  }
+  .s4 .stat-card .corner {
+    position: absolute;
+    top: 0; right: 0;
+    width: 14px; height: 14px;
+    border-top: 1px solid var(--border-bright);
+    border-right: 1px solid var(--border-bright);
+  }
+  .s4 .stat-card .label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .s4 .stat-card .value {
+    font-size: 64px;
+    font-weight: 900;
+    color: var(--text);
+    line-height: 1;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  .s4 .stat-card .sub {
+    font-size: 12px;
+    color: var(--dim);
+    margin-top: 10px;
+  }
+  .s4 .stat-card.accent .value { color: var(--accent); }
+  .s4 .stat-card.gold .value { color: var(--gold); }
+  .s4 .stat-card.good .value { color: var(--good); }
+  .s4 .closer {
+    position: absolute;
+    bottom: 90px; left: 60px; right: 60px;
+    font-size: 15px;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* ─── SLIDE 5 · CASA STELZ TIMELINE ─── */
+  .s5 .super {
+    position: absolute;
+    top: 180px; left: 60px;
+    font-size: 76px;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 0.95;
+    z-index: 3;
+  }
+  .s5 .sub, .s5 .discovery-flow, .s5 .proof-strip { z-index: 3; }
+  .s5 .super .red { color: var(--accent); }
+  .s5 .sub {
+    position: absolute;
+    top: 350px; left: 60px;
+    font-size: 22px;
+    color: var(--dim);
+    font-style: italic;
+  }
+  .s5 .timeline {
+    position: absolute;
+    top: 430px; left: 60px; right: 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .s5 .timeline .step {
+    display: grid;
+    grid-template-columns: 90px 12px 1fr;
+    align-items: center;
+    gap: 20px;
+    padding: 12px 0;
+  }
+  .s5 .timeline .step .time {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+  .s5 .timeline .step .dot {
+    width: 10px;
+    height: 10px;
+    background: var(--dim);
+    border-radius: 50%;
+    position: relative;
+  }
+  .s5 .timeline .step .dot::before {
+    content: '';
+    position: absolute;
+    width: 22px; height: 22px;
+    border: 1px solid var(--border-bright);
+    border-radius: 50%;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .s5 .timeline .step:last-child .dot {
+    background: var(--accent);
+    box-shadow: 0 0 14px var(--accent);
+  }
+  .s5 .timeline .step .text {
+    font-size: 18px;
+    color: var(--text);
+  }
+  .s5 .footer-line {
+    position: absolute;
+    bottom: 100px; left: 60px;
+    font-size: 15px;
+    color: var(--dim);
+    font-style: italic;
+  }
+  .s5 .ask {
+    position: absolute;
+    bottom: 70px; left: 60px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  /* Autonomous discovery layout */
+  .s5 .discovery-flow {
+    position: absolute;
+    top: 430px; left: 60px; right: 60px;
+  }
+  .s5 .df-arrow {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 18px;
+    position: relative;
+  }
+  .s5 .df-arrow::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent) 20%, var(--accent) 80%, transparent);
+    z-index: 0;
+    opacity: 0.4;
+  }
+  .s5 .df-step {
+    background: var(--surface);
+    padding: 20px 22px;
+    border-left: 3px solid var(--accent);
+    position: relative;
+    z-index: 1;
+    min-height: 175px;
+  }
+  .s5 .df-step-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+  .s5 .df-step-title {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 10px;
+  }
+  .s5 .df-step-body {
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.5;
+  }
+  .s5 .proof-strip {
+    position: absolute;
+    bottom: 90px; left: 60px; right: 60px;
+    background: linear-gradient(90deg, rgba(74,222,128,0.08), transparent);
+    border-left: 4px solid var(--good);
+    padding: 18px 26px;
+  }
+  .s5 .proof-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--good);
+    letter-spacing: 0.15em;
+    margin-bottom: 14px;
+    font-weight: 700;
+  }
+  .s5 .proof-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+  }
+  .s5 .ps-item .ps-val {
+    font-size: 32px;
+    font-weight: 900;
+    color: var(--text);
+    letter-spacing: -0.03em;
+    line-height: 1;
+    margin-bottom: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .s5 .ps-item .ps-lbl {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+  }
+
+  /* ─── SLIDE 6 · HITS GRID ─── */
+  .s6 h2 {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 48px;
+    font-weight: 900;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    max-width: 1100px;
+  }
+  .s6 .hits-grid {
+    position: absolute;
+    top: 320px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+  }
+  .s6 .hit {
+    position: relative;
+    background: var(--surface);
+    overflow: hidden;
+    transition: transform 0.3s ease;
+    display: flex;
+    flex-direction: column;
+    height: 420px;
+  }
+  .s6.active .hit { transform: translateY(0); }
+  .s6 .hit::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 3px;
+    background: var(--accent);
+    z-index: 5;
+  }
+  .s6 .hit-img {
+    width: 100%;
+    height: 200px;
+    background-size: cover;
+    background-position: center;
+    background-color: #0d0d0d;
+    flex: 0 0 200px;
+  }
+  .s6 .hit-body {
+    padding: 14px 16px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .s6 .hit .meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .s6 .hit .platform-pill {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 4px 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border-bright);
+    color: var(--dim);
+    letter-spacing: 0.1em;
+  }
+  .s6 .hit .conf-pill {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    background: rgba(74, 222, 128, 0.1);
+    border: 1px solid rgba(74, 222, 128, 0.3);
+    color: var(--good);
+    letter-spacing: 0.05em;
+    font-weight: 700;
+  }
+  .s6 .hit .handle {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    line-height: 1.15;
+    word-break: break-word;
+  }
+  .s6 .hit .followers {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .s6 .hit .context {
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.45;
+    font-style: italic;
+  }
+  .s6 .hit .visual-tag {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: 0.12em;
+    margin-top: auto;
+    padding-top: 10px;
+  }
+  .s6 .hits-grid {
+    top: 290px !important;
+  }
+
+  /* ─── SLIDE 7 · ALGORITHM ─── */
+  .s7 h2 {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 56px;
+    font-weight: 900;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    max-width: 1100px;
+  }
+  .s7 .lead {
+    position: absolute;
+    top: 290px; left: 60px;
+    font-size: 18px;
+    color: var(--dim);
+  }
+  .s7 .steps {
+    position: absolute;
+    top: 360px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .s7 .step {
+    background: var(--surface);
+    border-left: 3px solid var(--accent);
+    padding: 22px 20px;
+    height: 220px;
+    position: relative;
+    overflow: hidden;
+  }
+  .s7 .step .num {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    margin-bottom: 14px;
+    letter-spacing: 0.15em;
+    font-weight: 700;
+  }
+  .s7 .step .name {
+    font-size: 30px;
+    font-weight: 900;
+    margin-bottom: 14px;
+    letter-spacing: -0.02em;
+  }
+  .s7 .step .body {
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.5;
+  }
+  .s7 .proof {
+    position: absolute;
+    bottom: 90px; left: 60px; right: 60px;
+    background: linear-gradient(90deg, rgba(74,222,128,0.08), transparent);
+    border-left: 4px solid var(--good);
+    padding: 18px 26px;
+  }
+  .s7 .proof .label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--good);
+    letter-spacing: 0.15em;
+    margin-bottom: 6px;
+  }
+  .s7 .proof .text {
+    font-size: 19px;
+    color: var(--text);
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .s7 .proof .sub {
+    font-size: 13px;
+    color: var(--dim);
+    font-style: italic;
+  }
+
+  /* ─── SLIDE 8 · BEYOND ─── */
+  .s8 h2 {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 60px;
+    font-weight: 900;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    max-width: 1100px;
+  }
+  .s8 .lead {
+    position: absolute;
+    top: 320px; left: 60px;
+    font-size: 17px;
+    color: var(--dim);
+    max-width: 1000px;
+  }
+  .s8 .formats {
+    position: absolute;
+    top: 380px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+  .s8 .fmt {
+    background: var(--surface);
+    padding: 26px 24px;
+    height: 280px;
+    position: relative;
+    overflow: hidden;
+    border-left: 3px solid var(--accent);
+  }
+  .s8 .fmt.gold { border-left-color: var(--gold); }
+  .s8 .fmt.muted { border-left-color: var(--muted); }
+  .s8 .fmt .label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    margin-bottom: 18px;
+  }
+  .s8 .fmt.gold .label { color: var(--gold); }
+  .s8 .fmt.muted .label { color: var(--dim); }
+  .s8 .fmt .val {
+    font-size: 48px;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    margin-bottom: 18px;
+    line-height: 1;
+  }
+  .s8 .fmt .body {
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.55;
+  }
+
+  /* ─── SLIDE 9 · STACK ─── */
+  .s9 h2 {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 72px;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 0.95;
+  }
+  .s9 .layers {
+    position: absolute;
+    top: 320px; left: 60px; right: 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .s9 .layer {
+    background: var(--surface);
+    padding: 22px 30px;
+    border-left: 4px solid var(--accent);
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    align-items: center;
+    gap: 30px;
+    position: relative;
+    overflow: hidden;
+  }
+  .s9 .layer::after {
+    content: '';
+    position: absolute;
+    right: 30px; top: 50%;
+    transform: translateY(-50%);
+    width: 24px; height: 24px;
+    border-right: 2px solid var(--border-bright);
+    border-bottom: 2px solid var(--border-bright);
+    transform: translateY(-50%) rotate(-45deg);
+    opacity: 0.5;
+  }
+  .s9 .layer .name {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+  }
+  .s9 .layer .desc {
+    font-size: 14px;
+    color: var(--dim);
+    font-family: var(--font-mono);
+  }
+
+  /* ─── SLIDE 10 · SHIFTS ─── */
+  .s10 h2 {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 44px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    max-width: 1100px;
+  }
+  .s10 .shifts {
+    position: absolute;
+    top: 320px; left: 60px; right: 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+  }
+  .s10 .shift {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 30px;
+    align-items: flex-start;
+  }
+  .s10 .shift .num {
+    font-size: 80px;
+    font-weight: 900;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    line-height: 0.85;
+    letter-spacing: -0.04em;
+  }
+  .s10 .shift .name {
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 10px;
+  }
+  .s10 .shift .body {
+    font-size: 15px;
+    color: var(--dim);
+    line-height: 1.55;
+    max-width: 950px;
+  }
+
+  /* ─── SLIDE 11 · PRICING ─── */
+  .s11 h2 {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 64px;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 0.95;
+  }
+  .s11 .tiers {
+    position: absolute;
+    top: 320px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+  .s11 .tier {
+    background: var(--surface);
+    border-top: 3px solid var(--muted);
+    padding: 32px 28px;
+    height: 380px;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.3s ease;
+  }
+  .s11 .tier.featured {
+    border-top-color: var(--accent);
+    background: linear-gradient(180deg, rgba(255,19,0,0.05), var(--surface) 60%);
+    transform: translateY(-12px);
+  }
+  .s11 .tier.featured::after {
+    content: 'MOST POPULAR';
+    position: absolute;
+    top: 14px; right: 14px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    background: rgba(255,19,0,0.15);
+    padding: 4px 8px;
+    border: 1px solid var(--accent);
+  }
+  .s11 .tier.gold { border-top-color: var(--gold); }
+  .s11 .tier .tname {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.18em;
+    margin-bottom: 14px;
+  }
+  .s11 .tier.featured .tname { color: var(--accent); }
+  .s11 .tier.gold .tname { color: var(--gold); }
+  .s11 .tier .price {
+    font-size: 50px;
+    font-weight: 900;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .s11 .tier .price .unit {
+    font-size: 18px;
+    color: var(--muted);
+    font-weight: 400;
+    letter-spacing: 0;
+  }
+  .s11 .tier .pricesub {
+    font-size: 13px;
+    color: var(--dim);
+    margin-bottom: 24px;
+    font-style: italic;
+  }
+  .s11 .tier ul {
+    list-style: none;
+  }
+  .s11 .tier ul li {
+    font-size: 14px;
+    padding: 7px 0;
+    border-bottom: 1px dashed var(--border);
+    color: var(--text);
+  }
+  .s11 .tier ul li:last-child { border: none; }
+
+  /* ─── SLIDE 12 · 30-60-90 ─── */
+  .s12 h2 {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 68px;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 0.95;
+  }
+  .s12 .phases {
+    position: absolute;
+    top: 320px; left: 60px; right: 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .s12 .phase {
+    background: var(--surface);
+    padding: 22px 28px;
+    border-left: 4px solid var(--accent);
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 30px;
+  }
+  .s12 .phase .left {
+    border-right: 1px solid var(--border);
+    padding-right: 24px;
+  }
+  .s12 .phase .left .days {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    margin-bottom: 6px;
+  }
+  .s12 .phase .left .name {
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  .s12 .phase .right .body {
+    font-size: 16px;
+    color: var(--text);
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+  .s12 .phase .right .who {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* ─── SLIDE 13 · DEMO ─── */
+  .s13 h2 {
+    position: absolute;
+    top: 180px; left: 60px;
+    font-size: 88px;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 0.92;
+  }
+  .s13 .url {
+    position: absolute;
+    top: 380px; left: 60px;
+    font-family: var(--font-mono);
+    font-size: 32px;
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .s13 .url::before {
+    content: '◢';
+    color: var(--accent);
+    font-size: 24px;
+  }
+  .s13 .demo-panels {
+    position: absolute;
+    top: 470px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+  }
+  .s13 .demo-panel {
+    background: var(--surface);
+    padding: 24px 26px;
+    border-left: 4px solid var(--accent);
+    position: relative;
+  }
+  .s13 .demo-panel.good { border-left-color: var(--good); }
+  .s13 .demo-panel .pname {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    margin-bottom: 12px;
+  }
+  .s13 .demo-panel.good .pname { color: var(--good); }
+  .s13 .demo-panel .ptitle {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    line-height: 1.3;
+  }
+  .s13 .demo-panel .pbody {
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.5;
+  }
+  .s13 .ctcta {
+    position: absolute;
+    bottom: 95px; left: 60px; right: 60px;
+    text-align: center;
+    font-size: 15px;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* ─── SLIDE 14 · CLOSE ─── */
+  .s14 .center {
+    position: absolute;
+    top: 50%; left: 60px; right: 60px;
+    transform: translateY(-50%);
+    z-index: 5;
+  }
+  .s14 .signature, .s14 .chrome, .s14 .footer-chrome { z-index: 6; }
+  .s14 h2 {
+    font-size: 140px;
+    font-weight: 900;
+    letter-spacing: -0.05em;
+    line-height: 0.85;
+    margin-bottom: 30px;
+  }
+  .s14 h2 .red { color: var(--accent); }
+  .s14 .lead {
+    font-size: 28px;
+    color: var(--dim);
+    margin-bottom: 60px;
+    max-width: 1000px;
+  }
+  .s14 .cta-box {
+    border: 2px solid var(--accent);
+    padding: 30px 40px;
+    max-width: 900px;
+    position: relative;
+  }
+  .s14 .cta-box::before,
+  .s14 .cta-box::after {
+    content: '';
+    position: absolute;
+    width: 12px; height: 12px;
+    background: var(--accent);
+  }
+  .s14 .cta-box::before { top: -6px; left: -6px; }
+  .s14 .cta-box::after { bottom: -6px; right: -6px; }
+  .s14 .cta-box .label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    margin-bottom: 14px;
+  }
+  .s14 .cta-box .offer {
+    font-size: 30px;
+    font-weight: 800;
+    margin-bottom: 12px;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+  .s14 .cta-box .small {
+    font-size: 14px;
+    color: var(--dim);
+  }
+  .s14 .signature {
+    position: absolute;
+    bottom: 80px; left: 60px; right: 60px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  /* ─── SLIDE · AUDIENCE DISCOVERY ─── */
+  .s_audience h2.aud-head {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 56px;
+    font-weight: 900;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    max-width: 1100px;
+    z-index: 3;
+  }
+  .s_audience .aud-grid {
+    position: absolute;
+    top: 350px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    z-index: 3;
+  }
+  .s_audience .aud-card {
+    background: rgba(20, 20, 20, 0.78);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-left: 3px solid var(--accent);
+    padding: 22px 26px;
+    min-height: 140px;
+    position: relative;
+  }
+  .s_audience .aud-num {
+    position: absolute;
+    top: 14px; right: 18px;
+    font-family: var(--font-mono);
+    font-size: 38px;
+    font-weight: 900;
+    color: rgba(255, 19, 0, 0.18);
+    letter-spacing: -0.05em;
+  }
+  .s_audience .aud-title {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 10px;
+  }
+  .s_audience .aud-body {
+    font-size: 13.5px;
+    color: var(--dim);
+    line-height: 1.55;
+  }
+  .s_audience .aud-body .hi {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-weight: 600;
+    background: rgba(255,19,0,0.08);
+    padding: 1px 5px;
+  }
+
+  /* ─── SLIDE · USE CASES ─── */
+  .s_use h2.use-head {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 56px;
+    font-weight: 900;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    max-width: 1100px;
+    z-index: 3;
+  }
+  .s_use .use-grid {
+    position: absolute;
+    top: 340px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    z-index: 3;
+  }
+  .s_use .use-card {
+    background: rgba(20, 20, 20, 0.78);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-top: 3px solid var(--accent);
+    padding: 22px 22px;
+    height: 175px;
+    position: relative;
+    transition: transform 0.3s ease;
+  }
+  .s_use .use-card:hover {
+    transform: translateY(-4px);
+  }
+  .s_use .use-icon {
+    font-size: 26px;
+    color: var(--accent);
+    margin-bottom: 12px;
+    line-height: 1;
+  }
+  .s_use .use-title {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 10px;
+    line-height: 1.2;
+  }
+  .s_use .use-body {
+    font-size: 12.5px;
+    color: var(--dim);
+    line-height: 1.5;
+  }
+
+  /* ─── SLIDE · WERELDEN VAN STELZ (cinematic image grid) ─── */
+  .s_worlds {
+    background: var(--bg);
+  }
+  .s_worlds .worlds-grid {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 0;
+  }
+  .s_worlds .world {
+    position: relative;
+    background-size: cover;
+    background-position: center;
+    overflow: hidden;
+    transition: transform 0.5s ease, filter 0.5s ease;
+  }
+  .s_worlds .world::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(0,0,0,0.35) 30%, rgba(0,0,0,0.85) 100%);
+    transition: opacity 0.4s ease;
+  }
+  .s_worlds .world:hover { transform: scale(1.02); }
+  .s_worlds .world:hover::after { opacity: 0.5; }
+  .s_worlds .world-label {
+    position: absolute;
+    bottom: 60px; left: 36px;
+    font-family: var(--font-display);
+    font-size: 28px;
+    font-weight: 900;
+    color: var(--text);
+    letter-spacing: -0.02em;
+    z-index: 2;
+    text-shadow: 0 2px 20px rgba(0,0,0,0.8);
+  }
+  .s_worlds .world-tag {
+    position: absolute;
+    bottom: 36px; left: 36px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: rgba(255,253,243,0.85);
+    letter-spacing: 0.1em;
+    z-index: 2;
+    text-shadow: 0 2px 12px rgba(0,0,0,0.9);
+  }
+  .s_worlds .worlds-overlay {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at top left, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.2) 35%, transparent 50%);
+    pointer-events: none;
+    z-index: 3;
+  }
+  .s_worlds .worlds-title {
+    position: absolute;
+    top: 110px; left: 60px;
+    max-width: 760px;
+    z-index: 4;
+  }
+  .s_worlds .worlds-title h2 {
+    font-size: 76px;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 0.95;
+    color: var(--text);
+    text-shadow: 0 2px 30px rgba(0,0,0,0.6);
+  }
+  .s_worlds .worlds-sub {
+    margin-top: 18px;
+    font-size: 18px;
+    color: rgba(255,253,243,0.92);
+    font-style: italic;
+    line-height: 1.45;
+    text-shadow: 0 2px 12px rgba(0,0,0,0.7);
+    max-width: 600px;
+  }
+
+  /* ─── SLIDE · REAL SPOTS GALLERY ─── */
+  .s_spots .spots-head {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 56px;
+    font-weight: 900;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    z-index: 3;
+  }
+  .s_spots .spots-grid {
+    position: absolute;
+    top: 300px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 14px;
+    z-index: 3;
+  }
+  .s_spots .spot-card {
+    position: relative;
+    overflow: hidden;
+    background: var(--surface);
+    border-top: 2px solid var(--accent);
+    aspect-ratio: 9 / 16;
+  }
+  .s_spots .spot-card img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    filter: contrast(1.02) saturate(1.05);
+  }
+  .s_spots .spot-card figcaption {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 10px 12px 12px;
+    background: linear-gradient(to top, rgba(0,0,0,0.96) 0%, rgba(0,0,0,0.85) 50%, transparent 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .s_spots .spot-meta {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .s_spots .spot-handle {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  .s_spots .spot-ctx {
+    font-size: 9px;
+    color: var(--dim);
+    line-height: 1.3;
+    font-style: italic;
+  }
+  .s_spots .spots-footer {
+    position: absolute;
+    bottom: 90px; left: 60px; right: 60px;
+    font-size: 13px;
+    color: var(--muted);
+    font-style: italic;
+    text-align: center;
+    z-index: 3;
+  }
+
+  /* ─── SLIDE · PRODUCT LINES (echte STELZ blikken) ─── */
+  .s_products .prod-head {
+    position: absolute;
+    top: 160px; left: 60px;
+    font-size: 60px; font-weight: 900;
+    letter-spacing: -0.03em; line-height: 0.95;
+    z-index: 3;
+  }
+  .s_products .prod-sub {
+    position: absolute;
+    top: 310px; left: 60px;
+    font-size: 16px; color: var(--dim);
+    font-style: italic; z-index: 3;
+  }
+  .s_products .prod-grid {
+    position: absolute;
+    top: 370px; left: 60px; right: 60px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 22px; z-index: 3;
+  }
+  .s_products .prod-card {
+    background: linear-gradient(180deg, rgba(20,20,20,0.5), rgba(20,20,20,0.85));
+    border-top: 2px solid var(--accent);
+    padding: 28px 18px 20px;
+    text-align: center;
+    height: 320px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+  .s_products .prod-card:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 12px 40px rgba(255, 19, 0, 0.2);
+  }
+  .s_products .prod-img-wrap {
+    height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+  }
+  .s_products .prod-img-wrap img {
+    max-height: 100%;
+    max-width: 100%;
+    object-fit: contain;
+    filter: drop-shadow(0 8px 20px rgba(0,0,0,0.4));
+  }
+  .s_products .prod-name {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin-top: 8px;
+  }
+  .s_products .prod-stat {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    font-weight: 700;
+  }
+
+  /* ─── CINEMATIC BREAK SLIDES (full-bleed image, big quote) ─── */
+  .s_break_1, .s_break_2 {
+    background: var(--bg);
+  }
+  .s_break_1 .break-bg, .s_break_2 .break-bg {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    filter: contrast(1.05) saturate(1.1);
+  }
+  .s_break_1 .break-overlay, .s_break_2 .break-overlay {
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(135deg, rgba(5,5,5,0.92) 0%, rgba(5,5,5,0.5) 40%, rgba(5,5,5,0.85) 100%),
+      linear-gradient(180deg, rgba(5,5,5,0.6) 0%, rgba(5,5,5,0) 30%, rgba(5,5,5,0.85) 100%);
+  }
+  .s_break_1 .break-quote, .s_break_2 .break-quote {
+    position: absolute;
+    bottom: 130px; left: 60px;
+    max-width: 920px;
+    z-index: 3;
+  }
+  .s_break_1 .break-tag, .s_break_2 .break-tag {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    margin-bottom: 20px;
+    font-weight: 700;
+  }
+  .s_break_1 h2, .s_break_2 h2 {
+    font-size: 84px;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 0.95;
+    color: var(--text);
+    text-shadow: 0 4px 30px rgba(0,0,0,0.7);
+  }
+
+  /* ─── NAV ─── */
+  .nav-hint {
+    position: fixed;
+    bottom: 12px; right: 12px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--muted);
+    z-index: 200;
+    opacity: 0.5;
+  }
+  .nav-hint kbd {
+    background: var(--surface-2);
+    border: 1px solid var(--border-bright);
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin: 0 2px;
+    font-family: var(--font-mono);
+  }
+
+  /* ─── ANIMATIONS ─── */
+  @keyframes scanline {
+    0% { transform: translateY(-100%); }
+    100% { transform: translateY(100vh); }
+  }
+  .scan-effect {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 100px;
+    background: linear-gradient(180deg, transparent, rgba(255,19,0,0.06), transparent);
+    pointer-events: none;
+    animation: scanline 8s linear infinite;
+    z-index: 5;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .slide.active h1, .slide.active h2, .slide.active .lead, .slide.active .super {
+    animation: fadeUp 0.7s ease-out;
+  }
+
+  @keyframes countUp {
+    from { opacity: 0; transform: translateY(15px) scale(0.95); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .slide.active .stat-card,
+  .slide.active .hit,
+  .slide.active .step,
+  .slide.active .fmt,
+  .slide.active .tier,
+  .slide.active .phase,
+  .slide.active .layer,
+  .slide.active .shift {
+    animation: countUp 0.6s ease-out backwards;
+  }
+  .slide.active .stat-card:nth-child(1) { animation-delay: 0.1s; }
+  .slide.active .stat-card:nth-child(2) { animation-delay: 0.2s; }
+  .slide.active .stat-card:nth-child(3) { animation-delay: 0.3s; }
+  .slide.active .stat-card:nth-child(4) { animation-delay: 0.4s; }
+  .slide.active .stat-card:nth-child(5) { animation-delay: 0.5s; }
+  .slide.active .stat-card:nth-child(6) { animation-delay: 0.6s; }
+  .slide.active .stat-card:nth-child(7) { animation-delay: 0.7s; }
+  .slide.active .stat-card:nth-child(8) { animation-delay: 0.8s; }
+
+  .slide.active .hit:nth-child(1) { animation-delay: 0.2s; }
+  .slide.active .hit:nth-child(2) { animation-delay: 0.35s; }
+  .slide.active .hit:nth-child(3) { animation-delay: 0.5s; }
+  .slide.active .hit:nth-child(4) { animation-delay: 0.65s; }
+
+  .slide.active .step:nth-child(1) { animation-delay: 0.2s; }
+  .slide.active .step:nth-child(2) { animation-delay: 0.35s; }
+  .slide.active .step:nth-child(3) { animation-delay: 0.5s; }
+  .slide.active .step:nth-child(4) { animation-delay: 0.65s; }
+
+  .slide.active .timeline .step {
+    animation: fadeUp 0.5s ease-out backwards;
+  }
+  .slide.active .timeline .step:nth-child(1) { animation-delay: 0.2s; }
+  .slide.active .timeline .step:nth-child(2) { animation-delay: 0.35s; }
+  .slide.active .timeline .step:nth-child(3) { animation-delay: 0.5s; }
+  .slide.active .timeline .step:nth-child(4) { animation-delay: 0.65s; }
+  .slide.active .timeline .step:nth-child(5) { animation-delay: 0.8s; }
+  .slide.active .timeline .step:nth-child(6) { animation-delay: 0.95s; }
+
+  .slide.active .shift:nth-child(1) { animation-delay: 0.2s; }
+  .slide.active .shift:nth-child(2) { animation-delay: 0.45s; }
+  .slide.active .shift:nth-child(3) { animation-delay: 0.7s; }
+
+  .slide.active .tier:nth-child(1) { animation-delay: 0.2s; }
+  .slide.active .tier:nth-child(2) { animation-delay: 0.35s; }
+  .slide.active .tier:nth-child(3) { animation-delay: 0.5s; }
+
+  .slide.active .layer:nth-child(1) { animation-delay: 0.2s; }
+  .slide.active .layer:nth-child(2) { animation-delay: 0.35s; }
+  .slide.active .layer:nth-child(3) { animation-delay: 0.5s; }
+  .slide.active .layer:nth-child(4) { animation-delay: 0.65s; }
+
+  .slide.active .phase:nth-child(1) { animation-delay: 0.2s; }
+  .slide.active .phase:nth-child(2) { animation-delay: 0.4s; }
+  .slide.active .phase:nth-child(3) { animation-delay: 0.6s; }
+
+  .slide.active .fmt:nth-child(1) { animation-delay: 0.2s; }
+  .slide.active .fmt:nth-child(2) { animation-delay: 0.35s; }
+  .slide.active .fmt:nth-child(3) { animation-delay: 0.5s; }
+
+  /* counter animation */
+  .counter[data-target] {
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+
+<div class="deck">
+
+  <!-- SLIDE 01 · TITLE -->
+  <section class="slide s1 active scanlines vignette">
+    <div class="hero-bg" style="background-image: url('https://d8j0ntlcm91z4.cloudfront.net/user_2vOzIFXQkmKGTrvHWxbbN4rJDXo/hf_20260521_214255_e0be6768-12c2-4525-a624-5f34c3e7e0e9.png')"></div>
+    <div class="hero-fade"></div>
+    <div class="grid-bg"></div>
+    <div class="mood-orb red" style="top:-200px; right:-100px;"></div>
+    <div class="mood-orb orange" style="top:300px; right:200px;"></div>
+    <div class="mood-orb purple" style="bottom:-150px; left:-100px;"></div>
+    <div class="glow-edge"></div>
+    <div class="scene-tags">
+      <span>FESTIVALSEIZOEN</span>
+      <span>VRIJMIBO</span>
+      <span>KONINGSDAG</span>
+      <span>HARD SELTZER</span>
+      <span>IBIZA</span>
+      <span>SUMMER 2026</span>
+      <span>STUDENTENLEVEN</span>
+      <span>HUISFEESTJES</span>
+    </div>
+    <div class="noise"></div>
+    <div class="scan-effect"></div>
+    <div class="corner-frame tl"></div>
+    <div class="corner-frame tr"></div>
+    <div class="corner-frame bl"></div>
+    <div class="corner-frame br"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>22.05.2026 · STELZ · CONFIDENTIAL</div>
+    </div>
+    <div class="hero">
+      <div class="targeting"><span class="corners">DETECTED · 1.00 · STELZ</span></div>
+      <h1>STELZ<br>×<br><span class="x">Spot the Brand.</span></h1>
+      <div class="subtitle">Visual brand monitoring for the way people actually post.</div>
+      <div class="tag">We see what Storyclash misses.</div>
+    </div>
+    <div class="footer-chrome">
+      <div>by JackandAI · spotyourbrand.com</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 7%"></div></div>
+      <div><span style="color: var(--text)">01</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 02 · BELIEF -->
+  <section class="slide s2 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>WHAT WE BELIEVE</div>
+    </div>
+    <div class="section-label">WHAT WE BELIEVE</div>
+    <h2>Brands live in the wild.<br><span class="red">Not in hashtags.</span></h2>
+    <div class="lines">
+      <p>In someone's hand at een huisfeest. Op de bar in een story.</p>
+      <p>Op een afstudeerbaret. Op een troon van blikjes. Op de muur in Casa STËLZ.</p>
+      <p>Geen caption. Geen @drinkstelz. Gewoon STËLZ in beeld.</p>
+    </div>
+    <div class="closer">Dat is waar jullie brand echt leeft. En dat is wat we zien.</div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 14%"></div></div>
+      <div><span style="color: var(--text)">02</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 03 · GAP -->
+  <section class="slide s3 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>THE GAP</div>
+    </div>
+    <div class="section-label">DE BLINDE VLEK</div>
+    <h2>Wij zien beelden.<br>Zij lezen tekst.</h2>
+    <div class="columns">
+      <div class="col">
+        <div class="label">Legacy · Storyclash · Mention · Brandwatch</div>
+        <h3>Captions, hashtags,<br>@-mentions.</h3>
+        <div class="sub">Gebouwd toen mensen merken nog noemden in tekst.</div>
+        <div class="stat">Vindt ~20% van brand visibility. De rest is onzichtbaar.</div>
+      </div>
+      <div class="col spot">
+        <div class="label">Spot the Brand</div>
+        <h3>Visual AI op<br>elk frame.</h3>
+        <div class="sub">Visual AI leest het blikje, de muur, de baret, het shirt.</div>
+        <div class="stat">Vindt 100% van wat zichtbaar is. Inclusief de stille 80%.</div>
+      </div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 21%"></div></div>
+      <div><span style="color: var(--text)">03</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE · PRODUCT LINES (echte STELZ blikken) -->
+  <section class="slide s_products scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="mood-orb orange" style="top:-180px; right:-100px;"></div>
+    <div class="mood-orb purple" style="bottom:-150px; left:-100px;"></div>
+    <div class="glow-edge"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>PRODUCT LINES</div>
+    </div>
+    <div class="section-label">DETECTABLE PRODUCT LINES</div>
+    <h2 class="prod-head">Vier blikken.<br><span style="color:var(--accent)">Eén visuele AI.</span></h2>
+    <div class="prod-sub">De AI is per product line getraind. Wij weten welke smaak waar opduikt.</div>
+    <div class="prod-grid">
+      <div class="prod-card">
+        <div class="prod-img-wrap"><img src="https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/refs/stelz_seltzer.png" alt="STELZ Hard Seltzer"></div>
+        <div class="prod-name">Hard Seltzer</div>
+        <div class="prod-stat">351 hits</div>
+      </div>
+      <div class="prod-card">
+        <div class="prod-img-wrap"><img src="https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/refs/stelz_lemonade.png" alt="STELZ Hard Lemonade"></div>
+        <div class="prod-name">Hard Lemonade</div>
+        <div class="prod-stat">87 hits</div>
+      </div>
+      <div class="prod-card">
+        <div class="prod-img-wrap"><img src="https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/refs/stelz_icedtea.png" alt="STELZ Hard Iced Tea"></div>
+        <div class="prod-name">Hard Iced Tea</div>
+        <div class="prod-stat">220 hits</div>
+      </div>
+      <div class="prod-card">
+        <div class="prod-img-wrap"><img src="https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/refs/stelz_mixed.png" alt="STELZ Mixed Classics"></div>
+        <div class="prod-name">Mixed Classics</div>
+        <div class="prod-stat">17 hits</div>
+      </div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 22%"></div></div>
+      <div><span style="color: var(--text)">04</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE · DE WERELDEN VAN STELZ -->
+  <section class="slide s_worlds">
+    <div class="worlds-grid">
+      <div class="world" style="background-image: url('https://d8j0ntlcm91z4.cloudfront.net/user_2vOzIFXQkmKGTrvHWxbbN4rJDXo/hf_20260521_214255_e0be6768-12c2-4525-a624-5f34c3e7e0e9.png')">
+        <div class="world-label">FESTIVALSEIZOEN</div>
+        <div class="world-tag">Lakedance · Solar · Awakenings</div>
+      </div>
+      <div class="world" style="background-image: url('https://d8j0ntlcm91z4.cloudfront.net/user_2vOzIFXQkmKGTrvHWxbbN4rJDXo/hf_20260521_214303_fba94870-710a-4ace-900d-c429f88a71e1.png')">
+        <div class="world-label">IBIZA · CASA STËLZ</div>
+        <div class="world-tag">Influencer house · summer activatie</div>
+      </div>
+      <div class="world" style="background-image: url('https://d8j0ntlcm91z4.cloudfront.net/user_2vOzIFXQkmKGTrvHWxbbN4rJDXo/hf_20260521_214312_dd1538cf-49b4-45e4-a84b-884ddeafbf0e.png')">
+        <div class="world-label">VRIJMIBO · HUISFEESTJES</div>
+        <div class="world-tag">Student leven · weekend kickoff</div>
+      </div>
+      <div class="world" style="background-image: url('https://d8j0ntlcm91z4.cloudfront.net/user_2vOzIFXQkmKGTrvHWxbbN4rJDXo/hf_20260521_214321_6828e773-1c7a-4e3d-9813-a36a1c2beef6.png')">
+        <div class="world-label">KONINGSDAG</div>
+        <div class="world-tag">Oranjeroes · NL urban</div>
+      </div>
+    </div>
+    <div class="worlds-overlay"></div>
+    <div class="chrome" style="z-index: 50;">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>DE WERELDEN VAN STËLZ</div>
+    </div>
+    <div class="worlds-title">
+      <div class="section-label" style="position: static; padding-bottom: 14px;">DE WERELDEN VAN STËLZ</div>
+      <h2>Vier scenes.<br><span style="color:var(--accent)">Eén brand-radar.</span></h2>
+      <div class="worlds-sub">Wij weten in welke scenes jullie leven. Daar zoeken we, daar vinden we.</div>
+    </div>
+    <div class="footer-chrome" style="z-index: 50;">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 25%"></div></div>
+      <div><span style="color: var(--text)">04</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 05 · LIVE DATA -->
+  <section class="slide s4 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>LIVE STAND</div>
+    </div>
+    <div class="section-label">LIVE STAND · 22 MEI 2026</div>
+    <div class="live-tag">LIVE · STREAMING FROM SUPABASE</div>
+    <h2>Wat we nu al<br>voor STELZ zien.</h2>
+    <div class="grid">
+      <div class="stat-card"><span class="corner"></span><div class="label">CREATORS TRACKED</div><div class="value counter" data-target="3047">0</div><div class="sub">Instagram · TikTok</div></div>
+      <div class="stat-card accent"><span class="corner"></span><div class="label">VISUAL HITS</div><div class="value counter" data-target="829">0</div><div class="sub">in feed · vandaag</div></div>
+      <div class="stat-card good"><span class="corner"></span><div class="label">CONFIRMED</div><div class="value counter" data-target="593">0</div><div class="sub">door moderator</div></div>
+      <div class="stat-card gold"><span class="corner"></span><div class="label">LAATSTE 24U</div><div class="value">+<span class="counter" data-target="68">0</span></div><div class="sub">nieuwe hits</div></div>
+      <div class="stat-card"><span class="corner"></span><div class="label">PLATFORMS</div><div class="value">3</div><div class="sub">IG · TikTok · Stories</div></div>
+      <div class="stat-card"><span class="corner"></span><div class="label">PRODUCT LINES</div><div class="value">6</div><div class="sub">alle smaken</div></div>
+      <div class="stat-card accent"><span class="corner"></span><div class="label">SUBCULTURES</div><div class="value">1</div><div class="sub">Casa STËLZ · live</div></div>
+      <div class="stat-card good"><span class="corner"></span><div class="label">FALSE POS RATE</div><div class="value">&lt;2%</div><div class="sub">mens-gekeurd</div></div>
+    </div>
+    <div class="closer">Het systeem draait sinds februari. Wat hier staat is wat het automatisch heeft gevonden.</div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 30%"></div></div>
+      <div><span style="color: var(--text)">05</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 05 · AUTONOMOUS DISCOVERY -->
+  <section class="slide s5 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="mood-orb red" style="top:-150px; left:-100px;"></div>
+    <div class="mood-orb gold" style="bottom:-100px; right:-100px;"></div>
+    <div class="glow-edge"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>AUTONOMOUS DISCOVERY</div>
+    </div>
+    <div class="section-label">AUTONOMOUS DISCOVERY</div>
+    <div class="super">Het systeem vindt scenes<br><span class="red">vóór jullie ze noemen.</span></div>
+    <div class="sub">Geen handmatige searches. Geen creator-research. Signal-mining op overlappende hashtags + co-occurrences.</div>
+    <div class="discovery-flow">
+      <div class="df-arrow">
+        <div class="df-step">
+          <div class="df-step-label">SIGNAL</div>
+          <div class="df-step-title">Cluster detectie</div>
+          <div class="df-step-body">Het systeem ziet welke hashtags bij elkaar voorkomen in posts van seed-creators. Nieuwe clusters = mogelijke campagnes.</div>
+        </div>
+        <div class="df-step">
+          <div class="df-step-label">EXPAND</div>
+          <div class="df-step-title">Auto-scrape</div>
+          <div class="df-step-body">Hashtags worden automatisch toegevoegd aan de pool. Het systeem oogst onder de nieuwe tags. Honderden nieuwe handles.</div>
+        </div>
+        <div class="df-step">
+          <div class="df-step-label">SCORE</div>
+          <div class="df-step-title">Visual verificatie</div>
+          <div class="df-step-body">Gemini scant elke cover voor STËLZ visibility. Hits met confidence + size + primary subject score worden gerapporteerd.</div>
+        </div>
+      </div>
+    </div>
+    <div class="proof-strip">
+      <div class="proof-label">▸ BEWIJS · CASA STËLZ · AUTOMATISCH GEVONDEN</div>
+      <div class="proof-stats">
+        <div class="ps-item"><div class="ps-val">91</div><div class="ps-lbl">NIEUWE CREATORS</div></div>
+        <div class="ps-item"><div class="ps-val">17</div><div class="ps-lbl">VISUAL HITS</div></div>
+        <div class="ps-item"><div class="ps-val">1,8M</div><div class="ps-lbl">LIKES OP TOP POST</div></div>
+        <div class="ps-item"><div class="ps-val">3</div><div class="ps-lbl">LOOKALIKE MATCHES</div></div>
+      </div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 35%"></div></div>
+      <div><span style="color: var(--text)">06</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 06 · HITS GRID -->
+  <section class="slide s6 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>VISUAL ONLY</div>
+    </div>
+    <div class="section-label">VISUAL ONLY · WHAT OTHERS MISS</div>
+    <h2>Geen caption. Geen hashtag.<br>Pure organische zichtbaarheid.</h2>
+    <div class="hits-grid">
+      <div class="hit">
+        <div class="hit-img" style="background-image: url('https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/stelz/83/8317bea8e60963ce710b9c03a71691ccfff5b76c60299b9464599a48379e2f72.jpg')"></div>
+        <div class="hit-body">
+          <div class="meta"><span class="platform-pill">TIKTOK</span><span class="conf-pill">100%</span></div>
+          <div class="handle">@leonardos.gelato</div>
+          <div class="followers">9.203 followers · 8.067 likes</div>
+          <div class="context">"#foryou #fyp #eindhoven" — STËLZ Hard Iced Tea Peach in handen, alle branding zichtbaar. Caption noemt STËLZ niet.</div>
+          <div class="visual-tag">▸ VISUAL ONLY</div>
+        </div>
+      </div>
+      <div class="hit">
+        <div class="hit-img" style="background-image: url('https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/stelz/c8/c8faca1a1fe56c8a249a0e26ed46f697c3d45e66e64c67142bb4f09871911957.jpg')"></div>
+        <div class="hit-body">
+          <div class="meta"><span class="platform-pill">INSTA</span><span class="conf-pill">100%</span></div>
+          <div class="handle">@bavaria.bierkoerier</div>
+          <div class="followers">3.537 followers</div>
+          <div class="context">Man zit op een TROON gebouwd van STËLZ Hard Seltzer blikjes onder gekleurd licht. Geen caption.</div>
+          <div class="visual-tag">▸ VISUAL ONLY</div>
+        </div>
+      </div>
+      <div class="hit">
+        <div class="hit-img" style="background-image: url('https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/stelz/49/496e8b7c8b446ff8653bc804333fc89cb023fd2ae4222fb0d6cfcb45c6cbc823.jpg')"></div>
+        <div class="hit-body">
+          <div class="meta"><span class="platform-pill">TIKTOK</span><span class="conf-pill">100%</span></div>
+          <div class="handle">@hapslikwegmetmitch</div>
+          <div class="followers">26.000 followers · satire</div>
+          <div class="context">"Wat denk jij? 🍻 #HapSlikWeg #Pils #Grap" — STËLZ Hard Seltzer wordt uit blik in glas geschonken. Caption gaat over bier, niet STËLZ.</div>
+          <div class="visual-tag">▸ VISUAL ONLY</div>
+        </div>
+      </div>
+      <div class="hit">
+        <div class="hit-img" style="background-image: url('https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/stelz/22/222b474ff663cad6f0e13c041e49f1ba540577579593dd47b697be8d1d10bbde.jpg')"></div>
+        <div class="hit-body">
+          <div class="meta"><span class="platform-pill">TIKTOK</span><span class="conf-pill">100%</span></div>
+          <div class="handle">@friscompanyeindhoven</div>
+          <div class="followers">3.050 followers · 2.666 likes</div>
+          <div class="context">"Carnaval here we come!!!" — Grote winkel display met stapels STËLZ Seltzer, Lemonade en Iced Tea. Retail visibility goud.</div>
+          <div class="visual-tag">▸ VISUAL ONLY</div>
+        </div>
+      </div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 41%"></div></div>
+      <div><span style="color: var(--text)">07</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE · FULL FLASH BREAK (cinematic interstitial 1) -->
+  <section class="slide s_break_1">
+    <div class="break-bg" style="background-image: url('https://d8j0ntlcm91z4.cloudfront.net/user_2vOzIFXQkmKGTrvHWxbbN4rJDXo/hf_20260521_214346_a7b127b9-c8ee-4d7c-bfc0-1ee3eb1d0590.png')"></div>
+    <div class="break-overlay"></div>
+    <div class="chrome" style="z-index: 50;">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>SCENES</div>
+    </div>
+    <div class="break-quote">
+      <div class="break-tag">▸ KONINGSDAG · DIRECT FLASH</div>
+      <h2>Hier draagt iemand<br>jullie merk.<br><span style="color:var(--accent)">Wij zien het.</span></h2>
+    </div>
+    <div class="footer-chrome" style="z-index: 50;">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 50%"></div></div>
+      <div><span style="color: var(--text)">09</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 09 · ALGORITHM -->
+  <section class="slide s7 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>DE OLIEVLEK</div>
+    </div>
+    <div class="section-label">LOOKALIKE ALGORITHM</div>
+    <h2>Geef ons jullie campagne.<br>Wij vinden de scene.</h2>
+    <div class="lead">Het lookalike-algoritme in vier stappen:</div>
+    <div class="steps">
+      <div class="step"><div class="num">STAP 01</div><div class="name">TAG</div><div class="body">Markeer jullie campagne-creators als subculture. Eén klik.</div></div>
+      <div class="step"><div class="num">STAP 02</div><div class="name">MINE</div><div class="body">Het systeem extract hun signature hashtags + co-occurrences.</div></div>
+      <div class="step"><div class="num">STAP 03</div><div class="name">SCAN</div><div class="body">Apify-scrape onder die hashtags · honderden nieuwe handles gevonden.</div></div>
+      <div class="step"><div class="num">STAP 04</div><div class="name">SCORE</div><div class="body">Signal-score per kandidaat · drempel = jouw lookalike-lijst.</div></div>
+    </div>
+    <div class="proof">
+      <div class="label">▸ BEWIJS · CASA STËLZ · LIVE</div>
+      <div class="text">Binnen 1 uur na expansion: 3 van 17 lookalikes hadden al een visual hit.</div>
+      <div class="sub">@chloeannamarianne (signal score 12) blijkt stagiair bij Booij Agency. STËLZ in haar Elle NL post.</div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 47%"></div></div>
+      <div><span style="color: var(--text)">08</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 08 · DOELGROEPEN VINDEN -->
+  <section class="slide s_audience scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="mood-orb red" style="top:-200px; right:-150px;"></div>
+    <div class="mood-orb purple" style="bottom:-150px; left:-100px;"></div>
+    <div class="scene-tags">
+      <span>STUDENTEN</span>
+      <span>FESTIVALS</span>
+      <span>VRIJMIBO</span>
+      <span>KONINGSDAG</span>
+      <span>HUISFEESTJES</span>
+      <span>IBIZA</span>
+      <span>HORECA</span>
+      <span>SUMMER</span>
+    </div>
+    <div class="glow-edge"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>DOELGROEPEN</div>
+    </div>
+    <div class="section-label">HOE VINDEN WE DOELGROEPEN</div>
+    <h2 class="aud-head">Vier manieren waarop het systeem<br>nieuwe scenes ontdekt.</h2>
+    <div class="aud-grid">
+      <div class="aud-card">
+        <div class="aud-num">01</div>
+        <div class="aud-title">Hashtag co-occurrence</div>
+        <div class="aud-body">Welke hashtags duiken steeds samen op? <span class="hi">#stelz</span> + <span class="hi">#vrijmibo</span> + <span class="hi">#nachtleven</span> = student / party scene. Het systeem mined deze clusters automatisch.</div>
+      </div>
+      <div class="aud-card">
+        <div class="aud-num">02</div>
+        <div class="aud-title">Creator-graph mining</div>
+        <div class="aud-body">Tier-1 creators taggen elkaar. Het systeem extract die @-mentions, telt overlap, en promoot drukke handles naar de tracker.</div>
+      </div>
+      <div class="aud-card">
+        <div class="aud-num">03</div>
+        <div class="aud-title">Subculture expansion</div>
+        <div class="aud-body">Markeer een set creators als scene → systeem mined hun signature hashtags → scrapet die → vindt lookalikes met signal-score.</div>
+      </div>
+      <div class="aud-card">
+        <div class="aud-num">04</div>
+        <div class="aud-title">Visual clustering</div>
+        <div class="aud-body">Vergelijkbare scenes (festival podium, huiskamerparty, terras) worden visueel gegroepeerd. Brand wordt automatisch gekoppeld aan moments.</div>
+      </div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 56%"></div></div>
+      <div><span style="color: var(--text)">10</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 09 · BEYOND THE FEED -->
+  <section class="slide s8 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>BEYOND THE FEED</div>
+    </div>
+    <div class="section-label">BEYOND THE FEED</div>
+    <h2>Stories. Highlights.<br>Het brand op een baret.</h2>
+    <div class="lead">Niet alleen feed posts. Wij scannen elk frame waar STËLZ in beeld kan zijn.</div>
+    <div class="formats">
+      <div class="fmt gold">
+        <div class="label">▸ HIGHLIGHTS</div>
+        <div class="val">440</div>
+        <div class="body">Permanente saved stories van followed accounts. 21 STËLZ hits in eerste run. Bavaria troon. Retail visibility. DJ booths met STËLZ sign.</div>
+      </div>
+      <div class="fmt">
+        <div class="label">▸ STORIES (24U)</div>
+        <div class="val">CRON</div>
+        <div class="body">Live story-scraping via gekoppeld IG-account. Setup: 1 dag na deal. Verwachte uplift: 2-3× brand impressies. Stories verdwijnen, wij vangen.</div>
+      </div>
+      <div class="fmt muted">
+        <div class="label">▸ TIKTOK</div>
+        <div class="val">194</div>
+        <div class="body">Inclusief #casastelz, #stelzhouse, #stelzibiza. Cover-frame detection via Gemini Vision.</div>
+      </div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 61%"></div></div>
+      <div><span style="color: var(--text)">11</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 09 · STACK -->
+  <section class="slide s9 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>HOW IT WORKS</div>
+    </div>
+    <div class="section-label">THE STACK</div>
+    <h2>Vier lagen.<br>Eén dashboard.</h2>
+    <div class="layers">
+      <div class="layer"><div class="name">HARVEST</div><div class="desc">Apify · IG hashtag, IG profile, IG stories, TikTok hashtag, TikTok profile</div></div>
+      <div class="layer"><div class="name">DETECT</div><div class="desc">Gemini 2.5 Flash · 67 img/min · €0.001 per detection</div></div>
+      <div class="layer"><div class="name">VERIFY</div><div class="desc">Mens-in-the-loop moderator · sticky reject · trains de scanner</div></div>
+      <div class="layer"><div class="name">SURFACE</div><div class="desc">Live dashboard · filters · subcultures · CSV · alerts mail/Slack/WA</div></div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 67%"></div></div>
+      <div><span style="color: var(--text)">12</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE · FULL FLASH BREAK 2 (cinematic interstitial 2) -->
+  <section class="slide s_break_2">
+    <div class="break-bg" style="background-image: url('https://d8j0ntlcm91z4.cloudfront.net/user_2vOzIFXQkmKGTrvHWxbbN4rJDXo/hf_20260521_214331_fe1234c4-b59d-4800-85d8-3072e4feaa06.png')"></div>
+    <div class="break-overlay"></div>
+    <div class="chrome" style="z-index: 50;">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>SCENES</div>
+    </div>
+    <div class="break-quote">
+      <div class="break-tag">▸ NACHTLEVEN · DIRECT FLASH</div>
+      <h2>Wij vinden jullie merk<br>op een vrijdagavond,<br><span style="color:var(--accent)">in een vreemd huis.</span></h2>
+    </div>
+    <div class="footer-chrome" style="z-index: 50;">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 67%"></div></div>
+      <div><span style="color: var(--text)">12</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 12 · USE CASES -->
+  <section class="slide s_use scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="mood-orb orange" style="top:-180px; left:-100px;"></div>
+    <div class="mood-orb pink" style="bottom:-150px; right:-100px;"></div>
+    <div class="glow-edge"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>USE CASES</div>
+    </div>
+    <div class="section-label">WAT JE ERMEE KUNT</div>
+    <h2 class="use-head">Zes manieren waarop STELZ<br>het platform inzet.</h2>
+    <div class="use-grid">
+      <div class="use-card">
+        <div class="use-icon">◉</div>
+        <div class="use-title">Campaign tracking</div>
+        <div class="use-body">Live monitoring van Casa STËLZ, Lakedance activatie, Koningsdag-push. Realtime impact per moment.</div>
+      </div>
+      <div class="use-card">
+        <div class="use-icon">◢</div>
+        <div class="use-title">Creator outreach</div>
+        <div class="use-body">Top organische posters krijgen DM-templates. Beloon de fans die jullie al pushen. Verlaag CPM.</div>
+      </div>
+      <div class="use-card">
+        <div class="use-icon">▢</div>
+        <div class="use-title">Retail visibility</div>
+        <div class="use-body">Slijterij-shelves, supermarkt-displays, horeca-koelkasten. Visual AI ziet POS-aanwezigheid waar je niet zelf staat.</div>
+      </div>
+      <div class="use-card">
+        <div class="use-icon">▲</div>
+        <div class="use-title">Cultuurrapportage</div>
+        <div class="use-body">Maandelijks: in welke scenes groeit STELZ, welke nieuwe subcultures ontstaan, welke moments staan op springen.</div>
+      </div>
+      <div class="use-card">
+        <div class="use-icon">◆</div>
+        <div class="use-title">Sentiment & context</div>
+        <div class="use-body">Hoe wordt STELZ gebruikt? Bij welke gelegenheden? Positief / neutraal? Per product line gesegmenteerd.</div>
+      </div>
+      <div class="use-card">
+        <div class="use-icon">✕</div>
+        <div class="use-title">Competitive benchmark</div>
+        <div class="use-body">Same monitoring op Bavaria 0.0, Heineken NSA, White Claw. Wie domineert welke scene? Wie schuift op?</div>
+      </div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 72%"></div></div>
+      <div><span style="color: var(--text)">13</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 12 · WHY NOW -->
+  <section class="slide s10 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>WHY NOW</div>
+    </div>
+    <div class="section-label">WHY NOW</div>
+    <h2>Drie shifts maken visual brand monitoring nu mogelijk.</h2>
+    <div class="shifts">
+      <div class="shift">
+        <div class="num">01</div>
+        <div>
+          <div class="name">Mensen taggen niet meer.</div>
+          <div class="body">Gen Z noemt brands niet in captions. 80% van brand visibility is visueel-only. Storyclash mist het. Brandwatch mist het. Mention mist het.</div>
+        </div>
+      </div>
+      <div class="shift">
+        <div class="num">02</div>
+        <div>
+          <div class="name">Vision AI is goedkoop geworden.</div>
+          <div class="body">Gemini Flash: €0.001 per image. Wat 5 jaar geleden niet kon, kost nu minder dan een hashtag-scrape. De economics zijn omgedraaid.</div>
+        </div>
+      </div>
+      <div class="shift">
+        <div class="num">03</div>
+        <div>
+          <div class="name">Stories zijn ephemeral.</div>
+          <div class="body">24 uur visibility. Zonder daily scrape gemist. Onze cron pakt elke dag. Highlights blijven, stories ook gevangen voordat ze verdwijnen.</div>
+        </div>
+      </div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 78%"></div></div>
+      <div><span style="color: var(--text)">14</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE · REAL SPOTS GALLERY -->
+  <section class="slide s_spots scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="mood-orb red" style="top:-200px; right:-100px;"></div>
+    <div class="mood-orb orange" style="bottom:-150px; left:-100px;"></div>
+    <div class="glow-edge"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>REAL SPOTS</div>
+    </div>
+    <div class="section-label">REAL SPOTS · ECHT GEVONDEN</div>
+    <h2 class="spots-head">STËLZ in beeld.<br><span style="color:var(--accent)">Échte vondsten.</span></h2>
+    <div class="spots-grid">
+      <figure class="spot-card">
+        <img src="https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/stelz/56/56cd8b5178e44f3926c3e61201eb318d1ca89026c5520f1f38698725632f536e.jpg" alt="">
+        <figcaption>
+          <span class="spot-meta">TIKTOK · @victoriavermeer · 92K</span>
+          <span class="spot-handle">Casa STËLZ poolside</span>
+          <span class="spot-ctx">"Alles gevlogd voor op youtube" — Hard Lemonade, conf 1.00</span>
+        </figcaption>
+      </figure>
+      <figure class="spot-card">
+        <img src="https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/stelz/2b/2bced4a6010a12f7975f5945f95af8f8cd96cdb1342403e747d2affe21617f37.jpg" alt="">
+        <figcaption>
+          <span class="spot-meta">TIKTOK · @m00nyean · DJ Koningsdag</span>
+          <span class="spot-handle">Crowd holds 3 STËLZ cans</span>
+          <span class="spot-ctx">"Land of the best crowds" — Hard Seltzer + Iced Tea, conf 0.95</span>
+        </figcaption>
+      </figure>
+      <figure class="spot-card">
+        <img src="https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/stelz/41/41ea427e465639826880c4b6b2da20b6feadc90ac7793550d6e612081b53daa3.jpg" alt="">
+        <figcaption>
+          <span class="spot-meta">TIKTOK · @angellklink · Verbond</span>
+          <span class="spot-handle">2× STËLZ in handen</span>
+          <span class="spot-ctx">"Wie gaan er nog meer dansen?" — Lemonade + Mixed G&T, conf 0.95</span>
+        </figcaption>
+      </figure>
+      <figure class="spot-card">
+        <img src="https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/stelz/9f/9f4d64210c69d12c14c77b317e683bbe4e6d64d67b1f4e6be016bc392e384a9d.jpg" alt="">
+        <figcaption>
+          <span class="spot-meta">TIKTOK · @lobkedejongg · Koningsdag</span>
+          <span class="spot-handle">Orange STËLZ Hard Seltzer</span>
+          <span class="spot-ctx">"Lang leven Willem 🧡" #koningsdag #oranje, conf 1.00</span>
+        </figcaption>
+      </figure>
+      <figure class="spot-card">
+        <img src="https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/stelz/ad/ad5500ee9408f80d593dc8a16eafbbe1eb4461a71bb801fc1f26a4ebf5a1edf1.jpg" alt="">
+        <figcaption>
+          <span class="spot-meta">TIKTOK · @ninahouston · 1.0M</span>
+          <span class="spot-handle">Tompouce special edition</span>
+          <span class="spot-ctx">Two women hold up STËLZ Tompouce cans · launch moment</span>
+        </figcaption>
+      </figure>
+      <figure class="spot-card">
+        <img src="https://menaatbeoeutywulcdvv.supabase.co/storage/v1/object/public/brand-watch-thumbnails/stelz/82/829ab8c891ae9d8a1e46a2364c7de0bfcf6a006f08425005116af183f1d16e77.jpg" alt="">
+        <figcaption>
+          <span class="spot-meta">TIKTOK · @nu.nl · 337K</span>
+          <span class="spot-handle">Hard Seltzer Raspberry</span>
+          <span class="spot-ctx">Woman in advertisement holds STËLZ can to face · brand visibility</span>
+        </figcaption>
+      </figure>
+    </div>
+    <div class="spots-footer">
+      Alle 6 spots: detected door visual AI, geverifieerd door moderator. Captions noemen STËLZ vaak niet — daarom missen text-tools dit.
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 83%"></div></div>
+      <div><span style="color: var(--text)">15</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 12 · 30-60-90 -->
+  <section class="slide s12 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>30 · 60 · 90</div>
+    </div>
+    <div class="section-label">WAT JULLIE KRIJGEN</div>
+    <h2>30 dagen.<br>60 dagen.<br>90 dagen.</h2>
+    <div class="phases">
+      <div class="phase">
+        <div class="left">
+          <div class="days">DAG 1 — 30</div>
+          <div class="name">BASELINE</div>
+        </div>
+        <div class="right">
+          <div class="body">3000+ creators in tracker · 1000+ visual hits · alle product-lines gemonitord · weekly cultuurrapport.</div>
+          <div class="who">→ voor jullie marketing & merk-team</div>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="left">
+          <div class="days">DAG 31 — 60</div>
+          <div class="name">ACTIVATIE</div>
+        </div>
+        <div class="right">
+          <div class="body">Casa STËLZ + Lakedance + Solar als subcultures · lookalike-uitbreiding · creator outreach via DM-templates.</div>
+          <div class="who">→ voor jullie influencer programma</div>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="left">
+          <div class="days">DAG 61 — 90</div>
+          <div class="name">INTELLIGENCE</div>
+        </div>
+        <div class="right">
+          <div class="body">Cultuurrapport per maand · sentiment scoring · POS shelf visibility · competitive benchmark vs Bavaria, Heineken NSA.</div>
+          <div class="who">→ voor jullie commercial & sales team</div>
+        </div>
+      </div>
+    </div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 89%"></div></div>
+      <div><span style="color: var(--text)">16</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 13 · LIVE NOW -->
+  <section class="slide s13 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>LIVE · OPEN IT NOW</div>
+    </div>
+    <div class="section-label">LIVE NU</div>
+    <h2>Het draait al.<br>Voor jullie.</h2>
+    <div class="url">spotyourbrand.com/?brand=stelz</div>
+    <div class="demo-panels">
+      <div class="demo-panel">
+        <div class="pname">▸ DASHBOARD</div>
+        <div class="ptitle">829 hits live · filters per product line, size, platform, format · subcultures tab</div>
+        <div class="pbody">CSV export · daily delta-mail · alle creator profielen klikbaar · trend chart 30 dagen · search</div>
+      </div>
+      <div class="demo-panel good">
+        <div class="pname">▸ MODERATOR</div>
+        <div class="ptitle">516 confirmed · 175 rejected · sticky reject = weg, ook bij rescan</div>
+        <div class="pbody">Keyboard shortcuts (← reject · → confirm · space skip) · trainen vision · false positive &lt; 2%</div>
+      </div>
+    </div>
+    <div class="ctcta">Bekijk het tijdens deze meeting · live · met jullie ogen erbij.</div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 94%"></div></div>
+      <div><span style="color: var(--text)">17</span> / 19</div>
+    </div>
+  </section>
+
+  <!-- SLIDE 16 · CLOSE -->
+  <section class="slide s14 scanlines vignette">
+    <div class="grid-bg"></div>
+    <div class="mood-orb red" style="top:-200px; left:-100px;"></div>
+    <div class="mood-orb orange" style="bottom:-150px; right:-100px;"></div>
+    <div class="mood-orb purple" style="top:50%; right:20%;"></div>
+    <div class="glow-edge"></div>
+    <div class="noise"></div>
+    <div class="scan-effect"></div>
+    <div class="chrome">
+      <div class="brand">Spot the Brand<span class="dot"></span></div>
+      <div>NEXT STEP</div>
+    </div>
+    <div class="center">
+      <h2>Klein begin.<br><span class="red">Grote vlek.</span></h2>
+      <div class="lead">Vandaag tekenen → morgen nieuwe campagne live in dashboard.</div>
+      <div class="cta-box">
+        <div class="label">▸ NEXT STEP</div>
+        <div class="offer">Pilot · €500/mnd · 3 maanden · binnen 48u live met jullie data.</div>
+        <div class="small">Contract op één A4. Geen setup fee. Maand-tot-maand opzegbaar na pilot.</div>
+      </div>
+    </div>
+    <div class="signature">Meinte Stinstra · meinte.stinstra@dorstenlesser.nl · JackandAI</div>
+    <div class="footer-chrome">
+      <div>STELZ · 22 May 2026</div>
+      <div class="progress-bar"><div class="progress-fill" style="width: 100%"></div></div>
+      <div><span style="color: var(--text)">18</span> / 19</div>
+    </div>
+  </section>
+
+</div>
+
+<div class="nav-hint">
+  <kbd>←</kbd> <kbd>→</kbd> navigate · <kbd>F</kbd> fullscreen · <kbd>1-9</kbd> jump
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let current = 0;
+
+  function show(idx, dir = 1) {
+    if (idx < 0 || idx >= slides.length) return;
+    const old = slides[current];
+    const next = slides[idx];
+    old.classList.remove('active');
+    old.classList.add('exiting');
+    setTimeout(() => old.classList.remove('exiting'), 350);
+    next.classList.add('active');
+    current = idx;
+    animateCounters(next);
+  }
+
+  function animateCounters(slide) {
+    const counters = slide.querySelectorAll('.counter[data-target]');
+    counters.forEach(el => {
+      const target = parseInt(el.dataset.target);
+      const duration = 1400;
+      const start = performance.now();
+      function tick(now) {
+        const t = Math.min(1, (now - start) / duration);
+        const eased = 1 - Math.pow(1 - t, 3);
+        el.textContent = Math.round(target * eased).toLocaleString('nl-NL');
+        if (t < 1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    });
+  }
+
+  // Init counters on first slide
+  animateCounters(slides[0]);
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+      show(Math.min(current + 1, slides.length - 1), 1);
+      e.preventDefault();
+    } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+      show(Math.max(current - 1, 0), -1);
+      e.preventDefault();
+    } else if (e.key === 'Home') {
+      show(0);
+    } else if (e.key === 'End') {
+      show(slides.length - 1);
+    } else if (e.key === 'f' || e.key === 'F') {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen();
+    } else if (e.key >= '1' && e.key <= '9') {
+      const target = parseInt(e.key) - 1;
+      if (target < slides.length) show(target);
+    } else if (e.key === '0') {
+      show(9);
+    }
+  });
+
+  // click on right half to advance, left half to go back
+  document.addEventListener('click', e => {
+    if (e.target.closest('.nav-hint, a, button, kbd')) return;
+    const x = e.clientX;
+    if (x > window.innerWidth / 2) show(Math.min(current + 1, slides.length - 1));
+    else show(Math.max(current - 1, 0));
+  });
+
+  // auto-scale for different viewport sizes
+  function fitViewport() {
+    const ideal = { w: 1440, h: 900 };
+    const scale = Math.min(window.innerWidth / ideal.w, window.innerHeight / ideal.h);
+    document.documentElement.style.fontSize = (16 * scale) + 'px';
+    document.querySelector('.deck').style.transform = `scale(${scale})`;
+    document.querySelector('.deck').style.transformOrigin = 'top left';
+    document.querySelector('.deck').style.width = ideal.w + 'px';
+    document.querySelector('.deck').style.height = ideal.h + 'px';
+    document.querySelector('.deck').style.position = 'absolute';
+    document.querySelector('.deck').style.top = ((window.innerHeight - ideal.h * scale) / 2) + 'px';
+    document.querySelector('.deck').style.left = ((window.innerWidth - ideal.w * scale) / 2) + 'px';
+  }
+  fitViewport();
+  window.addEventListener('resize', fitViewport);
+</script>
+
+</body>
+</html>
