@@ -1,0 +1,908 @@
+"""Hashtag discovery scan.
+
+Reads brand.hashtagPool, scrapes each hashtag via Apify, then:
+  1. Writes each scraped post to /brands/{id}/posts so detect-image has context
+  2. Fans out detect-image / detect-video Pub/Sub messages directly
+     (so we don't depend on scan_creators to revisit these — that's a
+     deep-pass for known creators)
+  3. Upserts candidate handles to discoveryQueue
+  4. Auto-promotes to creators only after handle is seen using
+     >= PROMOTION_UNIQUE_TAGS different brand hashtags (quality gate).
+
+The direct fan-out makes a hashtag scan immediately productive: each scan
+produces hundreds of detection attempts, not just discovery candidates.
+"""
+from __future__ import annotations
+import datetime as dt
+import json
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
+
+from google.cloud import pubsub_v1
+from google.cloud.firestore import SERVER_TIMESTAMP, Increment
+
+from lib import apify, fs, usage
+
+log = logging.getLogger(__name__)
+
+PROJECT_ID = "brand-audit-4b2cc"
+DETECT_IMAGE_TOPIC = "detect-image"
+DETECT_VIDEO_TOPIC = "detect-video"
+SCRAPE_TAG_TOPIC = "scrape-tag"
+
+
+def _slugify(text: str) -> str:
+    """TikTok music URL slug: lowercase, non-alnum → dash."""
+    import re
+    s = (text or "").lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s or "sound"
+
+
+def _tiktok_music_url(music_id: str | None, music_name: str | None) -> str | None:
+    """Build the public TikTok music page URL from id + name."""
+    if not music_id:
+        return None
+    slug = _slugify(music_name or "original-sound")
+    return f"https://www.tiktok.com/music/{slug}-{music_id}"
+
+# Promote on first signal — anyone using a brand-specific hashtag is fair game.
+# Was 2 (required cross-hashtag confirmation), but that wastes 95% of candidates
+# from brand-named tags like #stelz which are already brand-specific.
+# A handle is auto-promoted to a creator when it has been observed posting
+# to at least this many DIFFERENT brand hashtags (measured on len(sources),
+# not signalCount which counts total posts). Prevents unrelated accounts
+# with a single random tag hit from polluting the creator list.
+PROMOTION_UNIQUE_TAGS = 2
+
+
+def publish_tags(brand_id: str, per_tag: int = 500, max_tags: int = 50) -> dict[str, Any]:
+    """Fast publisher: enqueues one Pub/Sub message per active hashtag onto
+    the scrape-tag topic. Returns immediately. The on_scrape_tag worker
+    processes each tag independently with its own 540s budget.
+    """
+    brand = fs.brand_doc(brand_id).get()
+    if not brand.exists:
+        raise ValueError(f"brand not found: {brand_id}")
+
+    pool_raw = list(fs.hashtag_pool_col(brand_id).where("active", "==", True).stream())
+    if not pool_raw:
+        return {"queued": 0, "tags": []}
+
+    pool = sorted(
+        pool_raw,
+        key=lambda d: (d.to_dict() or {}).get("priority", 0),
+        reverse=True,
+    )[:max_tags]
+
+    publisher = pubsub_v1.PublisherClient()
+    topic = publisher.topic_path(PROJECT_ID, SCRAPE_TAG_TOPIC)
+    queued: list[str] = []
+    futures = []
+
+    for h_doc in pool:
+        h = h_doc.to_dict() or {}
+        tag = (h.get("tag") or "").lower().lstrip("#")
+        platform = h.get("platform") or "instagram"
+        if not tag:
+            continue
+        payload = {
+            "brandId": brand_id,
+            "tag": tag,
+            "platform": platform,
+            "perTag": per_tag,
+        }
+        futures.append(publisher.publish(topic, json.dumps(payload).encode()))
+        queued.append(f"{platform}:{tag}")
+
+    if futures:
+        from concurrent.futures import wait as _fwait
+        _fwait(futures, timeout=15)
+
+    # Write the scan session state so the UI can subscribe and show progress
+    # without polling. Reset counters at every new scan click. Worker
+    # `process_one_tag` increments hashtagDone as it finishes each tag; each
+    # detect_image / detect_video invocation increments detectionsCompleted.
+    fs.brand_doc(brand_id).set({
+        "scan": {
+            "startedAt": SERVER_TIMESTAMP,
+            "finishedAt": None,
+            "hashtagQueued": len(queued),
+            "hashtagDone": 0,
+            "postsWritten": 0,
+            "detectTasksEnqueued": 0,
+            "detectionsCompleted": 0,
+            "detectionsHit": 0,
+            "skippedCount": 0,
+            "endReason": None,
+            "tags": queued,
+            "lastActivityAt": SERVER_TIMESTAMP,
+        }
+    }, merge=True)
+
+    return {"queued": len(queued), "tags": queued}
+
+
+def _mark_tag_done(brand_id: str, posts_written: int = 0, detect_tasks: int = 0) -> None:
+    """Idempotently bump the per-tag counter. Safe to call from finally so
+    the session eventually converges to `hashtagDone == hashtagQueued` even
+    if the worker crashed mid-scrape."""
+    try:
+        fs.brand_doc(brand_id).set({
+            "scan": {
+                "hashtagDone": Increment(1),
+                "postsWritten": Increment(posts_written),
+                "detectTasksEnqueued": Increment(detect_tasks),
+                "lastActivityAt": SERVER_TIMESTAMP,
+            }
+        }, merge=True)
+        # If we're the last worker, mark finished. Race-safe: same client
+        # sees its own Increment, and Firestore merge on the same field with
+        # SERVER_TIMESTAMP is idempotent.
+        snap = fs.brand_doc(brand_id).get()
+        scan = (snap.to_dict() or {}).get("scan") or {}
+        done = scan.get("hashtagDone", 0)
+        queued = scan.get("hashtagQueued", 0)
+        if queued > 0 and done >= queued and not scan.get("finishedAt"):
+            fs.brand_doc(brand_id).set({
+                "scan": {"finishedAt": SERVER_TIMESTAMP}
+            }, merge=True)
+    except Exception as e:
+        log.error(f"_mark_tag_done failed: {e}")
+
+
+def process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int = 500) -> dict[str, Any]:
+    """Pub/Sub worker entrypoint — scrapes ONE hashtag and writes its posts +
+    fans out detect-image/video messages. Idempotent: re-running is harmless
+    (downstream detect handlers dedupe via imageHashCache + videoProcessed).
+    Guarantees the session counter increments even on partial failure so the
+    UI never gets stuck at "18/19".
+    """
+    result: dict[str, Any] = {}
+    try:
+        result = _do_process_one_tag(brand_id, tag, platform, per_tag)
+        return result
+    finally:
+        _mark_tag_done(
+            brand_id,
+            posts_written=int(result.get("posts_written") or 0),
+            detect_tasks=int((result.get("images_enqueued") or 0) + (result.get("videos_enqueued") or 0)),
+        )
+
+
+def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) -> dict[str, Any]:
+    brand = fs.brand_doc(brand_id).get()
+    if not brand.exists:
+        log.warning(f"[scrape-tag] brand not found: {brand_id}")
+        return {"status": "skip", "reason": "no_brand"}
+
+    existing_handles = _existing_creator_handles(brand_id)
+    posts_col = fs.posts_col(brand_id)
+    publisher = pubsub_v1.PublisherClient()
+    image_topic = publisher.topic_path(PROJECT_ID, DETECT_IMAGE_TOPIC)
+    video_topic = publisher.topic_path(PROJECT_ID, DETECT_VIDEO_TOPIC)
+    queue_col = fs.discovery_queue_col(brand_id)
+
+    # ── Scrape ────────────────────────────────────────────────────────
+    # Both platforms go through Apify actors. TikTok used to run through our
+    # own Playwright function, but TikTok blocks GCP egress IPs and Apify's
+    # residential proxy needs a separate password we don't have — clockworks
+    # runs on Apify's own proxy pool and just works (same actor the creator
+    # scan uses for 500+ videos/run).
+    diag: dict | None = None
+    try:
+        if platform == "instagram":
+            items = apify.scrape_hashtag_ig(tag, per_tag)
+        else:
+            items = apify.scrape_hashtag_tiktok(tag, min(per_tag, 200))
+    except Exception as e:
+        log.error(f"[scrape-tag] #{tag} scrape failed: {e}")
+        _scrape_log(brand_id, tag, platform, error=f"scrape_exception:{type(e).__name__}", diag=diag)
+        return {"status": "error", "tag": tag, "reason": "scrape_exception"}
+
+    usage.record(brand_id, apify_runs=1)
+    if items is None:
+        _scrape_log(brand_id, tag, platform, error="scrape_returned_none", diag=diag)
+        return {"status": "ok", "tag": tag, "items": 0}
+
+    _audit_scrape(brand_id, tag, platform, items, diag=diag)
+
+    # ── Aggregate + persist + fan out detection ──────────────────────
+    candidates: dict[str, dict] = {}
+    posts_written = 0
+    images_enqueued = 0
+    videos_enqueued = 0
+    detect_futures: list = []
+
+    for item in items:
+        handle = (
+            (item.get("ownerUsername") or item.get("authorMeta", {}).get("name") or "")
+            .strip()
+            .lower()
+            .lstrip("@")
+        )
+        if not handle:
+            continue
+        entry = candidates.setdefault(
+            handle,
+            {
+                "handle": handle,
+                "platform": platform,
+                "fullName": item.get("ownerFullName") or item.get("authorMeta", {}).get("nickName"),
+                "followerCount": item.get("ownerFollowersCount") or item.get("authorMeta", {}).get("fans"),
+                "signalCount": 0,
+                "sources": [],
+            },
+        )
+        entry["signalCount"] += 1
+        if tag not in entry["sources"]:
+            entry["sources"].append(tag)
+
+        wrote, kind, url = _persist_hashtag_post(brand_id, item, platform, handle, posts_col)
+        if wrote:
+            posts_written += 1
+        if wrote and url:
+            payload = {"brandId": brand_id, "postId": wrote}
+            if kind == "video":
+                payload["videoUrl"] = url
+                detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
+                videos_enqueued += 1
+            else:
+                payload["imageUrl"] = url
+                detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
+                images_enqueued += 1
+
+        # IG Sidecar children
+        if platform == "instagram" and item.get("type") == "Sidecar":
+            for child in (item.get("childPosts") or []):
+                c_wrote, c_kind, c_url = _persist_sidecar_child(brand_id, item, child, handle, posts_col)
+                if c_wrote:
+                    posts_written += 1
+                if c_wrote and c_url:
+                    payload = {"brandId": brand_id, "postId": c_wrote}
+                    if c_kind == "video":
+                        payload["videoUrl"] = c_url
+                        detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
+                        videos_enqueued += 1
+                    else:
+                        payload["imageUrl"] = c_url
+                        detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
+                        images_enqueued += 1
+
+    candidates_added = 0
+    for handle, entry in candidates.items():
+        if handle in existing_handles:
+            continue
+        doc_id = fs.composite_id(platform, handle)
+        queue_col.document(doc_id).set(
+            {
+                "handle": entry["handle"],
+                "platform": entry["platform"],
+                "fullName": entry.get("fullName"),
+                "followerCount": entry.get("followerCount"),
+                "signalCount": Increment(entry["signalCount"]),
+                "sources": entry["sources"],
+                "lastSeenAt": SERVER_TIMESTAMP,
+                "status": "queued",
+            },
+            merge=True,
+        )
+        candidates_added += 1
+
+    if detect_futures:
+        from concurrent.futures import wait as _fwait
+        _fwait(detect_futures, timeout=20)
+
+    # Promote only handles that hit at least PROMOTION_UNIQUE_TAGS DIFFERENT
+    # brand tags. Filtering on len(sources) in Python — Firestore can't do
+    # this server-side. Keeps the query cheap by prefiltering on status.
+    promoted = 0
+    creators_col = fs.creators_col(brand_id)
+    queue_to_promote = (
+        fs.discovery_queue_col(brand_id)
+        .where("status", "==", "queued")
+        .stream()
+    )
+    for q in queue_to_promote:
+        q_data = q.to_dict() or {}
+        ph = q_data.get("handle")
+        pp = q_data.get("platform", "instagram")
+        srcs = q_data.get("sources") or []
+        if not ph or ph in existing_handles or len(srcs) < PROMOTION_UNIQUE_TAGS:
+            continue
+        creator_id = fs.composite_id(pp, ph)
+        creators_col.document(creator_id).set(
+            {
+                "handle": ph,
+                "platform": pp,
+                "fullName": q_data.get("fullName"),
+                "followerCount": q_data.get("followerCount"),
+                "status": "discovered",
+                "tier": "tier_3",
+                "discoveredAt": SERVER_TIMESTAMP,
+                "discoverySources": q_data.get("sources", []),
+                "lastScannedAt": None,
+                "nextScanAt": SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+        q.reference.update({"status": "auto_added", "reviewedAt": SERVER_TIMESTAMP, "reviewedBy": "scrape_tag"})
+        existing_handles.add(ph)
+        promoted += 1
+
+    fs.scan_runs_col(brand_id).add({
+        "type": "scrape_tag",
+        "tag": tag,
+        "platform": platform,
+        "finishedAt": SERVER_TIMESTAMP,
+        "stats": {
+            "itemsReturned": len(items),
+            "postsWritten": posts_written,
+            "imagesEnqueued": images_enqueued,
+            "videosEnqueued": videos_enqueued,
+            "candidatesAdded": candidates_added,
+            "promoted": promoted,
+        },
+        "status": "ok",
+    })
+
+    # Session counters + finishedAt handled in the outer process_one_tag's
+    # `finally` block via _mark_tag_done so failed workers still count.
+
+    return {
+        "status": "ok",
+        "tag": tag,
+        "platform": platform,
+        "items": len(items),
+        "posts_written": posts_written,
+        "images_enqueued": images_enqueued,
+        "videos_enqueued": videos_enqueued,
+        "candidates_added": candidates_added,
+        "promoted": promoted,
+    }
+
+
+def run(
+    brand_id: str,
+    per_tag: int = 200,
+    max_tags: int = 16,
+    concurrency: int = 10,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Legacy monolithic run — kept for backwards compat but api_step_hashtags
+    now uses publish_tags + on_scrape_tag fan-out instead.
+    """
+    brand = fs.brand_doc(brand_id).get()
+    if not brand.exists:
+        raise ValueError(f"brand not found: {brand_id}")
+    if usage.budget_exhausted(brand_id):
+        return {"hashtags_scanned": 0, "candidates_added": 0, "promoted": 0, "skipped": "budget_exhausted"}
+    brand_data = brand.to_dict() or {}
+    brand_slug = brand_data.get("slug", brand_id)
+
+    # Fetch active hashtag pool — top N by priority to stay under timeout.
+    pool_raw = list(fs.hashtag_pool_col(brand_id).where("active", "==", True).stream())
+    if not pool_raw:
+        log.warning(f"[{brand_slug}] no active hashtags in pool")
+        return {"hashtags_scanned": 0, "candidates_added": 0, "promoted": 0}
+    pool = sorted(
+        pool_raw,
+        key=lambda d: (d.to_dict() or {}).get("priority", 0),
+        reverse=True,
+    )[:max_tags]
+
+    existing_handles = _existing_creator_handles(brand_id)
+
+    candidates_added = 0
+    promoted = 0
+    hashtags_scanned = 0
+
+    posts_col = fs.posts_col(brand_id)
+    publisher = None if dry_run else pubsub_v1.PublisherClient()
+    image_topic = None if publisher is None else publisher.topic_path(PROJECT_ID, DETECT_IMAGE_TOPIC)
+    video_topic = None if publisher is None else publisher.topic_path(PROJECT_ID, DETECT_VIDEO_TOPIC)
+    detect_futures: list = []
+    images_enqueued = 0
+    videos_enqueued = 0
+    posts_written = 0
+
+    # Parallel scrape — each hashtag is an independent Apify run.
+    def _scrape_one(h_doc):
+        h = h_doc.to_dict() or {}
+        tag = h.get("tag", "").lower().lstrip("#")
+        platform = h.get("platform", "instagram")
+        if not tag:
+            return tag, platform, None, None
+        try:
+            if platform == "instagram":
+                items = apify.scrape_hashtag_ig(tag, per_tag)
+            else:
+                items = apify.scrape_hashtag_tiktok(tag, min(per_tag, 200))
+            return tag, platform, items, None
+        except Exception as e:
+            log.error(f"  apify #{tag} failed: {e}")
+            return tag, platform, None, None
+
+    log.info(f"[{brand_slug}] scanning {len(pool)} hashtags @ concurrency={concurrency}")
+    results = []
+    with ThreadPoolExecutor(max_workers=concurrency) as ex:
+        futures = [ex.submit(_scrape_one, h) for h in pool]
+        for fut in as_completed(futures):
+            results.append(fut.result())
+    # Record Apify usage — one actor run per hashtag attempt (succeeded or not).
+    usage.record(brand_id, apify_runs=len(pool))
+
+    queue_col = fs.discovery_queue_col(brand_id)
+
+    for tag, platform, items, diag in results:
+        if items is None:
+            # Apify returned nothing or errored. Log so we can see it in Debug.
+            _scrape_log(brand_id, tag, platform, error="apify_returned_none_or_err", diag=diag)
+            continue
+        hashtags_scanned += 1
+
+        # ── Per-tag visibility: what did Apify actually give us? ──────
+        _audit_scrape(brand_id, tag, platform, items, diag=diag)
+
+        # Aggregate candidates per tag + write posts + fan out detect-image/video
+        candidates: dict[str, dict] = {}
+        for item in items:
+            handle = (
+                (item.get("ownerUsername") or item.get("authorMeta", {}).get("name") or "")
+                .strip()
+                .lower()
+                .lstrip("@")
+            )
+            if not handle:
+                continue
+            entry = candidates.setdefault(
+                handle,
+                {
+                    "handle": handle,
+                    "platform": platform,
+                    "fullName": item.get("ownerFullName") or item.get("authorMeta", {}).get("nickName"),
+                    "followerCount": item.get("ownerFollowersCount") or item.get("authorMeta", {}).get("fans"),
+                    "signalCount": 0,
+                    "sources": [],
+                },
+            )
+            entry["signalCount"] += 1
+            if tag not in entry["sources"]:
+                entry["sources"].append(tag)
+
+            # Persist post + fan out detection.
+            if not dry_run:
+                wrote, kind, url = _persist_hashtag_post(brand_id, item, platform, handle, posts_col)
+                if wrote:
+                    posts_written += 1
+                if wrote and url and publisher:
+                    payload = {"brandId": brand_id, "postId": wrote}
+                    if kind == "video":
+                        payload["videoUrl"] = url
+                        detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
+                        videos_enqueued += 1
+                    else:
+                        payload["imageUrl"] = url
+                        detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
+                        images_enqueued += 1
+
+                # IG Sidecar (carousel): also process each child slot. The
+                # parent post above used the cover; child slots may be videos
+                # that are otherwise invisible to detection.
+                if platform == "instagram" and item.get("type") == "Sidecar":
+                    for child in (item.get("childPosts") or []):
+                        c_wrote, c_kind, c_url = _persist_sidecar_child(
+                            brand_id, item, child, handle, posts_col
+                        )
+                        if c_wrote:
+                            posts_written += 1
+                        if c_wrote and c_url and publisher:
+                            payload = {"brandId": brand_id, "postId": c_wrote}
+                            if c_kind == "video":
+                                payload["videoUrl"] = c_url
+                                detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
+                                videos_enqueued += 1
+                            else:
+                                payload["imageUrl"] = c_url
+                                detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
+                                images_enqueued += 1
+
+        if dry_run:
+            log.info(f"  DRY #{tag}: {len(candidates)} candidates")
+            continue
+
+        for handle, entry in candidates.items():
+            if handle in existing_handles:
+                continue
+            doc_id = fs.composite_id(platform, handle)
+            queue_col.document(doc_id).set(
+                {
+                    "handle": entry["handle"],
+                    "platform": entry["platform"],
+                    "fullName": entry.get("fullName"),
+                    "followerCount": entry.get("followerCount"),
+                    "signalCount": Increment(entry["signalCount"]),
+                    "sources": entry["sources"],
+                    "lastSeenAt": SERVER_TIMESTAMP,
+                    "status": "queued",
+                },
+                merge=True,
+            )
+            candidates_added += 1
+
+    # Wait on detection publishes so messages flush before function exit —
+    # bulk wait with a hard cap. Any laggards after the cap are abandoned
+    # (the publish API has already accepted them locally; Pub/Sub publisher
+    # client flushes async on process exit).
+    if detect_futures:
+        from concurrent.futures import wait as _fwait
+        _fwait(detect_futures, timeout=30)
+
+    # Promote only handles seen in >= PROMOTION_UNIQUE_TAGS different brand tags.
+    queue_to_promote = (
+        fs.discovery_queue_col(brand_id)
+        .where("status", "==", "queued")
+        .stream()
+    )
+    creators_col = fs.creators_col(brand_id)
+    for q in queue_to_promote:
+        q_data = q.to_dict() or {}
+        handle = q_data.get("handle")
+        platform = q_data.get("platform", "instagram")
+        srcs = q_data.get("sources") or []
+        if not handle or handle in existing_handles or len(srcs) < PROMOTION_UNIQUE_TAGS:
+            continue
+        creator_id = fs.composite_id(platform, handle)
+        creators_col.document(creator_id).set(
+            {
+                "handle": handle,
+                "platform": platform,
+                "fullName": q_data.get("fullName"),
+                "followerCount": q_data.get("followerCount"),
+                "status": "discovered",
+                "tier": "tier_3",
+                "discoveredAt": SERVER_TIMESTAMP,
+                "discoverySources": q_data.get("sources", []),
+                "lastScannedAt": None,
+                "nextScanAt": SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+        q.reference.update({"status": "auto_added", "reviewedAt": SERVER_TIMESTAMP, "reviewedBy": "scan_hashtags"})
+        existing_handles.add(handle)
+        promoted += 1
+
+    # Audit log
+    fs.scan_runs_col(brand_id).add(
+        {
+            "type": "scan_hashtags",
+            "startedAt": SERVER_TIMESTAMP,
+            "finishedAt": SERVER_TIMESTAMP,
+            "stats": {
+                "hashtagsScanned": hashtags_scanned,
+                "candidatesAdded": candidates_added,
+                "promoted": promoted,
+                "postsWritten": posts_written,
+                "imagesEnqueued": images_enqueued,
+                "videosEnqueued": videos_enqueued,
+            },
+            "status": "ok",
+        }
+    )
+
+    return {
+        "hashtags_scanned": hashtags_scanned,
+        "candidates_added": candidates_added,
+        "promoted": promoted,
+        "posts_written": posts_written,
+        "images_enqueued": images_enqueued,
+        "videos_enqueued": videos_enqueued,
+    }
+
+
+def _persist_hashtag_post(
+    brand_id: str,
+    item: dict,
+    platform: str,
+    handle: str,
+    posts_col,
+) -> tuple[str | None, str, str | None]:
+    """Write a post doc from an Apify hashtag-scrape item. Returns
+    (post_id, kind, media_url). kind is 'video' or 'image'. media_url is what
+    the detect-image/video pipeline should pull."""
+    video_url: str | None = None
+    music: dict | None = None
+    extras_tiktok: dict | None = None
+    if platform == "instagram":
+        ext_id = str(item.get("id") or item.get("shortCode") or "")
+        url = item.get("url")
+        caption = item.get("caption") or ""
+        hashtags = item.get("hashtags") or []
+        mentions = item.get("mentions") or []
+        posted_at_iso = item.get("timestamp")
+        likes = item.get("likesCount") or 0
+        comments = item.get("commentsCount") or 0
+        views = item.get("videoViewCount") or 0
+        if item.get("type") == "Video" or item.get("videoUrl"):
+            video_url = item.get("videoUrl")
+        image_url = item.get("displayUrl")
+        # IG Reels carry audio in `musicInfo` (name, artist). Falls back to None.
+        mi = item.get("musicInfo") or {}
+        if mi:
+            music = {
+                "title": mi.get("songName") or mi.get("song_name") or mi.get("title"),
+                "artist": mi.get("artistName") or mi.get("artist_name") or mi.get("author"),
+                "original": bool(mi.get("isOriginal")),
+            }
+    else:  # tiktok
+        ext_id = str(item.get("id") or item.get("aweme_id") or "")
+        url = item.get("webVideoUrl") or item.get("shareUrl")
+        caption = item.get("text") or item.get("desc") or ""
+        hashtags = [h.get("name") for h in (item.get("hashtags") or []) if h.get("name")]
+        mentions = [m for m in (item.get("mentions") or []) if isinstance(m, str)]
+        posted_at_iso = item.get("createTimeISO") or item.get("createTime")
+        # Rich TikTok extras — saved on the post for analytics + UI display.
+        mm = item.get("musicMeta") or {}
+        if mm:
+            mid = mm.get("musicId")
+            music = {
+                "title": mm.get("musicName"),
+                "artist": mm.get("musicAuthor"),
+                "musicId": mid,
+                "original": bool(mm.get("musicOriginal")),
+                "playUrl": mm.get("playUrl"),
+                "url": _tiktok_music_url(mid, mm.get("musicName")),
+                "coverUrl": mm.get("coverMediumUrl") or mm.get("originalCoverMediumUrl"),
+            }
+        vmeta = item.get("videoMeta") or {}
+        ameta = item.get("authorMeta") or {}
+        loc = item.get("locationMeta") or {}
+        extras_tiktok = {
+            "shareCount": item.get("shareCount") or 0,
+            "collectCount": item.get("collectCount") or 0,
+            "repostCount": item.get("repostCount") or 0,
+            "isPinned": bool(item.get("isPinned")),
+            "isAd": bool(item.get("isAd")),
+            "isSponsored": bool(item.get("isSponsored")),
+            "isSlideshow": bool(item.get("isSlideshow")),
+            "duration": vmeta.get("duration"),
+            "definition": vmeta.get("definition"),
+            "width": vmeta.get("width"),
+            "height": vmeta.get("height"),
+            "effects": [s.get("name") for s in (item.get("effectStickers") or []) if s.get("name")],
+            "textLanguage": item.get("textLanguage"),
+            "location": ({
+                "city": loc.get("locationName") or loc.get("city"),
+                "country": loc.get("address"),
+            } if loc else None),
+            "author": ({
+                "nickName": ameta.get("nickName"),
+                "avatar": ameta.get("avatar"),
+                "verified": bool(ameta.get("verified")),
+                "signature": (ameta.get("signature") or "")[:300],
+                "profileUrl": ameta.get("profileUrl"),
+                "ttSeller": bool(ameta.get("ttSeller")),
+                "privateAccount": bool(ameta.get("privateAccount")),
+            } if ameta else None),
+        }
+        likes = item.get("diggCount") or 0
+        comments = item.get("commentCount") or 0
+        views = item.get("playCount") or 0
+        # downloadAddr is usually empty in the free actor; webVideoUrl is the
+        # TikTok web page URL which yt-dlp can resolve into an MP4.
+        video_url = (
+            item.get("videoMeta", {}).get("downloadAddr")
+            or item.get("downloadAddr")
+            or item.get("videoUrl")
+            or item.get("webVideoUrl")
+        )
+        image_url = item.get("videoMeta", {}).get("coverUrl")
+
+    if not ext_id:
+        return None, "image", None
+
+    post_id = fs.composite_id(platform, ext_id)
+    posted_at = None
+    if posted_at_iso:
+        try:
+            posted_at = (
+                dt.datetime.fromisoformat(posted_at_iso.replace("Z", "+00:00"))
+                if isinstance(posted_at_iso, str)
+                else dt.datetime.fromtimestamp(int(posted_at_iso), dt.timezone.utc)
+            )
+        except Exception:
+            posted_at = None
+
+    # NB: we used to read each post doc here to skip re-publishing. With 800+
+    # posts that's 800 Firestore reads in the hot path. Detect-image's
+    # imageHashCache and detect_video's videoProcessed flag already do the
+    # "skip if already done" work, so dedupe is moved downstream.
+    doc = {
+        "creatorHandle": handle,
+        "platform": platform,
+        "externalId": ext_id,
+        "url": url,
+        "caption": caption[:2000],
+        "hashtags": [h.lower() for h in hashtags],
+        "mentions": mentions,
+        "postedAt": posted_at,
+        "likesCount": likes,
+        "commentsCount": comments,
+        "viewsCount": views,
+        "contentType": "video" if video_url else "image",
+        "videoUrl": video_url,
+        "music": music,
+        "ingestedAt": SERVER_TIMESTAMP,
+        "ingestedBy": "scan_hashtags",
+    }
+    if extras_tiktok:
+        doc["extras"] = extras_tiktok
+    posts_col.document(post_id).set(doc, merge=True)
+
+    return post_id, ("video" if video_url else "image"), (video_url or image_url)
+
+
+def _persist_sidecar_child(
+    brand_id: str,
+    parent: dict,
+    child: dict,
+    handle: str,
+    posts_col,
+) -> tuple[str | None, str, str | None]:
+    """Persist one child slot of an IG carousel as its own post + return what to
+    fan out. Parent provides caption/handle/timestamp; child provides media.
+    """
+    parent_id = str(parent.get("id") or parent.get("shortCode") or "")
+    child_id = str(child.get("id") or child.get("shortCode") or "")
+    if not parent_id or not child_id:
+        return None, "image", None
+
+    is_video = child.get("type") == "Video" or bool(child.get("videoUrl"))
+    video_url = child.get("videoUrl") if is_video else None
+    image_url = child.get("displayUrl")
+    if not video_url and not image_url:
+        return None, "image", None
+
+    post_id = fs.composite_id("instagram", f"{parent_id}_{child_id}")
+    posted_at_iso = parent.get("timestamp")
+    posted_at = None
+    if posted_at_iso:
+        try:
+            posted_at = dt.datetime.fromisoformat(posted_at_iso.replace("Z", "+00:00"))
+        except Exception:
+            posted_at = None
+
+    # Dedupe handled downstream by detect handlers' own caches.
+    posts_col.document(post_id).set({
+        "creatorHandle": handle,
+        "platform": "instagram",
+        "externalId": child_id,
+        "parentPostId": parent_id,
+        "carouselSlot": child.get("order") or child.get("position"),
+        "url": parent.get("url"),
+        "caption": (parent.get("caption") or "")[:2000],
+        "hashtags": [h.lower() for h in (parent.get("hashtags") or [])],
+        "postedAt": posted_at,
+        "likesCount": parent.get("likesCount") or 0,
+        "commentsCount": parent.get("commentsCount") or 0,
+        "viewsCount": parent.get("videoViewCount") or 0,
+        "contentType": "video" if is_video else "image",
+        "videoUrl": video_url,
+        "ingestedAt": SERVER_TIMESTAMP,
+        "ingestedBy": "scan_hashtags_sidecar",
+    }, merge=True)
+
+    return post_id, ("video" if is_video else "image"), (video_url or image_url)
+
+
+def _scrape_log(
+    brand_id: str, tag: str, platform: str,
+    items_returned: int = 0,
+    error: str | None = None,
+    breakdown: dict | None = None,
+    sample_keys: list[str] | None = None,
+    sample: dict | None = None,
+    diag: dict | None = None,
+) -> None:
+    """Write a per-hashtag scrape audit row to /brands/{id}/scrapeLog."""
+    try:
+        fs.brand_doc(brand_id).collection("scrapeLog").add({
+            "tag": tag,
+            "platform": platform,
+            "itemsReturned": items_returned,
+            "error": error,
+            "breakdown": breakdown,
+            "sampleKeys": sample_keys,
+            "sample": sample,
+            "diag": diag,
+            "source": "scan_hashtags",
+            "createdAt": SERVER_TIMESTAMP,
+        })
+    except Exception:
+        pass
+
+
+def _shrink_value(v, max_str: int = 200):
+    if v is None or isinstance(v, (int, float, bool)):
+        return v
+    if isinstance(v, str):
+        return v[:max_str]
+    if isinstance(v, list):
+        return [_shrink_value(x, 120) for x in v[:5]]
+    if isinstance(v, dict):
+        return {k: _shrink_value(v[k], 120) for k in list(v.keys())[:12]}
+    return f"<{type(v).__name__}>"
+
+
+def _shrink_sample(sample: dict) -> dict:
+    out: dict = {}
+    for k in list(sample.keys())[:30]:
+        out[k] = _shrink_value(sample[k], 200)
+    return out
+
+
+def _audit_scrape(brand_id: str, tag: str, platform: str, items: list[dict], diag: dict | None = None) -> None:
+    """Inspect what Apify gave us so the UI can show why videos are rare."""
+    if not items:
+        _scrape_log(brand_id, tag, platform, items_returned=0, diag=diag)
+        return
+
+    # Type/kind breakdown
+    kinds: dict[str, int] = {}
+    has_video_url = 0
+    has_display_url = 0
+    has_download_addr = 0  # tiktok-specific
+    for it in items:
+        if platform == "instagram":
+            t = it.get("type") or "Unknown"
+            kinds[t] = kinds.get(t, 0) + 1
+            if it.get("videoUrl"):
+                has_video_url += 1
+            if it.get("displayUrl"):
+                has_display_url += 1
+        else:  # tiktok — everything is a video
+            kinds["Video"] = kinds.get("Video", 0) + 1
+            vm = it.get("videoMeta") or {}
+            if vm.get("downloadAddr") or it.get("downloadAddr") or it.get("videoUrl"):
+                has_download_addr += 1
+            # webVideoUrl is the resolvable URL (yt-dlp consumes it). Count it
+            # as "has video url" so the audit reflects how many TikToks we can
+            # actually process — not how many have a (mostly-empty) CDN URL.
+            if it.get("webVideoUrl"):
+                has_video_url += 1
+            if vm.get("coverUrl"):
+                has_display_url += 1
+
+    sample = items[0] if items else None
+    sample_keys = sorted(sample.keys()) if isinstance(sample, dict) else None
+
+    # Truncate sample to keep doc small (Firestore 1MB doc limit). Open
+    # nested dict / list one level deep so we can see videoMeta/mediaUrls.
+    if isinstance(sample, dict):
+        sample = _shrink_sample(sample)
+
+    _scrape_log(
+        brand_id, tag, platform,
+        items_returned=len(items),
+        breakdown={
+            "kinds": kinds,
+            "hasVideoUrl": has_video_url,
+            "hasDisplayUrl": has_display_url,
+            "hasDownloadAddr": has_download_addr,
+        },
+        sample_keys=sample_keys,
+        sample=sample,
+        diag=diag,
+    )
+
+
+def _existing_creator_handles(brand_id: str) -> set[str]:
+    """Set of handles already in creators collection (lowercased)."""
+    out = set()
+    for c in fs.creators_col(brand_id).stream():
+        d = c.to_dict() or {}
+        h = (d.get("handle") or "").strip().lower()
+        if h:
+            out.add(h)
+    return out

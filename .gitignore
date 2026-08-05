@@ -36,3 +36,8 @@ supabase/.temp/
 
 # Large backups (kept locally, not in git)
 .backups/
+
+# Python venv + web build output
+venv/
+projects/stelz-brand-watch/web/dist/
+firebase/.firebase/

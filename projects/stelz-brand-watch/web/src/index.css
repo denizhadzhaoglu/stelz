@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/* Stelz brand palette — navy ink, signal red accent, warm paper ground.
+   Pulled from drinkstelz.com: navy #222C51, red #E8402F, white/cream base. */
+@theme {
+  --color-bg: #fbfaf8;
+  --color-surface: #ffffff;
+  --color-border: #e5e6ec;
+  --color-border-strong: #c9ccd9;
+  --color-ink: #222c51;
+  --color-ink-muted: #5a6280;
+  --color-ink-subtle: #9aa1b8;
+  --color-accent: #e8402f;
+  --color-good: #168a4a;
+  --color-warn: #c8860a;
+  --color-bad: #b3261e;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Oswald", "Arial Narrow", ui-sans-serif, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+}
+
+/* Stelz display style — bold condensed uppercase, like drinkstelz.com headings */
+.stelz-display {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  font-weight: 600;
+}
+
+/* Clean baseline: no shadows, no glow, no gradients. Separation via borders only. */
+*,
+*::before,
+*::after {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button { cursor: pointer; font-family: inherit; }
+a { color: inherit; text-decoration: none; }
+input, textarea, select { font-family: inherit; }
+
+::selection { background: #222c51; color: #fff; }
+
+/* Hide spinners on number inputs */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number] { -moz-appearance: textfield; }
