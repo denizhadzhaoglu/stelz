@@ -16,7 +16,7 @@ import sys
 # Allow running from repo root
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "functions"))
 
-from lib import fs  # noqa: E402
+from lib import fs, hashtags  # noqa: E402
 from google.cloud.firestore import SERVER_TIMESTAMP  # noqa: E402
 
 BRAND_ID = "stelz"
@@ -36,25 +36,6 @@ BRAND_DOC = {
     "createdAt": SERVER_TIMESTAMP,
 }
 
-HASHTAGS_IG = [
-    ("stelz", 10),
-    ("drinkstelz", 9),
-    ("stelzhardseltzer", 9),
-    ("stelzhardlemonade", 9),
-    ("stelzhardicedtea", 9),
-    ("vrijmibo", 6),
-    ("huisfeest", 5),
-    ("koningsdag", 5),
-    ("studentenleven", 4),
-]
-
-HASHTAGS_TIKTOK = [
-    ("stelz", 10),
-    ("drinkstelz", 9),
-    ("vrijmibo", 5),
-]
-
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--uid", help="Firebase Auth UID to grant brand membership")
@@ -63,15 +44,25 @@ def main():
     fs.brand_doc(BRAND_ID).set(BRAND_DOC, merge=True)
     print(f"✓ brand {BRAND_ID} seeded")
 
-    for tag, prio in HASHTAGS_IG:
-        fs.hashtag_pool_col(BRAND_ID).document(f"instagram_{tag}").set({
-            "tag": tag, "platform": "instagram", "priority": prio, "active": True,
-        }, merge=True)
-    for tag, prio in HASHTAGS_TIKTOK:
-        fs.hashtag_pool_col(BRAND_ID).document(f"tiktok_{tag}").set({
-            "tag": tag, "platform": "tiktok", "priority": prio, "active": True,
-        }, merge=True)
-    print(f"✓ {len(HASHTAGS_IG) + len(HASHTAGS_TIKTOK)} hashtags seeded")
+    # Single source of truth: lib/hashtags. This file and
+    # handlers/bootstrap_brand.py used to keep separate hand-written lists that
+    # had already drifted (10 TikTok tags there, 3 here), and neither carried a
+    # single misspelling of the brand name.
+    total = 0
+    for platform in ("instagram", "tiktok"):
+        for e in hashtags.stelz_pool(platform):
+            fs.hashtag_pool_col(BRAND_ID).document(f"{platform}_{e['tag']}").set({
+                "tag": e["tag"],
+                "platform": platform,
+                "priority": e["priority"],
+                "family": e["family"],
+                # Per-tag Apify ceiling. Apify bills per RESULT, so without
+                # this a ~0%-yield lifestyle tag costs the same as #stelz.
+                "maxResults": e["maxResults"],
+                "active": True,
+            }, merge=True)
+            total += 1
+    print(f"✓ {total} hashtags seeded")
 
     if args.uid:
         fs.brand_doc(BRAND_ID).collection("members").document(args.uid).set({

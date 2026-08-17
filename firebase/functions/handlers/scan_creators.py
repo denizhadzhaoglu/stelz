@@ -325,11 +325,19 @@ def _persist_post(
             "sequenceIdx": idx,
             "ingestedAt": SERVER_TIMESTAMP,
         }, merge=True)
-        # If this post is a video, the video pipeline covers frame detection;
-        # the cover image is still worth a single detect-image pass for the
-        # thumbnail moment, but we skip it when video_url is set to avoid
-        # double work. UI still shows the cover via the post's images subcol.
-        if not video_url:
+        # Always analyse the cover image, including for videos.
+        #
+        # This used to be skipped when video_url was set, to "avoid double work".
+        # But the video path fails often and by design: TikTok blocks GCP egress
+        # IPs (see scan_hashtags.py:189-192) and Instagram videoUrls are
+        # short-lived signed CDN URLs that expire while queued behind
+        # max_instances=25. When it fails, the post produced ZERO detections —
+        # despite a perfectly good cover JPEG already being scraped and stored.
+        #
+        # Only the first frame of a carousel is used as a video cover, so the
+        # extra cost is one Flash call per video post, and it is the only pass
+        # that reliably succeeds.
+        if not video_url or idx == 0:
             new_items.append((post_id, "image", img_url))
 
 

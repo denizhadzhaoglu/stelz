@@ -37,6 +37,14 @@ supabase/.temp/
 # Large backups (kept locally, not in git)
 .backups/
 
+# Eval golden set: third-party openly-licensed images, fetched not vendored.
+# golden_sources.json (URLs + licenses + sha256) IS committed — rebuild with
+# `python3 tools/eval/fetch_golden.py`.
+tools/eval/golden/
+tools/eval/sheets/
+tools/eval/.cache/
+tools/eval/.verify-cache/
+
 # Python venv + web build output
 venv/
 projects/stelz-brand-watch/web/dist/

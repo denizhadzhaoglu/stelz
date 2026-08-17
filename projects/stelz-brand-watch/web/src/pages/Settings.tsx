@@ -2,8 +2,9 @@
 // same as before; the change is purely UX: friendlier copy, progressive
 // disclosure for the technical dials, cleaner hierarchy.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { activeReferenceIds, REFERENCE_SLOTS } from '../lib/refselect'
 import {
   PageShell, Card, Button, Badge, Field, Input, Textarea, Img,
 } from '../components/ui'
@@ -139,6 +140,8 @@ function TrainingSection() {
   const [identity, setIdentity] = useState('')
   const [wordmarks, setWordmarks] = useState('')
   const [items, setItems] = useState<ReferenceImage[]>([])
+  // Which of these the detector is actually shown — see lib/refselect.ts.
+  const activeIds = useMemo(() => activeReferenceIds(items), [items])
   const [loadingRefs, setLoadingRefs] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [centroidBusy, setCentroidBusy] = useState(false)
@@ -227,7 +230,7 @@ function TrainingSection() {
           <SubHeader
             step="Product photos"
             title="Reference images"
-            desc="5–15 clean product shots at different angles and lighting work best. We use them to teach the AI what your brand looks like."
+            desc="Clean product shots at different angles and lighting work best. Every image here is shown to the AI as “this IS the product”, so a photo containing another brand's can teaches it wrong — there is no way to mark an image as a counter-example."
             trailing={items.length > 0 ? (
               <span className="text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
                 {items.length} image{items.length === 1 ? '' : 's'}
@@ -278,10 +281,37 @@ function TrainingSection() {
 
           {loadingRefs && <div className="mt-6 text-[12px] text-[var(--color-ink-muted)] text-center">Loading…</div>}
           {!loadingRefs && items.length > 0 && (
-            <div className="mt-6 grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
+            <>
+              {/* Which images are actually in play. The detector is sent 8, chosen
+                  newest-first with one slot reserved per product line — so with
+                  more than 8 uploads, some are dead weight and an operator hunting
+                  a bad reference could delete one the model never sees. See
+                  lib/refselect.ts, which mirrors refs.py _select_reference_docs. */}
+              <p className="mt-6 text-[12px] text-[var(--color-ink-muted)] leading-relaxed">
+                {items.length > REFERENCE_SLOTS ? (
+                  <>
+                    The detector is shown <strong className="text-[var(--color-ink)]">{REFERENCE_SLOTS} of these {items.length}</strong>{' '}
+                    — newest first, with one slot kept for each product line. The dimmed ones
+                    are stored but never sent. If a detection keeps confusing another brand's
+                    can for yours, check the {REFERENCE_SLOTS} highlighted here first.
+                  </>
+                ) : (
+                  <>All {items.length} of these are shown to the detector on every scan.</>
+                )}
+              </p>
+              <div className="mt-3 grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
               {items.map((it) => (
-                <div key={it.id} className="bg-[var(--color-surface)] p-1.5 relative group">
+                <div
+                  key={it.id}
+                  className={`bg-[var(--color-surface)] p-1.5 relative group ${activeIds.has(it.id) ? '' : 'opacity-40'}`}
+                  title={activeIds.has(it.id) ? 'Sent to the detector' : 'Stored, but not sent — the detector only takes 8'}
+                >
                   <div className="aspect-square"><Img src={it.url} /></div>
+                  {activeIds.has(it.id) && (
+                    <span className="absolute bottom-2 left-2 text-[9px] uppercase tracking-widest bg-[var(--color-ink)]/80 text-white px-1.5 py-0.5">
+                      in use
+                    </span>
+                  )}
                   <button
                     onClick={() => onDelete(it)}
                     disabled={uploading}
@@ -292,7 +322,8 @@ function TrainingSection() {
                   </button>
                 </div>
               ))}
-            </div>
+              </div>
+            </>
           )}
         </Card>
 

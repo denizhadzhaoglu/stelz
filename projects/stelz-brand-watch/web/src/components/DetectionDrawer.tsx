@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge, Button, Img, PRODUCT_LINE_LABEL } from './ui'
 import { imageUrlFor, loadState, toggleShortlist, toggleHidden, type DetectionRow } from '../lib/data'
+import { isBrandTag } from '../lib/signal'
+import { detectionQuality } from '../lib/quality'
+import { verifyDetection } from '../lib/verify'
 
 export function DetectionDrawer({
   detection,
@@ -33,6 +36,8 @@ export function DetectionDrawer({
   if (!detection) return null
   const d = detection
   const hero = activeFrame ?? d
+  const quality = detectionQuality(d)
+  const verdict = verifyDetection(d)
   const inShortlist = shortlist.includes(d.detection_id)
   const isHidden = hidden.includes(d.creator_handle)
 
@@ -86,12 +91,38 @@ export function DetectionDrawer({
             {d.product_line && <Badge>{PRODUCT_LINE_LABEL[d.product_line] ?? d.product_line}</Badge>}
             {d.size_in_frame && <Badge tone="muted">size · {d.size_in_frame}</Badge>}
             {d.is_primary_subject && <Badge tone="muted">primary</Badge>}
-            <Badge tone={(d.confidence ?? 0) >= 0.85 ? 'good' : (d.confidence ?? 0) >= 0.75 ? 'warn' : 'bad'}>
-              {((d.confidence ?? 0) * 100).toFixed(0)}% confidence
-            </Badge>
+            {quality.quality === 'small' ? (
+              <Badge tone="warn">small in frame</Badge>
+            ) : (
+              <Badge tone={quality.quality === 'clear' ? 'good' : 'bad'}>
+                {((d.confidence ?? 0) * 100).toFixed(0)}% confidence
+              </Badge>
+            )}
             {d.creator_tier && <Badge tone={d.creator_tier === 'tier_1' ? 'accent' : 'neutral'}>tier {d.creator_tier}</Badge>}
             <Badge tone="muted">{d.platform}</Badge>
           </div>
+
+          {/* Why the score looks the way it does. Without this, a genuine can
+              stored at 0.70 by the size gate reads as "the AI wasn't sure",
+              which is the opposite of what happened. See lib/quality.ts. */}
+          {quality.quality !== 'clear' && (
+            <p className="text-[12px] text-[var(--color-ink-muted)] leading-relaxed border-l-2 border-[var(--color-warn)] pl-3 py-1">
+              {quality.reason}
+            </p>
+          )}
+
+          {/* What the second look at the stored transcript says. See lib/verify.ts
+              — this reads the model's own label read, it does not re-examine the
+              image, and the header there is honest about how weak that is. */}
+          {(verdict.competitor || verdict.tier === 'wordmark_only') && (
+            <p className={`text-[12px] leading-relaxed border-l-2 pl-3 py-1 ${
+              verdict.competitor
+                ? 'border-[var(--color-bad)] text-[var(--color-ink)]'
+                : 'border-[var(--color-warn)] text-[var(--color-ink-muted)]'
+            }`}>
+              {verdict.reason}
+            </p>
+          )}
 
           <div>
             <Link to={`/creators/${d.creator_handle}`} className="text-[16px] font-medium hover:underline">@{d.creator_handle}</Link>
@@ -181,9 +212,31 @@ export function DetectionDrawer({
               <div className="text-[10px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-2">Hashtags</div>
               <div className="flex flex-wrap gap-1.5">
                 {d.post_hashtags.map((h) => (
-                  <span key={h} className="text-[12px] px-2 py-0.5 border border-[var(--color-border-strong)] bg-[var(--color-bg)]">#{h}</span>
+                  <span
+                    key={h}
+                    className={`text-[12px] px-2 py-0.5 border ${
+                      isBrandTag(h)
+                        ? 'border-[var(--color-ink)] bg-[var(--color-ink)] text-white'
+                        : 'border-[var(--color-border-strong)] bg-[var(--color-bg)]'
+                    }`}
+                  >#{h}</span>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* The single most important sentence in this drawer: it says why the
+              post is worth anything. See lib/signal.ts. */}
+          {d.signal?.signal === 'visual_only' && (
+            <div className="border-l-2 border-[var(--color-accent)] pl-3 py-1">
+              <p className="text-[12px] text-[var(--color-ink)] leading-relaxed">
+                No brand hashtag, no @mention.{' '}
+                <span className="text-[var(--color-ink-muted)]">
+                  This post is invisible to anyone following #stelz — it was found by
+                  reading the can in the image.
+                  {d.signal.namedInCaption && ' The brand is named in the caption, but Instagram has no caption search.'}
+                </span>
+              </p>
             </div>
           )}
 

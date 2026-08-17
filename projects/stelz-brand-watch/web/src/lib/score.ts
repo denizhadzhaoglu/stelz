@@ -2,11 +2,12 @@
 // All pure functions over the detection list — no Supabase, no React.
 
 import type { DetectionRow } from './types'
+import { isBrandTag } from './signal'
 
 const SIZE_PTS: Record<string, number> = { dominant: 30, large: 24, medium: 16, small: 6 }
 
-// "Worth a look" score: tier + size + primary + confidence + recency + novelty.
-// Returns 0-100 ish, used for ranking only.
+// "Worth a look" score: tier + size + primary + confidence + recency + novelty
+// + discovery value. Returns 0-100 ish, used for ranking only.
 export function worthScore(d: DetectionRow, knownHandles: Set<string>): number {
   const tier = d.creator_tier === 'tier_1' ? 35 : d.creator_tier === 'tier_2' ? 20 : 8
   const size = SIZE_PTS[d.size_in_frame ?? ''] ?? 0
@@ -14,7 +15,18 @@ export function worthScore(d: DetectionRow, knownHandles: Set<string>): number {
   const conf = (d.confidence ?? 0) * 15
   const novelty = knownHandles.has(d.creator_handle) ? 0 : 18 // new creator bonus
   const recency = d.posted_at ? recencyBoost(d.posted_at) : 0
-  return tier + size + primary + conf + novelty + recency
+
+  // Discovery value — see lib/signal.ts. The other terms cap out near 125
+  // (tier 35 + size 30 + primary 12 + conf 15 + novelty 18 + recency 15), so
+  // +40 deliberately makes this the single largest term, ahead of creator tier.
+  // That is the correct encoding of what the tool is for: an untagged post from
+  // a nano-creator beats a tagged post from a tier-1, because the brand already
+  // knows about the tagged one. -60 keeps the brand's OWN posts out of the
+  // hero — showing @drinkstelz its own content under "Worth a look" is noise.
+  const sig = d.signal?.signal
+  const unfindable = sig === 'visual_only' ? 40 : sig === 'brand_owned' ? -60 : 0
+
+  return tier + size + primary + conf + novelty + recency + unfindable
 }
 
 function recencyBoost(iso: string): number {
@@ -112,13 +124,17 @@ export function detectSpike(rows: DetectionRow[]): {
     return age >= wk && age < 2 * wk
   })
 
+  // Brand tags are excluded: #stelz "spiking" is not news, it is the baseline,
+  // and it crowded out the context tags that actually signal something new.
   const tagsNow = new Map<string, Set<string>>()
   const tagsPrev = new Map<string, number>()
   for (const d of last7) for (const t of d.post_hashtags ?? []) {
+    if (isBrandTag(t)) continue
     if (!tagsNow.has(t)) tagsNow.set(t, new Set())
     tagsNow.get(t)!.add(d.creator_handle)
   }
   for (const d of prev7) for (const t of d.post_hashtags ?? []) {
+    if (isBrandTag(t)) continue
     tagsPrev.set(t, (tagsPrev.get(t) ?? 0) + 1)
   }
 

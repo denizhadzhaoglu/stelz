@@ -1,5 +1,9 @@
 // Shared domain types. Backend-agnostic; Firestore reads conform to these.
 
+// Type-only import, so the types <-> signal cycle is erased at compile time and
+// never becomes a runtime import cycle.
+import type { SignalInfo } from './signal'
+
 export type DetectionMusic = {
   title?: string | null
   artist?: string | null
@@ -66,6 +70,9 @@ export type DetectionRow = {
   frame_idx?: number | null  // present when the detection came from a video frame
   post_id?: string | null    // groups multiple frame-hits of the same post
   frame_hits?: number        // UI-only: how many detections were collapsed into this row
+  // UI-only, same as frame_hits: attached by signal.withSignal() after dedupe.
+  // Says whether the brand could have found this post themselves on Instagram.
+  signal?: SignalInfo
   // Prompt v5 findings — what Gemini saw + where the brand appeared
   surface_type: string | null
   visible_text: string | null
@@ -73,6 +80,19 @@ export type DetectionRow = {
   people_count: number | null
   setting: string | null
   activity: string | null
+  // Why the strictness gate demoted or rejected this hit, when it did.
+  // 'capped_small_object' means the model was confident but the can wasn't
+  // dominant in frame, so confidence was forced to 0.70 — which the default
+  // >=0.85 feed filter then hides. See detect_image._strictness_gate.
+  gate: string | null
+  // Second-look verifier (firebase/functions/lib/verifier.py). Only demoted hits
+  // are verified, so most rows carry null here. 'rejected' rows never reach the
+  // client at all — the verifier sets detected=false and the feed query is
+  // detectedOnly — so in practice this is 'upgraded' | 'confirmed' |
+  // 'inconclusive' | 'error' | null.
+  verify_verdict: string | null
+  verify_brand: string | null
+  verify_reason: string | null
   brand_id: string
   detected: boolean | null
   is_false_positive: boolean | null
@@ -137,6 +157,14 @@ export function dedupeByPost(detections: DetectionRow[]): DetectionRow[] {
       frame_hits: detectedOnes.length || group.length,
       verified: group.some((g) => g.verified === true) ? true : best.verified,
       is_false_positive: group.some((g) => g.is_false_positive === true) ? true : best.is_false_positive,
+      // Union tags/mentions across the group rather than inheriting whichever
+      // slot happened to win on confidence. Carousel children are written by
+      // scan_hashtags._persist_sidecar_child, which stores `hashtags` but NOT
+      // `mentions` — so without this, whether a carousel post looks "untagged"
+      // depends on which slide scored highest. That made the discovery
+      // classification (lib/signal.ts) unstable per post.
+      post_hashtags: [...new Set(group.flatMap((g) => g.post_hashtags ?? []))],
+      post_mentions: [...new Set(group.flatMap((g) => g.post_mentions ?? []))],
     })
   }
   out.sort((a, b) => (b.posted_at ?? '').localeCompare(a.posted_at ?? ''))
