@@ -12,7 +12,7 @@ from typing import Any
 
 from google.cloud.firestore import SERVER_TIMESTAMP
 
-from lib import fs
+from lib import fs, hashtags
 
 
 DEFAULT_PRODUCT_LINES = {
@@ -40,17 +40,10 @@ DEFAULT_TUNING = {
     "dailyBudgetUsd": 5.0,
 }
 
-DEFAULT_HASHTAGS_IG = [
-    ("stelz", 10), ("drinkstelz", 9), ("stelzhardseltzer", 9),
-    ("stelzhardlemonade", 9), ("stelzhardicedtea", 9),
-    ("vrijmibo", 6), ("huisfeest", 5), ("koningsdag", 5), ("studentenleven", 4),
-]
-DEFAULT_HASHTAGS_TIKTOK = [
-    ("stelz", 10), ("drinkstelz", 9),
-    ("stelzhardseltzer", 9), ("stelzhardlemonade", 9), ("stelzhardicedtea", 9),
-    ("vrijmibo", 7), ("carnaval2026", 6), ("nederland", 4), ("studentenleven", 4),
-    ("hardseltzer", 4),
-]
+# Hashtag seeds now come from lib/hashtags.build_pool(). The two hand-kept
+# lists that used to live here and in firebase/seed_brand.py had already
+# drifted apart (this file seeded 10 TikTok tags, that one seeded 3), and
+# neither contained a single misspelling of the brand name.
 
 
 def run(brand_id: str, brand_name: str, uid: str, user_email: str | None = None) -> dict[str, Any]:
@@ -104,18 +97,30 @@ def run(brand_id: str, brand_name: str, uid: str, user_email: str | None = None)
     # existing ones get priority/active refreshed (safe). Count active afterwards.
     pool_col = fs.hashtag_pool_col(brand_id)
     written = 0
-    for tag, prio in DEFAULT_HASHTAGS_IG:
-        pool_col.document(f"instagram_{tag}").set(
-            {"tag": tag, "platform": "instagram", "priority": prio, "active": True},
-            merge=True,
-        )
-        written += 1
-    for tag, prio in DEFAULT_HASHTAGS_TIKTOK:
-        pool_col.document(f"tiktok_{tag}").set(
-            {"tag": tag, "platform": "tiktok", "priority": prio, "active": True},
-            merge=True,
-        )
-        written += 1
+    for platform in ("instagram", "tiktok"):
+        for entry in hashtags.build_pool(
+            slug=brand_id,
+            product_lines=DEFAULT_PRODUCT_LINES,
+            flavours=hashtags.STELZ_FLAVOURS if brand_id == "stelz" else None,
+            events=hashtags.STELZ_EVENTS if brand_id == "stelz" else None,
+            lifestyle=(hashtags.STELZ_LIFESTYLE_IG if platform == "instagram"
+                       else hashtags.STELZ_LIFESTYLE_TT) if brand_id == "stelz" else None,
+            # TikTok search is fuzzy and tag-poor; misspelled tags mostly
+            # return noise there while still costing an actor run each.
+            include_typos=(platform == "instagram"),
+        ):
+            pool_col.document(f"{platform}_{entry['tag']}").set(
+                {
+                    "tag": entry["tag"],
+                    "platform": platform,
+                    "priority": entry["priority"],
+                    "family": entry["family"],
+                    "maxResults": entry["maxResults"],
+                    "active": True,
+                },
+                merge=True,
+            )
+            written += 1
 
     active_count = sum(1 for _ in pool_col.where("active", "==", True).stream())
 

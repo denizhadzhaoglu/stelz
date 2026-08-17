@@ -10,6 +10,9 @@ import { Sparkline, LineChart, BarChart, Donut, StackedDayBars, bucketByDay, typ
 import { DetectionDrawer } from '../components/DetectionDrawer'
 import { fetchDetections, fetchTopResonance, loadState, markSeen, rateDetection, type DetectionRow, type ResonanceRow } from '../lib/data'
 import { imageUrlFor, parentPostKey, dedupeByPost } from '../lib/types'
+import { withSignal, signalCounts, untaggedShare, isBrandTag } from '../lib/signal'
+import { detectionQuality, splitByQuality } from '../lib/quality'
+import { verifyDetection, sortByEvidence } from '../lib/verify'
 import {
   fbBootstrapBrand, fbStepHashtags, fbStepCreators, fbStepSrs,
   fbFetchPipelineCounts, fbSubscribeScanState, type ScanState,
@@ -23,6 +26,14 @@ type PipelineCounts = { creators: number; posts: number; detections: number; det
 
 // Charts + list default window (was user-selectable 7/30/90; simplified).
 const DAYS_WINDOW = 30
+
+// How many detection docs one refresh pulls. This is a hard ceiling on what the
+// whole page can ever show, and it bites before any filter does: the query is
+// ordered postedAt desc, so hitting it silently drops the OLDEST hits. Docs are
+// per frame/carousel-slot, not per post, so a video-heavy brand burns through it
+// several times faster than the post count suggests. Surfaced in the feed when
+// it binds rather than left to look like "that's all there is".
+const DETECTION_FETCH_LIMIT = 5000
 
 const CACHE_KEY = 'spotthebrand:dashboard-cache:v2'
 type DashboardCache = {
@@ -69,7 +80,7 @@ export default function Home() {
     setRefreshing(true)
     try {
       const [d, r, c] = await Promise.all([
-        fetchDetections({ limit: 5000 }).catch(() => [] as DetectionRow[]),
+        fetchDetections({ limit: DETECTION_FETCH_LIMIT }).catch(() => [] as DetectionRow[]),
         fetchTopResonance(100).catch(() => [] as ResonanceRow[]),
         fbFetchPipelineCounts().catch(() => null),
       ])
@@ -109,7 +120,11 @@ export default function Home() {
   const days = DAYS_WINDOW
   // Collapse frame-level AND carousel-slot detections into one row per real
   // POST (see lib/types.dedupeByPost — verdicts merge across the group).
-  const uniqueDetections = useMemo(() => dedupeByPost(detections), [detections])
+  // withSignal annotates each row with whether the brand could have found this
+  // post themselves on Instagram. Applied once here, AFTER dedupe (so carousel
+  // slides have already had their tags/mentions unioned), and every downstream
+  // consumer inherits it. See lib/signal.ts.
+  const uniqueDetections = useMemo(() => withSignal(dedupeByPost(detections)), [detections])
   // Rejected content is excluded from Dashboard, Creators, and default views.
   // The Feed keeps access to it via the "Flagged FP" trust filter.
   const activeRows = useMemo(
@@ -171,7 +186,13 @@ export default function Home() {
               />
             )}
             {tab === 'feed' && (
-              <FeedTab rows={uniqueDetections} lastSeenAt={lastSeenAt} onOpen={setActiveDetection} />
+              <FeedTab
+                rows={uniqueDetections}
+                allDetections={detections}
+                truncated={detections.length >= DETECTION_FETCH_LIMIT}
+                lastSeenAt={lastSeenAt}
+                onOpen={setActiveDetection}
+              />
             )}
             {tab === 'review' && (
               <ReviewTab detections={activeRows} allDetections={detections} />
@@ -219,14 +240,14 @@ function BriefingTab({
 
   return (
     <div className="space-y-8">
-      <DashboardSection detections={detections} rangeRows={rangeRows} days={days} />
+      <DashboardSection detections={detections} rangeRows={rangeRows} days={days} onGotoTab={onGotoTab} />
 
       <section>
         <header className="flex items-end justify-between mb-4">
           <div>
             <h2 className="text-[18px] font-medium tracking-tight">Worth a look</h2>
             <p className="text-[12px] text-[var(--color-ink-muted)] mt-0.5">
-              Picked by score: tier + visibility + confidence + novelty.
+              Untagged first — the can is visible, the brand isn't named. Then reach and visibility.
             </p>
           </div>
           <button onClick={() => onGotoTab('feed')} className="text-[12px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]">All detections →</button>
@@ -336,20 +357,43 @@ function EmptyBriefing({ counts }: { counts: PipelineCounts | null }) {
 
 // ─────────────────────── FEED ───────────────────────
 
-function FeedTab({ rows, lastSeenAt, onOpen }: { rows: DetectionRow[]; lastSeenAt: string | null; onOpen: (d: DetectionRow) => void }) {
+// Which discovery class the feed is showing.
+//
+// `untagged` is the DEFAULT, and that is the product decision, not a preference:
+// anyone can follow #stelz on Instagram for free, so a post carrying the brand
+// hashtag is something the brand already had. The posts only this tool can find
+// are the ones with the can in frame and no brand tag anywhere. See lib/signal.ts.
+type FeedView = 'untagged' | 'tagged' | 'owned' | 'all'
+
+function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows: DetectionRow[]; allDetections: DetectionRow[]; truncated: boolean; lastSeenAt: string | null; onOpen: (d: DetectionRow) => void }) {
+  const [view, setView] = useState<FeedView>('untagged')
   const [search, setSearch] = useState('')
   const [productFilter, setProductFilter] = useState<string | null>(null)
   const [tierFilter, setTierFilter] = useState<string | null>(null)
   const [trustFilter, setTrustFilter] = useState<'verified' | 'unreviewed' | 'fp' | null>('verified')
   const [platformFilter, setPlatformFilter] = useState<'instagram' | 'tiktok' | null>(null)
   const [typeFilter, setTypeFilter] = useState<'video' | 'image' | null>(null)
-  // High-confidence-only default. Low-quality Gemini hits polluted the feed;
-  // user can drop the threshold via the "Confidence" filter below.
-  const [minConfidence, setMinConfidence] = useState<number>(0.85)
+  // Default 0.70, NOT 0.85 — and that is a correctness fix, not a preference.
+  //
+  // `confidence` is overwritten by the backend's strictness gate: any can that
+  // isn't dominant/large in frame is forced to exactly 0.70 regardless of what
+  // the model said (three golden-set cans rated 0.95 are stored as 0.70). So
+  // >=0.85 was silently a "can fills the frame" filter, and it removed every
+  // medium and small can — which is most of the untagged feed, because a post
+  // nobody tagged is usually one where the can is incidental. See lib/quality.ts
+  // for the measured table.
+  //
+  // The demoted band is noisier, so it is not merged into the feed silently —
+  // it renders under its own heading below. Showing it unlabelled is what makes
+  // a wrong can read as "the tool is broken".
+  const [minConfidence, setMinConfidence] = useState<number>(0.7)
   // Progressive rendering — everything matching is reachable via "Show more".
   const [visibleCount, setVisibleCount] = useState(60)
 
-  const filtered = useMemo(() => {
+  // Base for the view switch counts and the empty state: everything the OTHER
+  // filters allow, before the discovery view is applied. Without this the pill
+  // counts would change as you switch views, which reads as a bug.
+  const beforeView = useMemo(() => {
     return rows.filter((d) => {
       if (productFilter && d.product_line !== productFilter) return false
       if (tierFilter && d.creator_tier !== tierFilter) return false
@@ -368,8 +412,88 @@ function FeedTab({ rows, lastSeenAt, onOpen }: { rows: DetectionRow[]; lastSeenA
     })
   }, [rows, search, productFilter, tierFilter, trustFilter, platformFilter, typeFilter, minConfidence])
 
+  const viewCounts = useMemo(() => signalCounts(beforeView), [beforeView])
+
+  const matchesView = (d: DetectionRow, v: FeedView) => {
+    const s = d.signal?.signal ?? 'visual_only'
+    if (v === 'untagged') return s === 'visual_only'
+    if (v === 'tagged') return s === 'hashtag' || s === 'mention'
+    if (v === 'owned') return s === 'brand_owned'
+    return true
+  }
+
+  const filtered = useMemo(() => {
+    return rows.filter((d) => {
+      if (!matchesView(d, view)) return false
+      if (productFilter && d.product_line !== productFilter) return false
+      if (tierFilter && d.creator_tier !== tierFilter) return false
+      if (trustFilter === 'verified' && d.is_false_positive === true) return false
+      if (trustFilter === 'unreviewed' && (d.verified === true || d.is_false_positive === true)) return false
+      if (trustFilter === 'fp' && d.is_false_positive !== true) return false
+      if (platformFilter && d.platform !== platformFilter) return false
+      if (typeFilter === 'video' && d.frame_idx == null) return false
+      if (typeFilter === 'image' && d.frame_idx != null) return false
+      if ((d.confidence ?? 0) < minConfidence) return false
+      if (search) {
+        const q = search.toLowerCase()
+        if (!`${d.creator_handle ?? ''} ${d.post_caption ?? ''} ${d.context ?? ''}`.toLowerCase().includes(q)) return false
+      }
+      return true
+    })
+  }, [rows, view, search, productFilter, tierFilter, trustFilter, platformFilter, typeFilter, minConfidence])
+
   // Reset pagination when any filter narrows/changes the result set.
-  useEffect(() => { setVisibleCount(60) }, [search, productFilter, tierFilter, trustFilter, platformFilter, typeFilter, minConfidence])
+  useEffect(() => { setVisibleCount(60) }, [view, search, productFilter, tierFilter, trustFilter, platformFilter, typeFilter, minConfidence])
+
+  // Rejected in this session. The write goes to Firestore via rateDetection,
+  // but the refetch is on a timer, so the card is pulled optimistically and
+  // restored if the call fails.
+  const [rejected, setRejected] = useState<Set<string>>(new Set())
+  const [rejectError, setRejectError] = useState<string | null>(null)
+
+  const reject = useCallback(async (d: DetectionRow) => {
+    const key = parentPostKey(d)
+    setRejected((s) => new Set(s).add(key))
+    setRejectError(null)
+    // A post can hold many detection docs (video frames, carousel slots).
+    // Rate every sibling or the post returns on the next refetch — same
+    // reasoning as ReviewTab.rate.
+    const ids = allDetections.filter((x) => parentPostKey(x) === key).map((x) => x.detection_id)
+    try {
+      await Promise.all((ids.length ? ids : [d.detection_id]).map((id) => rateDetection(id, 'rejected')))
+    } catch (e) {
+      setRejected((s) => { const n = new Set(s); n.delete(key); return n })
+      setRejectError((e as Error).message)
+    }
+  }, [allDetections])
+
+  const visible = useMemo(
+    () => filtered.filter((d) => !rejected.has(parentPostKey(d))),
+    [filtered, rejected],
+  )
+
+  // Two chronological bands rather than one mixed list. The demoted band runs
+  // ~1-in-3 wrong on the labelled golden set, and no field in the data
+  // separates its good rows from its bad ones (see lib/quality.ts) — so the
+  // honest choices are "hide it" or "show it clearly marked". Hiding it is what
+  // produced a 49-row feed.
+  const page = useMemo(() => visible.slice(0, visibleCount), [visible, visibleCount])
+  const rawBands = useMemo(() => splitByQuality(page), [page])
+  const reviewTotal = useMemo(() => visible.filter((d) => detectionQuality(d).needsLook).length, [visible])
+
+  // Rows whose own label transcript reads as a different brand — the model read
+  // "TRULY" or "HEINEKEN" and a Stelz variant in the same string. Measured cost
+  // on the golden set: zero true positives affected (lib/verify.ts). Held back
+  // rather than deleted, and the count is always shown, because a silent drop
+  // is how a recall bug hides.
+  const [showRivals, setShowRivals] = useState(false)
+  const bands = useMemo(() => {
+    const rivals = rawBands.review.filter((d) => verifyDetection(d).competitor)
+    const kept = showRivals
+      ? sortByEvidence(rawBands.review)
+      : sortByEvidence(rawBands.review.filter((d) => !verifyDetection(d).competitor))
+    return { clear: rawBands.clear, review: kept, rivals: rivals.length }
+  }, [rawBands, showRivals])
 
   const productLines = useMemo(() => {
     const m = new Map<string, number>()
@@ -377,8 +501,67 @@ function FeedTab({ rows, lastSeenAt, onOpen }: { rows: DetectionRow[]; lastSeenA
     return [...m.entries()].sort((a, b) => b[1] - a[1])
   }, [rows])
 
+  // Detections the strict default is hiding. The backend's strictness gate
+  // forces confidence to exactly 0.70 whenever the model was confident but the
+  // can wasn't dominant/large in frame (detect_image._strictness_gate,
+  // "capped_small_object"). The default >=0.85 filter then hides every one of
+  // them — which is most genuine cans in party/festival footage. Surface the
+  // count so this is visible instead of silent.
+  // Scoped to the ACTIVE view — otherwise the banner offers to unhide gated
+  // detections that are tagged and wouldn't show up in this view anyway.
+  const gatedHidden = useMemo(() => {
+    if (minConfidence <= 0.7) return 0
+    return rows.filter((r) => {
+      if (!matchesView(r, view)) return false
+      const c = r.confidence ?? 0
+      return c >= 0.7 && c < minConfidence
+    }).length
+  }, [rows, view, minConfidence])
+
+  const VIEWS: { id: FeedView; label: string; count: number }[] = [
+    { id: 'untagged', label: 'Untagged', count: viewCounts.visual_only },
+    { id: 'tagged', label: 'Tagged', count: viewCounts.hashtag + viewCounts.mention },
+    { id: 'owned', label: 'Brand accounts', count: viewCounts.brand_owned },
+    { id: 'all', label: 'All', count: beforeView.length },
+  ]
+
   return (
     <div className="space-y-5">
+      {/* The discovery view switch. Deliberately a mode switch, not another
+          dropdown in the filter row — it answers a different question ("what is
+          this tool FOR?") than "narrow these results". */}
+      <div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {VIEWS.map((v) => (
+            <button
+              key={v.id}
+              onClick={() => setView(v.id)}
+              className={`px-3.5 py-1.5 text-[12px] font-medium uppercase tracking-wide border transition-colors ${
+                view === v.id
+                  ? 'bg-[var(--color-ink)] text-white border-[var(--color-ink)]'
+                  : 'bg-transparent text-[var(--color-ink-muted)] border-[var(--color-border-strong)] hover:text-[var(--color-ink)]'
+              }`}
+            >
+              {v.label}
+              <span className="ml-1.5 tabular-nums opacity-70">{v.count.toLocaleString()}</span>
+            </button>
+          ))}
+        </div>
+        {view === 'untagged' && (
+          <p className="mt-2 text-[12px] text-[var(--color-ink-muted)] leading-relaxed max-w-2xl">
+            Posts showing Stëlz with no #stelz, no @drinkstelz, and not from a brand account.
+            Anyone can follow #stelz for free — <strong className="text-[var(--color-ink)]">these are
+            the ones only this tool finds.</strong>
+          </p>
+        )}
+        {view === 'owned' && (
+          <p className="mt-2 text-[12px] text-[var(--color-ink-muted)] leading-relaxed max-w-2xl">
+            Stëlz' own accounts and distributors. Kept out of the main feed — this is your
+            content, not a discovery.
+          </p>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex-1 min-w-[200px] max-w-md">
           <Input placeholder="Search creator, caption, context…" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -393,40 +576,151 @@ function FeedTab({ rows, lastSeenAt, onOpen }: { rows: DetectionRow[]; lastSeenA
         ]} />
         <FilterDropdown label="Product" value={productFilter} onChange={(v) => setProductFilter(v as string | null)} options={productLines.map(([k, n]) => ({ id: k, label: PRODUCT_LINE_LABEL[k] ?? k, count: n }))} />
         <FilterDropdown label="Tier" value={tierFilter} onChange={(v) => setTierFilter(v as string | null)} options={['tier_1', 'tier_2', 'tier_3'].map((t, i) => ({ id: t, label: `Tier ${i + 1}`, count: rows.filter((r) => r.creator_tier === t).length }))} />
-        <FilterDropdown label="Trust" value={trustFilter} onChange={(v) => setTrustFilter(v as 'verified' | 'unreviewed' | 'fp' | null)} options={[
-          { id: 'verified' as const, label: 'Verified + auto', count: rows.filter((r) => r.is_false_positive !== true).length },
-          { id: 'unreviewed' as const, label: 'Unreviewed only', count: rows.filter((r) => r.verified !== true && r.is_false_positive !== true).length },
-          { id: 'fp' as const, label: 'Flagged FP', count: rows.filter((r) => r.is_false_positive === true).length },
+        {/* "Verified + auto" was a lie: this option only excludes rows a
+            moderator REJECTED — it does not require anyone to have confirmed
+            them. Reading it as "verified" is exactly how unreviewed hits get
+            trusted. Named for what it does. */}
+        <FilterDropdown label="Review" value={trustFilter} onChange={(v) => setTrustFilter(v as 'verified' | 'unreviewed' | 'fp' | null)} options={[
+          { id: 'verified' as const, label: 'Not rejected', count: rows.filter((r) => r.is_false_positive !== true).length },
+          { id: 'unreviewed' as const, label: 'Not yet checked', count: rows.filter((r) => r.verified !== true && r.is_false_positive !== true).length },
+          { id: 'fp' as const, label: 'Rejected', count: rows.filter((r) => r.is_false_positive === true).length },
         ]} />
-        <FilterDropdown label="Confidence" value={minConfidence} onChange={(v) => setMinConfidence((v as number | null) ?? 0)} options={[
-          { id: 0.85, label: '≥ 85% (strict)', count: rows.filter((r) => (r.confidence ?? 0) >= 0.85).length },
-          { id: 0.75, label: '≥ 75%', count: rows.filter((r) => (r.confidence ?? 0) >= 0.75).length },
-          { id: 0.5, label: '≥ 50%', count: rows.filter((r) => (r.confidence ?? 0) >= 0.5).length },
-          { id: 0, label: 'All', count: rows.length },
+        {/* Labelled by what the number MEANS, not by the number. See the
+            comment on minConfidence above: >=0.85 is a can-size filter. */}
+        <FilterDropdown label="Can size" value={minConfidence} onChange={(v) => setMinConfidence((v as number | null) ?? 0)} options={[
+          { id: 0.85, label: 'Large in frame only', count: rows.filter((r) => (r.confidence ?? 0) >= 0.85).length },
+          { id: 0.7, label: 'Include small / background', count: rows.filter((r) => (r.confidence ?? 0) >= 0.7).length },
+          { id: 0, label: 'Everything, incl. weak reads', count: rows.length },
         ]} />
-        {(productFilter || tierFilter || search || platformFilter || typeFilter || trustFilter !== 'verified' || minConfidence !== 0.85) && (
-          <button onClick={() => { setProductFilter(null); setTierFilter(null); setSearch(''); setTrustFilter('verified'); setPlatformFilter(null); setTypeFilter(null); setMinConfidence(0.85) }} className="text-[12px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] underline">Reset</button>
+        {/* Reset restores the PRODUCT default (untagged), not "show everything". */}
+        {(productFilter || tierFilter || search || platformFilter || typeFilter || trustFilter !== 'verified' || minConfidence !== 0.7 || view !== 'untagged') && (
+          <button onClick={() => { setProductFilter(null); setTierFilter(null); setSearch(''); setTrustFilter('verified'); setPlatformFilter(null); setTypeFilter(null); setMinConfidence(0.7); setView('untagged') }} className="text-[12px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] underline">Reset</button>
         )}
         <span className="ml-auto text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
-          {filtered.length.toLocaleString()} of {rows.length.toLocaleString()}
+          {visible.length.toLocaleString()} of {rows.length.toLocaleString()}
         </span>
       </div>
 
-      {filtered.length === 0 ? (
-        <Card className="px-6 py-16 text-center text-[13px] text-[var(--color-ink-subtle)]">No detections match.</Card>
+      {gatedHidden > 0 && (
+        <button
+          onClick={() => setMinConfidence(0.7)}
+          className="w-full text-left px-4 py-3 border border-[var(--color-border-strong)] bg-[var(--color-surface)] hover:bg-[var(--color-bg)] transition-colors"
+        >
+          <span className="text-[13px] text-[var(--color-ink)]">
+            <strong className="tabular-nums">{gatedHidden.toLocaleString()}</strong> more{' '}
+            {gatedHidden === 1 ? 'detection is' : 'detections are'} hidden by this filter.
+          </span>
+          <span className="block text-[12px] text-[var(--color-ink-muted)] mt-0.5 leading-relaxed">
+            These were capped at 70% because the can wasn't dominant in frame — not because the
+            brand was uncertain. Most genuine cans in party and festival footage land here.{' '}
+            <span className="underline text-[var(--color-ink)]">Show them</span>
+          </span>
+        </button>
+      )}
+
+      {truncated && (
+        <div className="px-4 py-2.5 border border-[var(--color-border-strong)] bg-[var(--color-bg)] text-[12px] text-[var(--color-ink-muted)] leading-relaxed">
+          <strong className="text-[var(--color-ink)]">This page is showing the newest {DETECTION_FETCH_LIMIT.toLocaleString()} detections only.</strong>{' '}
+          Older hits exist but aren't loaded, so counts here are a floor, not a total.
+        </div>
+      )}
+
+      {rejectError && (
+        <div className="px-4 py-2 border border-[var(--color-bad)] text-[12px] text-[var(--color-bad)]">
+          Could not save that rejection: {rejectError}
+        </div>
+      )}
+
+      {visible.length === 0 ? (
+        // The empty state is load-bearing here. The feed now defaults to
+        // untagged, so a brand whose hits are all hashtag-sourced would land on
+        // a blank screen and conclude the tool is broken. Say what is actually
+        // happening and offer the way out.
+        view === 'untagged' && beforeView.length > 0 ? (
+          <Card className="px-6 py-14 text-center">
+            <p className="text-[14px] text-[var(--color-ink)] font-medium">
+              No untagged hits match these filters.
+            </p>
+            <p className="mt-2 text-[13px] text-[var(--color-ink-muted)] leading-relaxed max-w-md mx-auto">
+              Every hit here carries #stelz, an @mention, or comes from a brand account —
+              content Instagram already surfaces for free. That is a discovery problem,
+              not a display one.
+            </p>
+            <button
+              onClick={() => setView('all')}
+              className="mt-4 rounded-full border border-[var(--color-ink)] px-5 py-2 text-[12px] font-medium uppercase tracking-wide text-[var(--color-ink)] hover:bg-[var(--color-ink)] hover:text-white transition-colors"
+            >
+              Show all {beforeView.length.toLocaleString()}
+            </button>
+          </Card>
+        ) : (
+          <Card className="px-6 py-16 text-center text-[13px] text-[var(--color-ink-subtle)]">No detections match.</Card>
+        )
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {filtered.slice(0, visibleCount).map((d) => (
-              <FeedCard
-                key={d.detection_id}
-                d={d}
-                isNew={!!(lastSeenAt && d.posted_at && d.posted_at > lastSeenAt)}
-                onOpen={() => onOpen(d)}
-              />
-            ))}
-          </div>
-          {filtered.length > visibleCount && (
+          {bands.clear.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {bands.clear.map((d) => (
+                <FeedCard
+                  key={d.detection_id}
+                  d={d}
+                  isNew={!!(lastSeenAt && d.posted_at && d.posted_at > lastSeenAt)}
+                  onOpen={() => onOpen(d)}
+                  onReject={() => void reject(d)}
+                />
+              ))}
+            </div>
+          )}
+
+          {bands.review.length > 0 && (
+            <>
+              {/* The honesty band. Naming the error rate up front is what turns
+                  a wrong can from "this tool is broken" into "that is the one
+                  in three I was told to check". */}
+              <div className="pt-4 border-t border-[var(--color-border-strong)]">
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <h3 className="text-[13px] font-medium uppercase tracking-wide text-[var(--color-ink)]">
+                    Worth a check
+                  </h3>
+                  <span className="text-[11px] tabular-nums text-[var(--color-ink-subtle)]">
+                    {bands.review.length.toLocaleString()}
+                    {reviewTotal > bands.review.length ? ` of ${reviewTotal.toLocaleString()}` : ''}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-[12px] text-[var(--color-ink-muted)] leading-relaxed max-w-2xl">
+                  The can is small, distant, or only partly readable here. These were scored
+                  down for <strong className="text-[var(--color-ink)]">size, not doubt</strong> —
+                  most genuine cans at parties and festivals land in this band, and so do most
+                  of the mistakes. Best-evidenced first: rows tagged{' '}
+                  <span className="text-[var(--color-warn)]">name only</span> had nothing but the
+                  word STËLZ read off them, no label text.{' '}
+                  <span className="text-[var(--color-ink-subtle)]">Hit ✕ on anything that isn't Stëlz — it won't come back.</span>
+                </p>
+                {bands.rivals > 0 && (
+                  <button
+                    onClick={() => setShowRivals((v) => !v)}
+                    className="mt-2 text-[12px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] underline"
+                  >
+                    {showRivals ? 'Hide' : 'Show'} {bands.rivals}{' '}
+                    {bands.rivals === 1 ? 'hit whose label' : 'hits whose labels'} read as another brand
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {bands.review.map((d) => (
+                  <FeedCard
+                    key={d.detection_id}
+                    d={d}
+                    isNew={!!(lastSeenAt && d.posted_at && d.posted_at > lastSeenAt)}
+                    onOpen={() => onOpen(d)}
+                    onReject={() => void reject(d)}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {visible.length > visibleCount && (
             <div className="flex flex-col items-center gap-2 pt-2">
               <button
                 onClick={() => setVisibleCount((c) => c + 60)}
@@ -435,7 +729,7 @@ function FeedTab({ rows, lastSeenAt, onOpen }: { rows: DetectionRow[]; lastSeenA
                 Show more
               </button>
               <span className="text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
-                Showing {Math.min(visibleCount, filtered.length)} of {filtered.length.toLocaleString()}
+                Showing {Math.min(visibleCount, visible.length)} of {visible.length.toLocaleString()}
               </span>
             </div>
           )}
@@ -445,14 +739,56 @@ function FeedTab({ rows, lastSeenAt, onOpen }: { rows: DetectionRow[]; lastSeenA
   )
 }
 
-function FeedCard({ d, isNew, onOpen }: { d: DetectionRow; isNew: boolean; onOpen: () => void }) {
+// Why this hit is in the feed. Shown in EVERY view, including 'untagged' where
+// it is technically redundant — a badge that disappears when you switch views
+// reads as a glitch, and a consistent one makes the card screenshot-able.
+function SignalBadge({ d }: { d: DetectionRow }) {
+  const s = d.signal
+  if (!s) return null
+  if (s.signal === 'visual_only') {
+    return (
+      <>
+        <Badge tone="accent">no tag</Badge>
+        {/* The brand IS named in the caption, but Instagram has no caption
+            search — so the post stays a genuine discovery. Surfaced so a
+            reviewer who reads "STËLZ!" in the text doesn't think we missed it. */}
+        {s.namedInCaption && <Badge tone="warn">in text</Badge>}
+      </>
+    )
+  }
+  if (s.signal === 'brand_owned') return <Badge>brand acct</Badge>
+  return <Badge>tagged</Badge>
+}
+
+// A hit that a second, higher-resolution pass independently identified as Stëlz
+// rather than a lookalike. Only shown for 'upgraded' — 'confirmed' means the
+// verifier agreed but wasn't certain enough to promote, and claiming a
+// double-check on that would overstate it. See lib/verifier.py.
+function VerifiedBadge({ d }: { d: DetectionRow }) {
+  if (d.verify_verdict !== 'upgraded') return null
+  return (
+    <span title={d.verify_reason ?? 'Re-read at higher resolution and identified as Stëlz.'}>
+      <Badge tone="good">double-checked</Badge>
+    </span>
+  )
+}
+
+function FeedCard({ d, isNew, onOpen, onReject }: { d: DetectionRow; isNew: boolean; onOpen: () => void; onReject?: () => void }) {
   const tags = (d.post_hashtags ?? []).slice(0, 4)
   const extraTags = (d.post_hashtags?.length ?? 0) - tags.length
   const conf = (d.confidence ?? 0) * 100
+  const q = detectionQuality(d)
+  const v = verifyDetection(d)
   return (
-    <button
+    // A div, not a button: the reject control below is itself a button, and
+    // nesting buttons is invalid HTML (React will warn, and the inner click
+    // target behaves inconsistently across browsers).
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
-      className="text-left bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-border-strong)] transition-colors flex flex-col group"
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}
+      className="cursor-pointer text-left bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-border-strong)] focus-visible:border-[var(--color-ink)] focus-visible:outline-none transition-colors flex flex-col group"
     >
       {/* Media */}
       <div className="relative aspect-[4/5] bg-[var(--color-bg)] overflow-hidden">
@@ -470,18 +806,50 @@ function FeedCard({ d, isNew, onOpen }: { d: DetectionRow; isNew: boolean; onOpe
             ▶ video{(d.frame_hits ?? 0) > 1 ? ` · ${d.frame_hits} frames` : ''}
           </span>
         )}
+        {/* One-click reject. The demoted band is ~1-in-3 wrong and no filter can
+            clean it (lib/quality.ts), so the answer to "too many wrong cans" is
+            making them one click to kill — not a stricter threshold, which is
+            what hid the real ones in the first place. Writes through the same
+            callable the Review tab uses, and covers every frame/slot of the post. */}
+        {onReject && (
+          <button
+            type="button"
+            title="Not Stëlz — reject this post"
+            aria-label="Not Stëlz — reject this post"
+            onClick={(e) => { e.stopPropagation(); onReject() }}
+            className="absolute bottom-2 left-2 w-7 h-7 flex items-center justify-center bg-[var(--color-ink)]/70 text-white text-[13px] opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-[var(--color-bad)] transition-opacity"
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {/* Body */}
       <div className="p-3.5 flex flex-col gap-2.5 flex-1">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-[13px] font-medium truncate">@{d.creator_handle}</span>
+          <SignalBadge d={d} />
+          <VerifiedBadge d={d} />
           {d.creator_tier === 'tier_1' && <Badge tone="accent">T1</Badge>}
           {d.verified === true && <Badge tone="good">✓</Badge>}
           {d.is_false_positive === true && <Badge tone="bad">FP</Badge>}
-          <span className={`ml-auto text-[12px] tabular-nums font-medium shrink-0 ${conf >= 85 ? 'text-[var(--color-good)]' : conf >= 75 ? 'text-[var(--color-warn)]' : 'text-[var(--color-bad)]'}`}>
-            {conf.toFixed(0)}%
-          </span>
+          {/* Deliberately NOT the raw percentage for demoted rows. A capped hit
+              reads "70%" while the model actually said 95% — the number is an
+              artefact of the size gate, and showing it trains the eye to
+              distrust exactly the rows that are most often genuine. */}
+          {v.competitor ? (
+            <span className="ml-auto text-[11px] font-medium shrink-0 text-[var(--color-bad)]" title={v.reason}>
+              reads "{v.competitor}"
+            </span>
+          ) : q.quality === 'small' ? (
+            <span className="ml-auto text-[11px] font-medium shrink-0 text-[var(--color-warn)]" title={q.reason}>
+              {v.tier === 'wordmark_only' ? 'name only' : 'small in frame'}
+            </span>
+          ) : (
+            <span className={`ml-auto text-[12px] tabular-nums font-medium shrink-0 ${q.quality === 'clear' ? 'text-[var(--color-good)]' : 'text-[var(--color-bad)]'}`}>
+              {conf.toFixed(0)}%
+            </span>
+          )}
         </div>
 
         {d.product_line && (
@@ -519,7 +887,7 @@ function FeedCard({ d, isNew, onOpen }: { d: DetectionRow; isNew: boolean; onOpe
           <span className="shrink-0">{d.posted_at ? timeAgo(d.posted_at) : '—'}</span>
         </div>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -850,7 +1218,7 @@ function CreatorsTab({ detections }: { detections: DetectionRow[] }) {
 
 // ─────────────────────── Dashboard ───────────────────────
 
-function DashboardSection({ detections, rangeRows, days }: { detections: DetectionRow[]; rangeRows: DetectionRow[]; days: number }) {
+function DashboardSection({ detections, rangeRows, days, onGotoTab }: { detections: DetectionRow[]; rangeRows: DetectionRow[]; days: number; onGotoTab?: (t: Tab) => void }) {
   // ── Top-row KPIs ────────────────────────────────────────────────
   const totalHits = rangeRows.filter((d) => d.detected === true).length
   const week = new Date(); week.setDate(week.getDate() - 7)
@@ -861,9 +1229,18 @@ function DashboardSection({ detections, rangeRows, days }: { detections: Detecti
   const ttHits = rangeRows.filter((d) => d.detected && d.platform === 'tiktok').length
   const topPlatform = igHits >= ttHits ? 'Instagram' : 'TikTok'
   const videoHits = rangeRows.filter((d) => d.detected && d.frame_idx != null).length
-  const avgConf = totalHits
-    ? Math.round((rangeRows.filter((d) => d.detected).reduce((s, d) => s + (d.confidence ?? 0), 0) / totalHits) * 100)
-    : 0
+
+  // The headline number. Brand-owned posts are excluded from the denominator —
+  // the brand's own content is not a discovery either way and would dilute it.
+  //
+  // Wording matters and must stay honest: scanning is hashtag-SEEDED, so this
+  // share is structurally suppressed by how discovery currently works. "X% of
+  // all Stelz content on Instagram is untagged" would be false. The defensible
+  // claim, and the one used in the copy below, is "X% of the hits in YOUR
+  // dashboard carry no #stelz and no @stelz".
+  const unfindable = untaggedShare(rangeRows.filter((d) => d.detected === true))
+
+  const signalMix = signalCounts(rangeRows.filter((d) => d.detected === true))
 
   // ── 1. Detections per day, split by platform ────────────────────
   const igSeries: Series = {
@@ -908,13 +1285,19 @@ function DashboardSection({ detections, rangeRows, days }: { detections: Detecti
     perCreator.set(d.creator_handle, e)
   }
 
-  // ── 4. Top hashtags by yield (hits per hashtag) ─────────────────
+  // ── 4. Context tags — the tags these posts actually live under ──
+  //
+  // Brand tags are deliberately EXCLUDED. Titled "Top hashtags" and including
+  // #stelz, this chart read as "our best hashtags" and was the single most
+  // likely reason the dashboard felt like a hashtag tool. Without them it shows
+  // the real thing: this content lives under #vrijmibo, #huisfeest,
+  // #festivalseizoen — contexts you could not have searched for.
   const tagYield = new Map<string, number>()
   for (const d of rangeRows) {
     if (!d.detected) continue
     for (const t of (d.post_hashtags ?? [])) {
       const k = t.toLowerCase().replace(/^#/, '')
-      if (!k) continue
+      if (!k || isBrandTag(k)) continue
       tagYield.set(k, (tagYield.get(k) ?? 0) + 1)
     }
   }
@@ -1025,6 +1408,35 @@ function DashboardSection({ detections, rangeRows, days }: { detections: Detecti
 
   return (
     <section className="space-y-14">
+      {/* ─── The headline: what only this tool found ─────────────────── */}
+      {unfindable.total > 0 && (
+        <div className="border border-[var(--color-ink)] bg-[var(--color-surface)] px-6 py-7 sm:px-8">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-5">
+            <div className="text-[56px] sm:text-[64px] leading-none font-semibold tabular-nums text-[var(--color-accent)]">
+              {unfindable.pct}%
+            </div>
+            <div className="flex-1">
+              <p className="text-[15px] text-[var(--color-ink)] leading-snug font-medium">
+                of your hits carry no #stelz, no @drinkstelz and no brand account.
+              </p>
+              <p className="mt-1.5 text-[13px] text-[var(--color-ink-muted)] leading-relaxed">
+                <strong className="tabular-nums text-[var(--color-ink)]">
+                  {unfindable.untagged.toLocaleString()}
+                </strong>{' '}
+                of {unfindable.total.toLocaleString()} posts that Instagram could never have
+                shown you. Anyone can follow a hashtag for free — this is the part that needs
+                a tool.
+              </p>
+            </div>
+            {onGotoTab && (
+              <Button size="sm" variant="primary" onClick={() => onGotoTab('feed')}>
+                See them →
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ─── Overview ────────────────────────────────────────────────── */}
       <DashSection
         eyebrow="Overview"
@@ -1033,11 +1445,13 @@ function DashboardSection({ detections, rangeRows, days }: { detections: Detecti
       >
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 border border-[var(--color-border)] bg-[var(--color-border)] gap-px">
           <KpiTile label="Total hits" value={totalHits.toLocaleString()} sub="all time" />
+          {/* Replaced "Avg confidence": an internal pipeline metric that means
+              nothing to a brand manager and invites "why only 87%?". */}
+          <KpiTile label="Only found here" value={unfindable.untagged.toLocaleString()} sub={`${unfindable.pct}% of hits`} />
           <KpiTile label="This week" value={thisWeekHits.toLocaleString()} sub="last 7 days" />
           <KpiTile label="Active creators" value={activeCreators.toString()} sub="with ≥1 hit" />
           <KpiTile label="Video hits" value={videoHits.toLocaleString()} sub="frame analysis" />
           <KpiTile label="Top platform" value={topPlatform} sub={`${Math.max(igHits, ttHits)} hits`} />
-          <KpiTile label="Avg confidence" value={`${avgConf}%`} sub="across hits" />
         </div>
       </DashSection>
 
@@ -1114,8 +1528,8 @@ function DashboardSection({ detections, rangeRows, days }: { detections: Detecti
             )}
           </DashCard>
 
-          <DashCard title="Top hashtags" sub="Confirmed hits per tag">
-            {topTags.length === 0 ? <EmptyBlock label="No hashtag hits yet." /> : <BarChart rows={topTags} />}
+          <DashCard title="Context tags" sub="Tags on the posts we found — brand tags excluded">
+            {topTags.length === 0 ? <EmptyBlock label="No context tags yet." /> : <BarChart rows={topTags} />}
           </DashCard>
         </div>
       </DashSection>
@@ -1127,6 +1541,23 @@ function DashboardSection({ detections, rangeRows, days }: { detections: Detecti
         hint="Where the brand appears — product mix, platform split, and the audio and effects driving each post."
       >
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <DashCard title="How we found it" sub="Tagged content Instagram shows you for free, vs the rest">
+            {unfindable.total === 0 ? (
+              <EmptyBlock label="No hits to classify yet." />
+            ) : (
+              <Donut
+                slices={[
+                  { label: 'No tag — only found here', value: signalMix.visual_only, tone: 'accent' as const },
+                  { label: 'Brand hashtag', value: signalMix.hashtag, color: 'var(--color-ink)' },
+                  { label: '@mention', value: signalMix.mention, color: 'var(--color-ink-muted)' },
+                  { label: 'Brand account', value: signalMix.brand_owned, color: 'var(--color-border-strong)' },
+                ].filter((s) => s.value > 0)}
+                centreLabel={`${unfindable.pct}%`}
+                centreSub="only found here"
+              />
+            )}
+          </DashCard>
+
           <DashCard title="Product line" sub="Which variant gets detected">
             {productSlices.length === 0 ? (
               <EmptyBlock label="No product breakdown yet." />
@@ -1254,6 +1685,8 @@ function PickCard({ d, onOpen }: { d: DetectionRow; onOpen: () => void }) {
       <div className="p-4 flex flex-col gap-3 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
           <Link to={`/creators/${d.creator_handle}`} className="text-[13px] font-medium hover:underline truncate min-w-0">@{d.creator_handle}</Link>
+          <SignalBadge d={d} />
+          <VerifiedBadge d={d} />
           {d.creator_tier === 'tier_1' && <Badge tone="accent">T1</Badge>}
           {d.product_line && <Badge tone="muted">{PRODUCT_LINE_LABEL[d.product_line] ?? d.product_line}</Badge>}
         </div>

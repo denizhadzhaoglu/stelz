@@ -20,9 +20,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from google.cloud import pubsub_v1
-from google.cloud.firestore import SERVER_TIMESTAMP, Increment
+from google.cloud.firestore import SERVER_TIMESTAMP, ArrayUnion, Increment
 
-from lib import apify, fs, usage
+from lib import apify, fs, hashtags, usage
 
 log = logging.getLogger(__name__)
 
@@ -47,14 +47,35 @@ def _tiktok_music_url(music_id: str | None, music_name: str | None) -> str | Non
     slug = _slugify(music_name or "original-sound")
     return f"https://www.tiktok.com/music/{slug}-{music_id}"
 
-# Promote on first signal — anyone using a brand-specific hashtag is fair game.
-# Was 2 (required cross-hashtag confirmation), but that wastes 95% of candidates
-# from brand-named tags like #stelz which are already brand-specific.
-# A handle is auto-promoted to a creator when it has been observed posting
-# to at least this many DIFFERENT brand hashtags (measured on len(sources),
-# not signalCount which counts total posts). Prevents unrelated accounts
-# with a single random tag hit from polluting the creator list.
-PROMOTION_UNIQUE_TAGS = 2
+# How many DIFFERENT hashtags a handle must be seen on before it is auto-promoted
+# from discoveryQueue to a tracked creator.
+#
+# Brand-specific tags (#stelz, #drinkstelz, #stelzhardicedtea) promote on the
+# FIRST signal — using one is already brand intent, and requiring cross-tag
+# confirmation there throws away the overwhelming majority of good candidates.
+# Generic lifestyle tags (#vrijmibo, #koningsdag) still require two distinct
+# tags, otherwise every account at a Dutch house party floods the creator list.
+#
+# NB: promotion is the ONLY route to untagged content — a promoted creator gets
+# their whole feed scraped, including posts with no brand hashtag at all. Before
+# this was fixed, `sources` was written as a plain array with merge=True, which
+# Firestore REPLACES rather than unions; since each Pub/Sub worker handles one
+# tag, it was always length 1 and the >= 2 check never passed. Promotion never
+# fired, so the untagged funnel was severed. See ArrayUnion in _upsert below.
+PROMOTION_UNIQUE_TAGS_GENERIC = 2
+PROMOTION_UNIQUE_TAGS_BRAND = 1
+
+
+def _is_brand_specific_tag(tag: str, brand_slug: str, aliases: list[str] | None = None) -> bool:
+    """True when the hashtag contains the brand slug or one of its wordmark
+    aliases. #stelz / #drinkstelz / #stelzhardseltzer qualify; #vrijmibo does not.
+    Kept brand-agnostic so a second tenant works without a code change."""
+    t = (tag or "").lower()
+    if not t:
+        return False
+    needles = {(brand_slug or "").lower()}
+    needles.update((a or "").lower() for a in (aliases or []))
+    return any(n and n in t for n in needles)
 
 
 def publish_tags(brand_id: str, per_tag: int = 500, max_tags: int = 50) -> dict[str, Any]:
@@ -66,15 +87,38 @@ def publish_tags(brand_id: str, per_tag: int = 500, max_tags: int = 50) -> dict[
     if not brand.exists:
         raise ValueError(f"brand not found: {brand_id}")
 
+    # Budget gate at PUBLISH time. Apify bills per result, so the cost of a scan
+    # is committed the moment we enqueue the tags — refusing 50 messages here is
+    # worth far more than refusing each of the 25,000 detections downstream.
+    # At the UI defaults (perTag=500, maxTags=50) one click can pull 25,000
+    # results ~= $57, against a default daily budget of $5.
+    level = usage.degrade_level(brand_id)
+    if level >= usage.DEGRADE_NO_SCRAPE:
+        log.warning(f"[{brand_id}] scrape refused — budget degrade level {level}")
+        return {"queued": 0, "tags": [], "skipped": "budget", "degradeLevel": level}
+    if level >= usage.DEGRADE_TRIM:
+        per_tag = max(30, per_tag // 2)
+        max_tags = max(5, max_tags // 2)
+        log.info(f"[{brand_id}] degrade {level}: perTag->{per_tag} maxTags->{max_tags}")
+
     pool_raw = list(fs.hashtag_pool_col(brand_id).where("active", "==", True).stream())
     if not pool_raw:
         return {"queued": 0, "tags": []}
 
-    pool = sorted(
-        pool_raw,
-        key=lambda d: (d.to_dict() or {}).get("priority", 0),
-        reverse=True,
-    )[:max_tags]
+    # Stratified selection, NOT a plain priority sort. A plain sort cut EVERY
+    # lifestyle, typo and category tag out of the shipped 117-tag pool at the
+    # shipped max_tags=50 — including the entire creator-prospecting surface,
+    # which lib/hashtags.py calls the only route to untagged content. See
+    # hashtags.select_tags for the measurement. It also costs slightly less:
+    # the restored families carry per-tag result caps and displace uncapped ones
+    # (18,130 vs 19,200 projected results on the real pool).
+    pool_dicts = [{**(d.to_dict() or {}), "_doc": d} for d in pool_raw]
+    selected = hashtags.select_tags(pool_dicts, max_tags)
+    pool = [d["_doc"] for d in selected]
+    log.info(
+        f"[{brand_id}] selected {len(pool)}/{len(pool_raw)} tags, "
+        f"~{hashtags.projected_results(selected, per_tag)} projected Apify results"
+    )
 
     publisher = pubsub_v1.PublisherClient()
     topic = publisher.topic_path(PROJECT_ID, SCRAPE_TAG_TOPIC)
@@ -87,11 +131,19 @@ def publish_tags(brand_id: str, per_tag: int = 500, max_tags: int = 50) -> dict[
         platform = h.get("platform") or "instagram"
         if not tag:
             continue
+        # Per-tag result cap. Apify bills per RESULT, so one global perTag made
+        # a ~0%-yield lifestyle tag cost exactly as much as the brand's own tag
+        # (#koningsdag at 500 results = $1.15 to find nothing). Families now
+        # carry their own ceiling — see lib/hashtags.FAMILIES. Never raises the
+        # caller's number, only lowers it, so the budget-degrade ladder above
+        # still wins.
+        cap = h.get("maxResults")
+        tag_per = min(per_tag, int(cap)) if isinstance(cap, (int, float)) and cap else per_tag
         payload = {
             "brandId": brand_id,
             "tag": tag,
             "platform": platform,
-            "perTag": per_tag,
+            "perTag": tag_per,
         }
         futures.append(publisher.publish(topic, json.dumps(payload).encode()))
         queued.append(f"{platform}:{tag}")
@@ -201,7 +253,14 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
         _scrape_log(brand_id, tag, platform, error=f"scrape_exception:{type(e).__name__}", diag=diag)
         return {"status": "error", "tag": tag, "reason": "scrape_exception"}
 
-    usage.record(brand_id, apify_runs=1)
+    # Apify bills per RESULT ($2.30/1k), so the result count is the billed unit —
+    # recording only the run count under-reports spend by ~11x. See lib/usage.py.
+    _n_items = len(items) if items else 0
+    if platform == "instagram":
+        usage.record(brand_id, apify_runs=1, apify_ig_results=_n_items)
+    else:
+        usage.record(brand_id, apify_runs=1, apify_tt_results=_n_items)
+
     if items is None:
         _scrape_log(brand_id, tag, platform, error="scrape_returned_none", diag=diag)
         return {"status": "ok", "tag": tag, "items": 0}
@@ -239,7 +298,7 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
         if tag not in entry["sources"]:
             entry["sources"].append(tag)
 
-        wrote, kind, url = _persist_hashtag_post(brand_id, item, platform, handle, posts_col)
+        wrote, kind, url, cover = _persist_hashtag_post(brand_id, item, platform, handle, posts_col)
         if wrote:
             posts_written += 1
         if wrote and url:
@@ -248,6 +307,16 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
                 payload["videoUrl"] = url
                 detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
                 videos_enqueued += 1
+                # Also analyse the cover. The video path fails often (TikTok
+                # blocks GCP egress IPs; IG videoUrls are short-lived signed
+                # URLs that expire in the queue) and when it does, this is the
+                # only chance the post has of producing any detection at all.
+                if cover:
+                    detect_futures.append(publisher.publish(
+                        image_topic,
+                        json.dumps({"brandId": brand_id, "postId": wrote, "imageUrl": cover}).encode(),
+                    ))
+                    images_enqueued += 1
             else:
                 payload["imageUrl"] = url
                 detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
@@ -256,7 +325,7 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
         # IG Sidecar children
         if platform == "instagram" and item.get("type") == "Sidecar":
             for child in (item.get("childPosts") or []):
-                c_wrote, c_kind, c_url = _persist_sidecar_child(brand_id, item, child, handle, posts_col)
+                c_wrote, c_kind, c_url, c_cover = _persist_sidecar_child(brand_id, item, child, handle, posts_col)
                 if c_wrote:
                     posts_written += 1
                 if c_wrote and c_url:
@@ -265,6 +334,12 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
                         payload["videoUrl"] = c_url
                         detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
                         videos_enqueued += 1
+                        if c_cover:
+                            detect_futures.append(publisher.publish(
+                                image_topic,
+                                json.dumps({"brandId": brand_id, "postId": c_wrote, "imageUrl": c_cover}).encode(),
+                            ))
+                            images_enqueued += 1
                     else:
                         payload["imageUrl"] = c_url
                         detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
@@ -282,7 +357,10 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
                 "fullName": entry.get("fullName"),
                 "followerCount": entry.get("followerCount"),
                 "signalCount": Increment(entry["signalCount"]),
-                "sources": entry["sources"],
+                # ArrayUnion, not a plain list: merge=True REPLACES an array
+                # field, and this worker only ever knows its own single tag.
+                # A plain write clobbers every other tag's contribution.
+                "sources": ArrayUnion(entry["sources"]),
                 "lastSeenAt": SERVER_TIMESTAMP,
                 "status": "queued",
             },
@@ -294,9 +372,13 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
         from concurrent.futures import wait as _fwait
         _fwait(detect_futures, timeout=20)
 
-    # Promote only handles that hit at least PROMOTION_UNIQUE_TAGS DIFFERENT
-    # brand tags. Filtering on len(sources) in Python — Firestore can't do
-    # this server-side. Keeps the query cheap by prefiltering on status.
+    # Promote handles out of the queue into tracked creators. One brand-specific
+    # tag is enough; generic lifestyle tags need two distinct ones. Filtering on
+    # len(sources) in Python — Firestore can't do this server-side. Keeps the
+    # query cheap by prefiltering on status.
+    _bd = brand.to_dict() or {}
+    brand_slug = _bd.get("slug") or brand_id
+    brand_aliases = _bd.get("wordmarkAliases") or []
     promoted = 0
     creators_col = fs.creators_col(brand_id)
     queue_to_promote = (
@@ -309,7 +391,12 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
         ph = q_data.get("handle")
         pp = q_data.get("platform", "instagram")
         srcs = q_data.get("sources") or []
-        if not ph or ph in existing_handles or len(srcs) < PROMOTION_UNIQUE_TAGS:
+        needed = (
+            PROMOTION_UNIQUE_TAGS_BRAND
+            if any(_is_brand_specific_tag(s, brand_slug, brand_aliases) for s in srcs)
+            else PROMOTION_UNIQUE_TAGS_GENERIC
+        )
+        if not ph or ph in existing_handles or len(srcs) < needed:
             continue
         creator_id = fs.composite_id(pp, ph)
         creators_col.document(creator_id).set(
@@ -473,7 +560,7 @@ def run(
 
             # Persist post + fan out detection.
             if not dry_run:
-                wrote, kind, url = _persist_hashtag_post(brand_id, item, platform, handle, posts_col)
+                wrote, kind, url, cover = _persist_hashtag_post(brand_id, item, platform, handle, posts_col)
                 if wrote:
                     posts_written += 1
                 if wrote and url and publisher:
@@ -482,6 +569,12 @@ def run(
                         payload["videoUrl"] = url
                         detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
                         videos_enqueued += 1
+                        if cover:
+                            detect_futures.append(publisher.publish(
+                                image_topic,
+                                json.dumps({"brandId": brand_id, "postId": wrote, "imageUrl": cover}).encode(),
+                            ))
+                            images_enqueued += 1
                     else:
                         payload["imageUrl"] = url
                         detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
@@ -492,7 +585,7 @@ def run(
                 # that are otherwise invisible to detection.
                 if platform == "instagram" and item.get("type") == "Sidecar":
                     for child in (item.get("childPosts") or []):
-                        c_wrote, c_kind, c_url = _persist_sidecar_child(
+                        c_wrote, c_kind, c_url, c_cover = _persist_sidecar_child(
                             brand_id, item, child, handle, posts_col
                         )
                         if c_wrote:
@@ -503,6 +596,12 @@ def run(
                                 payload["videoUrl"] = c_url
                                 detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
                                 videos_enqueued += 1
+                                if c_cover:
+                                    detect_futures.append(publisher.publish(
+                                        image_topic,
+                                        json.dumps({"brandId": brand_id, "postId": c_wrote, "imageUrl": c_cover}).encode(),
+                                    ))
+                                    images_enqueued += 1
                             else:
                                 payload["imageUrl"] = c_url
                                 detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
@@ -523,7 +622,8 @@ def run(
                     "fullName": entry.get("fullName"),
                     "followerCount": entry.get("followerCount"),
                     "signalCount": Increment(entry["signalCount"]),
-                    "sources": entry["sources"],
+                    # See the live path above — merge=True replaces arrays.
+                    "sources": ArrayUnion(entry["sources"]),
                     "lastSeenAt": SERVER_TIMESTAMP,
                     "status": "queued",
                 },
@@ -539,7 +639,8 @@ def run(
         from concurrent.futures import wait as _fwait
         _fwait(detect_futures, timeout=30)
 
-    # Promote only handles seen in >= PROMOTION_UNIQUE_TAGS different brand tags.
+    # One brand-specific tag promotes; generic tags need two. See the live path.
+    _legacy_aliases = brand_data.get("wordmarkAliases") or []
     queue_to_promote = (
         fs.discovery_queue_col(brand_id)
         .where("status", "==", "queued")
@@ -551,7 +652,12 @@ def run(
         handle = q_data.get("handle")
         platform = q_data.get("platform", "instagram")
         srcs = q_data.get("sources") or []
-        if not handle or handle in existing_handles or len(srcs) < PROMOTION_UNIQUE_TAGS:
+        needed = (
+            PROMOTION_UNIQUE_TAGS_BRAND
+            if any(_is_brand_specific_tag(s, brand_slug, _legacy_aliases) for s in srcs)
+            else PROMOTION_UNIQUE_TAGS_GENERIC
+        )
+        if not handle or handle in existing_handles or len(srcs) < needed:
             continue
         creator_id = fs.composite_id(platform, handle)
         creators_col.document(creator_id).set(
@@ -700,7 +806,7 @@ def _persist_hashtag_post(
         image_url = item.get("videoMeta", {}).get("coverUrl")
 
     if not ext_id:
-        return None, "image", None
+        return None, "image", None, None
 
     post_id = fs.composite_id(platform, ext_id)
     posted_at = None
@@ -732,6 +838,10 @@ def _persist_hashtag_post(
         "viewsCount": views,
         "contentType": "video" if video_url else "image",
         "videoUrl": video_url,
+        # Persist the cover even for videos. It used to be computed and thrown
+        # away, which meant that when the video download failed there was no
+        # fallback image to fall back TO. Storing it makes the post recoverable.
+        "coverUrl": image_url,
         "music": music,
         "ingestedAt": SERVER_TIMESTAMP,
         "ingestedBy": "scan_hashtags",
@@ -740,7 +850,14 @@ def _persist_hashtag_post(
         doc["extras"] = extras_tiktok
     posts_col.document(post_id).set(doc, merge=True)
 
-    return post_id, ("video" if video_url else "image"), (video_url or image_url)
+    # 4-tuple: (post_id, kind, primary_url, cover_url). cover_url is only set
+    # for videos — for images the primary URL already IS the cover.
+    return (
+        post_id,
+        ("video" if video_url else "image"),
+        (video_url or image_url),
+        (image_url if video_url else None),
+    )
 
 
 def _persist_sidecar_child(
@@ -749,20 +866,21 @@ def _persist_sidecar_child(
     child: dict,
     handle: str,
     posts_col,
-) -> tuple[str | None, str, str | None]:
+) -> tuple[str | None, str, str | None, str | None]:
     """Persist one child slot of an IG carousel as its own post + return what to
-    fan out. Parent provides caption/handle/timestamp; child provides media.
+    fan out: (post_id, kind, primary_url, cover_url). Parent provides
+    caption/handle/timestamp; child provides media.
     """
     parent_id = str(parent.get("id") or parent.get("shortCode") or "")
     child_id = str(child.get("id") or child.get("shortCode") or "")
     if not parent_id or not child_id:
-        return None, "image", None
+        return None, "image", None, None
 
     is_video = child.get("type") == "Video" or bool(child.get("videoUrl"))
     video_url = child.get("videoUrl") if is_video else None
     image_url = child.get("displayUrl")
     if not video_url and not image_url:
-        return None, "image", None
+        return None, "image", None, None
 
     post_id = fs.composite_id("instagram", f"{parent_id}_{child_id}")
     posted_at_iso = parent.get("timestamp")
@@ -789,11 +907,17 @@ def _persist_sidecar_child(
         "viewsCount": parent.get("videoViewCount") or 0,
         "contentType": "video" if is_video else "image",
         "videoUrl": video_url,
+        "coverUrl": image_url,
         "ingestedAt": SERVER_TIMESTAMP,
         "ingestedBy": "scan_hashtags_sidecar",
     }, merge=True)
 
-    return post_id, ("video" if is_video else "image"), (video_url or image_url)
+    return (
+        post_id,
+        ("video" if is_video else "image"),
+        (video_url or image_url),
+        (image_url if video_url else None),
+    )
 
 
 def _scrape_log(
