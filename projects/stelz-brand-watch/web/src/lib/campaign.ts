@@ -27,6 +27,23 @@ export { VERDICT_LABEL }
 
 export type Surface = 'story' | 'post' | 'tiktok'
 
+/** Who posted it, and therefore what it proves.
+ *
+ *  `roster`    — one of the creators Stëlz is paying. Answers a CONTRACT
+ *                question: did the people we booked deliver?
+ *  `discovery` — anyone else at the same festival, found by hashtag. Answers a
+ *                MARKETING question: is the can showing up on its own?
+ *
+ *  Never merged into one total. Paid delivery and organic pickup are worth
+ *  different things, and a single "reach" number that contains both flatters
+ *  the campaign by counting strangers as deliverables. */
+export type Source = 'roster' | 'discovery'
+
+export const SOURCE_LABEL: Record<Source, string> = {
+  roster: 'Roster',
+  discovery: 'Los gevonden',
+}
+
 export const SURFACE_LABEL: Record<Surface, string> = {
   story: 'IG story',
   post: 'IG post',
@@ -70,6 +87,13 @@ export type CampaignItem = {
   shares: number | null
   pollVotes: number | null
   isPaidPartnership: boolean
+  /** Defaults to 'roster' when absent: every archive that predates discovery
+   *  is roster content, and guessing 'discovery' would invent organic reach. */
+  source?: Source
+  /** The hashtag that surfaced a discovery item. Null for roster content,
+   *  which was found by handle. Kept so a tag's real yield can be measured
+   *  rather than assumed. */
+  foundVia?: string | null
 }
 
 export type CampaignRow = CampaignItem & {
@@ -84,6 +108,8 @@ export type CampaignRow = CampaignItem & {
    *  field rather than folded into the verdict: "someone drank one" and "the
    *  bar carried our logo" are different things to have bought. */
   placement: DetectionRow['verify_placement']
+  /** Always set, unlike the optional field on the item. */
+  source: Source
   /** True when this sighting would NOT survive the deployed backend's 512px
    *  downscale. Not a doubt about the photo — a gap between what was measured
    *  here and what the live function currently sees. */
@@ -112,6 +138,7 @@ export function joinCampaign(items: CampaignItem[], detections: DetectionRow[]):
       framesJudged: framesJudgedIn(group),
       coverOnly: best?.cover_only === true,
       placement: best?.verify_placement ?? null,
+      source: it.source ?? 'roster',
       missedByDeploy: best?.detected === true && best?.found_at_prod_res === false,
     }
   })
@@ -181,6 +208,22 @@ export type CampaignCreator = {
   silent: boolean
 }
 
+/** One side of the roster/discovery split.
+ *
+ *  Counts only. No metric field on purpose: adding a stranger's TikTok plays to
+ *  a booked creator's would produce exactly the "total reach" this file exists
+ *  to prevent, and the per-surface figures already live on `bySurface`. */
+export type SourceStats = {
+  items: number
+  judged: number
+  withStelz: number
+  near: number
+  /** Distinct accounts. For discovery this is the number that matters: "9
+   *  sightings" from one person is a fan, from nine people it is a trend. */
+  accounts: number
+  tiktokViews: number
+}
+
 export type CampaignRollup = {
   creators: CampaignCreator[]
   rosterSize: number
@@ -200,6 +243,9 @@ export type CampaignRollup = {
    *  campaign — but one nobody should have to discover from a footnote. */
   missedByDeploy: number
   bySurface: Record<Surface, SurfaceStats>
+  /** The split the client asked for: what the people we pay delivered, versus
+   *  what turned up on its own. Kept apart at every level. */
+  bySource: Record<Source, SourceStats>
   /** Named, not "reach": TikTok is the only surface here that publishes views.
    *  Kept out of every other total on purpose. */
   tiktokViews: number
@@ -230,6 +276,7 @@ export function campaignRollup(
   roster: string[] = [],
 ): CampaignRollup {
   const byCreator = new Map<string, CampaignCreator>()
+  const accounts: Record<Source, Set<string>> = { roster: new Set(), discovery: new Set() }
   const blank = (handle: string): CampaignCreator => ({
     handle,
     fullName: profiles[handle]?.fullName ?? null,
@@ -245,6 +292,10 @@ export function campaignRollup(
     items: 0, judged: 0, imagesSeen: 0, withStelz: 0, near: 0, unanalysed: 0,
     offContainer: 0, missedByDeploy: 0,
     bySurface: blankSurfaces(),
+    bySource: {
+      roster: { items: 0, judged: 0, withStelz: 0, near: 0, accounts: 0, tiktokViews: 0 },
+      discovery: { items: 0, judged: 0, withStelz: 0, near: 0, accounts: 0, tiktokViews: 0 },
+    },
     tiktokViews: 0, pollVotes: 0, postLikes: 0,
   }
 
@@ -266,14 +317,20 @@ export function campaignRollup(
 
   for (const r of rows) {
     const h = (r.creatorHandle || '').toLowerCase()
-    if (!h) continue
-    const c = byCreator.get(h) ?? blank(h)
-    byCreator.set(h, c)
-    c.silent = false
-    c.items += 1
-    if (isStelzStory(r.verdict)) c.withStelz += 1
-    if (r.verdict === 'near') c.near += 1
-    bump(c.bySurface[r.surface], r)
+    // The creator table answers "who on the roster delivered what", and
+    // `delivered` / `silent` are contract numbers. A stranger found by hashtag
+    // is not a roster member who delivered — adding them here would list
+    // dozens of accounts nobody booked and quietly report 60/28 delivered.
+    // Discovery accounts are summarised on bySource.discovery.accounts instead.
+    if (h && r.source !== 'discovery') {
+      const c = byCreator.get(h) ?? blank(h)
+      byCreator.set(h, c)
+      c.silent = false
+      c.items += 1
+      if (isStelzStory(r.verdict)) c.withStelz += 1
+      if (r.verdict === 'near') c.near += 1
+      bump(c.bySurface[r.surface], r)
+    }
     bump(out.bySurface[r.surface], r)
 
     out.items += 1
@@ -284,6 +341,15 @@ export function campaignRollup(
     if (r.verdict === 'near') out.near += 1
     if (r.placement && isStelzStory(r.verdict)) out.offContainer += 1
     if (r.missedByDeploy) out.missedByDeploy += 1
+
+    const src = out.bySource[r.source]
+    src.items += 1
+    if (r.verdict === 'unanalysed') { /* not judged; counted in items only */ }
+    else src.judged += 1
+    if (isStelzStory(r.verdict)) src.withStelz += 1
+    if (r.verdict === 'near') src.near += 1
+    if (r.surface === 'tiktok') src.tiktokViews += r.views ?? 0
+    accounts[r.source].add((r.platformHandle || r.creatorHandle || '').toLowerCase())
 
     // Kept in three separate fields rather than one "reach". Nothing in this
     // file adds them together, and nothing downstream should either.
@@ -296,6 +362,8 @@ export function campaignRollup(
     if (c.silent) out.silent += 1
     else out.delivered += 1
   }
+  out.bySource.roster.accounts = accounts.roster.size
+  out.bySource.discovery.accounts = accounts.discovery.size
 
   out.creators = [...byCreator.values()].sort(
     (a, b) => b.withStelz - a.withStelz || b.items - a.items || a.handle.localeCompare(b.handle),

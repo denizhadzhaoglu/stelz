@@ -38,8 +38,14 @@ function storyPreview() {
     '/preview-campaign.json': path.join(tmp, 'preview-campaign.json'),
     '/preview-campaign-detections.json': path.join(tmp, 'preview-campaign-detections.json'),
   }
-  // Only these three directories can be read from, by name.
-  const ARCHIVES = new Set(['stories-archive', 'ig-posts-archive', 'tiktok-archive'])
+  // Only these directories can be read from, by name. An allow-list rather
+  // than a prefix check: this middleware turns a URL segment into a filesystem
+  // path, and the whole point is that no segment outside this set can ever
+  // become one.
+  const ARCHIVES = new Set([
+    'stories-archive', 'ig-posts-archive', 'tiktok-archive',
+    'lowlands-discovery-archive',
+  ])
 
   function send(res: any, file: string, ext: string) {
     if (!TYPES[ext] || !fs.existsSync(file)) {

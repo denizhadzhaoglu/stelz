@@ -103,3 +103,42 @@ describe.skipIf(!present)('the generated campaign fixture', () => {
     }
   })
 })
+
+describe.skipIf(!present)('the roster / discovery split in the real fixture', () => {
+  const items = present ? read<CampaignItem>(ITEMS) : []
+  const dets = present ? read<DetectionRow>(DETS) : []
+  const rows = joinCampaign(items, dets)
+  const rollup = campaignRollup(rows)
+
+  it('labels every row as one or the other', () => {
+    for (const r of rows) {
+      expect(['roster', 'discovery'], `${r.itemId} has source ${r.source}`)
+        .toContain(r.source)
+    }
+  })
+
+  it('never counts the same post as both paid and organic', () => {
+    // 73_lowlands_discovery.py drops anything a roster handle posted, whichever
+    // hashtag surfaced it. If that check breaks, bought content starts being
+    // reported as organic pickup — the single most flattering error this page
+    // could make.
+    const rosterAccounts = new Set(
+      rows.filter((r) => r.source === 'roster')
+        .map((r) => (r.platformHandle ?? r.creatorHandle).toLowerCase()))
+    for (const r of rows.filter((r) => r.source === 'discovery')) {
+      const acct = (r.platformHandle ?? r.creatorHandle).toLowerCase()
+      expect(rosterAccounts.has(acct), `${acct} is on the roster and in discovery`).toBe(false)
+    }
+  })
+
+  it('gives every discovery row the hashtag that found it', () => {
+    const disc = rows.filter((r) => r.source === 'discovery')
+    if (disc.length === 0) return
+    expect(disc.every((r) => (r.foundVia ?? '').length > 0)).toBe(true)
+  })
+
+  it('keeps the two view counts separate and adding up', () => {
+    expect(rollup.bySource.roster.tiktokViews + rollup.bySource.discovery.tiktokViews)
+      .toBe(rollup.tiktokViews)
+  })
+})

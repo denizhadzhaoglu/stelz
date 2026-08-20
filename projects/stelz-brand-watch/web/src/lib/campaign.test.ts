@@ -250,3 +250,88 @@ describe('the gap between this page and the deployed backend', () => {
     expect(campaignRollup(rows).missedByDeploy).toBe(0)
   })
 })
+
+describe('roster content and loose content are never one number', () => {
+  // The client asked for this split by name. Roster content answers "did the
+  // people we booked deliver" — a contract question, where silence is the
+  // finding. Discovery content answers "is the can showing up on its own" — a
+  // marketing question, where silence means nothing and one sighting means a
+  // lot. A total containing both counts strangers as deliverables.
+  const rows = () => joinCampaign([
+    item({ itemId: 'r1', creatorHandle: 'lize', platformHandle: 'lize', surface: 'tiktok', platform: 'tiktok', views: 10_000, source: 'roster' }),
+    item({ itemId: 'd1', creatorHandle: 'vreemde', platformHandle: 'vreemde', surface: 'tiktok', platform: 'tiktok', views: 500, source: 'discovery', foundVia: 'lowlands' }),
+    item({ itemId: 'd2', creatorHandle: 'vreemde', platformHandle: 'vreemde', surface: 'tiktok', platform: 'tiktok', views: 700, source: 'discovery', foundVia: 'stelz' }),
+  ], [
+    det({ post_id: 'r1' }),
+    det({ post_id: 'd1' }),
+    det({ post_id: 'd2', detected: false }),
+  ])
+
+  it('keeps the two sets apart', () => {
+    const r = campaignRollup(rows())
+    expect(r.bySource.roster.withStelz).toBe(1)
+    expect(r.bySource.discovery.withStelz).toBe(1)
+    expect(r.bySource.roster.items).toBe(1)
+    expect(r.bySource.discovery.items).toBe(2)
+  })
+
+  it('never lets paid views and organic views share a field', () => {
+    const r = campaignRollup(rows())
+    expect(r.bySource.roster.tiktokViews).toBe(10_000)
+    expect(r.bySource.discovery.tiktokViews).toBe(1_200)
+    // The page-level figure still exists, but the split must not be recoverable
+    // only by subtraction — both halves are named.
+    expect(r.bySource.roster.tiktokViews + r.bySource.discovery.tiktokViews)
+      .toBe(r.tiktokViews)
+  })
+
+  it('counts distinct accounts, not posts', () => {
+    // Nine sightings from one enthusiast and nine from nine strangers are
+    // completely different findings.
+    expect(campaignRollup(rows()).bySource.discovery.accounts).toBe(1)
+  })
+
+  it('treats an item with no source as roster', () => {
+    // Every archive that predates discovery is roster content. Guessing
+    // 'discovery' would invent organic reach out of paid deliverables.
+    const r = joinCampaign([item({ itemId: 'x', creatorHandle: 'lize' })], [])
+    expect(r[0].source).toBe('roster')
+  })
+
+  it('carries the hashtag that found it', () => {
+    const byId = Object.fromEntries(rows().map((r) => [r.itemId, r]))
+    expect(byId.d1.foundVia).toBe('lowlands')
+    expect(byId.r1.foundVia).toBeUndefined()
+  })
+})
+
+describe('the creator table stays a roster table', () => {
+  // "Wie leverde er niets" is a contract question about 28 booked people. A
+  // hashtag harvest adds dozens of strangers, and letting them into this table
+  // would report 60 of 28 delivered — a number that is not only wrong but
+  // wrong in the flattering direction.
+  const rows = joinCampaign([
+    item({ itemId: 'r1', creatorHandle: 'lize', surface: 'post' }),
+    item({ itemId: 'd1', creatorHandle: 'vreemde', surface: 'tiktok', platform: 'tiktok', source: 'discovery' }),
+  ], [det({ post_id: 'r1' }), det({ post_id: 'd1' })])
+
+  it('lists only roster creators', () => {
+    const r = campaignRollup(rows, {}, ['lize', 'daan'])
+    expect(r.creators.map((c) => c.handle).sort()).toEqual(['daan', 'lize'])
+  })
+
+  it('does not let a stranger count as a delivery', () => {
+    const r = campaignRollup(rows, {}, ['lize', 'daan'])
+    expect(r.delivered).toBe(1)
+    expect(r.silent).toBe(1)
+    expect(r.rosterSize).toBe(2)
+  })
+
+  it('still counts discovery content in the page totals', () => {
+    // Excluded from the creator table, NOT from the page. The sighting is real.
+    const r = campaignRollup(rows, {}, ['lize', 'daan'])
+    expect(r.items).toBe(2)
+    expect(r.withStelz).toBe(2)
+    expect(r.bySurface.tiktok.items).toBe(1)
+  })
+})

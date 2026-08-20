@@ -18,8 +18,8 @@ import { MediaTile } from '../components/MediaTile'
 import { StoryDetail } from '../components/StoryDetail'
 import {
   joinCampaign, campaignRollup, stelzShare, metricFor,
-  SURFACE_LABEL, SURFACE_METRIC, SURFACES,
-  type CampaignRow, type Surface, type CampaignItem,
+  SURFACE_LABEL, SURFACE_METRIC, SURFACES, SOURCE_LABEL,
+  type CampaignRow, type Surface, type CampaignItem, type Source,
 } from '../lib/campaign'
 import { VERDICT_LABEL, isStelzStory, type StoryVerdict } from '../lib/storyStats'
 import { fbFetchCreatorProfiles, type CreatorProfile } from '../lib/firestore'
@@ -33,6 +33,13 @@ import { useCampaignPreview, useCampaignDetectionsPreview } from '../lib/devPrev
 
 type Filter = 'all' | 'stelz' | 'near' | 'none' | 'pending'
 type Sort = 'recent' | 'stelz'
+type SourceTab = 'all' | Source
+
+const SOURCE_TABS: { id: SourceTab; label: string; sub: string }[] = [
+  { id: 'all', label: 'Alles', sub: 'roster en los gevonden' },
+  { id: 'roster', label: 'Roster', sub: 'de creators die Stëlz betaalt' },
+  { id: 'discovery', label: 'Los gevonden', sub: 'iedereen daarbuiten' },
+]
 
 // Newest first is the default because this is a LIVE campaign: the thing worth
 // seeing on opening the page is what went up in the last few hours, not the
@@ -76,6 +83,7 @@ export default function Campaign() {
   const creator = params.get('c')
   const surface = params.get('s') as Surface | null
   const sort = (params.get('sort') as Sort) || 'recent'
+  const sourceTab = (params.get('bron') as SourceTab) || 'all'
 
   const [profiles, setProfiles] = useState<Record<string, CreatorProfile>>({})
   const [projects, setProjects] = useState<Project[]>([])
@@ -128,10 +136,45 @@ export default function Campaign() {
                        previewDetections ?? ([] as DetectionRow[])),
     [previewItems, previewDetections],
   )
+  // TWO ROLLUPS, on purpose. `rollup` is the whole page and is what the source
+  // tabs count themselves from — a tab that reported only its own half could
+  // never show you the other. `scoped` follows the selected tab and is what the
+  // KPI row reads, so clicking "Los gevonden" changes the numbers above the
+  // grid instead of leaving them at a page total that contradicts what is
+  // shown underneath.
   const rollup = useMemo(() => campaignRollup(rows, profiles, roster), [rows, profiles, roster])
+  const scoped = useMemo(() => {
+    if (sourceTab === 'all') return rollup
+    // Roster stays roster-scoped so "wie leverde er niets" keeps its meaning;
+    // discovery has no roster, and passing one would invent 28 silent members
+    // for a set nobody booked.
+    return campaignRollup(rows.filter((r) => r.source === sourceTab), profiles,
+                          sourceTab === 'roster' ? roster : [])
+  }, [rows, profiles, roster, rollup, sourceTab])
+
+  // WHY DISCOVERY CONTENT IS FILTERED BEFORE ANYTHING ELSE SEES IT.
+  //
+  // A roster item with no Stëlz in it is a finding: someone we are paying
+  // posted, and the can was not there. A discovery item with no Stëlz is not a
+  // finding at all — it is a stranger's festival video that a hashtag happened
+  // to return, and there are hundreds of them. Showing those would bury the
+  // handful that matter and make the page look like a firehose.
+  //
+  // So they never reach the grid. The COUNT does reach the screen, in the
+  // discovery panel: "4 van 287 bekeken" is the honest form, and dropping the
+  // denominator along with the tiles would turn a 1.4% hit rate into an
+  // unqualified "4 sightings".
+  const discoveryJudged = useMemo(
+    () => rows.filter((r) => r.source === 'discovery' && r.verdict !== 'unanalysed').length,
+    [rows])
+  const worthShowing = useMemo(
+    () => rows.filter((r) => r.source === 'roster'
+      || isStelzStory(r.verdict) || r.verdict === 'near'),
+    [rows])
 
   const shown = useMemo(() => {
-    let out = rows
+    let out = worthShowing
+    if (sourceTab !== 'all') out = out.filter((r) => r.source === sourceTab)
     if (creator) out = out.filter((r) => r.creatorHandle === creator)
     if (surface) out = out.filter((r) => r.surface === surface)
     if (filter === 'stelz') out = out.filter((r) => isStelzStory(r.verdict))
@@ -146,7 +189,7 @@ export default function Campaign() {
     const rank = (r: CampaignRow) => (isStelzStory(r.verdict) ? 0 : r.verdict === 'near' ? 1 : 2)
     return [...out].sort((a, b) =>
       sort === 'stelz' ? (rank(a) - rank(b)) || byRecent(a, b) : byRecent(a, b))
-  }, [rows, filter, creator, surface, sort])
+  }, [worthShowing, filter, creator, surface, sort, sourceTab])
 
   const setParam = (k: string, v: string | null) => {
     const next = new URLSearchParams(params)
@@ -155,7 +198,7 @@ export default function Campaign() {
     setParams(next, { replace: true })
   }
 
-  const share = stelzShare(rollup)
+  const share = stelzShare(scoped)
 
   return (
     <PageShell
@@ -178,43 +221,113 @@ export default function Campaign() {
       ) : (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
-            <Kpi
-              label="Creators geleverd"
-              value={rollup.rosterSize > 0
-                ? `${fmtNum(rollup.delivered)}/${fmtNum(rollup.rosterSize)}`
-                : fmtNum(rollup.delivered)}
-              sub={rollup.silent > 0
-                ? `${rollup.silent} plaatste${rollup.silent === 1 ? '' : 'n'} niets`
-                : 'iedereen plaatste iets'}
-            />
+            {/* Discovery has no roster, so "geleverd" is meaningless there —
+                nobody agreed to post. The honest figure for that half is how
+                many DIFFERENT accounts it came from: one enthusiast posting
+                nine times and nine strangers posting once are the same total
+                and completely different news. */}
+            {sourceTab === 'discovery' ? (
+              <Kpi
+                label="Accounts"
+                value={fmtNum(rollup.bySource.discovery.accounts)}
+                sub="buiten de roster, niets afgesproken"
+              />
+            ) : (
+              <Kpi
+                label="Creators geleverd"
+                value={scoped.rosterSize > 0
+                  ? `${fmtNum(scoped.delivered)}/${fmtNum(scoped.rosterSize)}`
+                  : fmtNum(scoped.delivered)}
+                sub={scoped.silent > 0
+                  ? `${scoped.silent} plaatste${scoped.silent === 1 ? '' : 'n'} niets`
+                  : 'iedereen plaatste iets'}
+              />
+            )}
             <Kpi
               label="Geanalyseerd"
-              value={`${fmtNum(rollup.judged)}/${fmtNum(rollup.items)}`}
-              sub={`${fmtNum(rollup.imagesSeen)} beelden bekeken`}
+              value={`${fmtNum(scoped.judged)}/${fmtNum(scoped.items)}`}
+              sub={`${fmtNum(scoped.imagesSeen)} beelden bekeken`}
             />
             <Kpi
               label="Stëlz zichtbaar"
               value={share == null ? '—' : `${Math.round(share)}%`}
               sub={share == null ? 'nog niets beoordeeld'
-                : rollup.offContainer > 0
-                  ? `${fmtNum(rollup.withStelz)} van ${fmtNum(rollup.judged)} · ${rollup.offContainer}× niet op een blikje`
-                  : `${fmtNum(rollup.withStelz)} van ${fmtNum(rollup.judged)}`}
+                : scoped.offContainer > 0
+                  ? `${fmtNum(scoped.withStelz)} van ${fmtNum(scoped.judged)} · ${scoped.offContainer}× niet op een blikje`
+                  : `${fmtNum(scoped.withStelz)} van ${fmtNum(scoped.judged)}`}
             />
             <Kpi
               label="Mogelijk Stëlz"
-              value={fmtNum(rollup.near)}
-              sub={rollup.near > 0 ? 'afgekeurd bij tweede controle' : 'geen twijfelgevallen'}
+              value={fmtNum(scoped.near)}
+              sub={scoped.near > 0 ? 'afgekeurd bij tweede controle' : 'geen twijfelgevallen'}
             />
             {/* Named for what it is. This is the only published viewing figure
                 in the whole product, and it belongs to ONE surface. */}
             <Kpi
               label="TikTok-weergaven"
-              value={rollup.tiktokViews > 0 ? compactNum(rollup.tiktokViews) : '—'}
-              sub={rollup.bySurface.tiktok.items > 0
-                ? `over ${fmtNum(rollup.bySurface.tiktok.items)} video's`
+              value={scoped.tiktokViews > 0 ? compactNum(scoped.tiktokViews) : '—'}
+              sub={scoped.bySurface.tiktok.items > 0
+                ? `over ${fmtNum(scoped.bySurface.tiktok.items)} video's`
                 : 'geen TikToks'}
             />
           </div>
+
+          {/* THE SPLIT THE BRAND ACTUALLY NEEDS. Roster content answers "did the
+              people we booked deliver"; discovery content answers "is the can
+              showing up on its own". Same festival, same week, entirely
+              different things to have bought — so they are two tabs and never
+              one total. */}
+          <div className="flex flex-wrap gap-2 mb-4">
+            {SOURCE_TABS.map((t) => {
+              const st = t.id === 'all' ? null : rollup.bySource[t.id]
+              const active = sourceTab === t.id
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setParam('bron', t.id === 'all' ? null : t.id)}
+                  className={`text-left px-3.5 py-2 border transition-colors ${
+                    active
+                      ? 'border-[var(--color-ink)] bg-[var(--color-ink)] text-white'
+                      : 'border-[var(--color-border)] hover:border-[var(--color-ink)]'
+                  }`}
+                >
+                  <span className="block text-[12px]">
+                    {t.label}
+                    {st && <span className="tabular-nums"> · {fmtNum(st.withStelz)}× Stëlz</span>}
+                  </span>
+                  <span className={`block text-[10px] ${
+                    active ? 'text-white/70' : 'text-[var(--color-ink-subtle)]'
+                  }`}>
+                    {st
+                      ? `${fmtNum(st.accounts)} account${st.accounts === 1 ? '' : 's'} · ${t.sub}`
+                      : t.sub}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* The denominator. Discovery tiles without Stëlz are never rendered —
+              a stranger's festival video that a hashtag returned is not a
+              finding — but the number looked at has to stay on screen, or a
+              1% hit rate reads as an unqualified list of sightings. */}
+          {rollup.bySource.discovery.items > 0 && (
+            <Card className="mb-6 px-4 py-3 text-[12px] text-[var(--color-ink-muted)] leading-relaxed border-l-2 border-[var(--color-accent)]">
+              <strong className="font-medium text-[var(--color-ink)]">
+                Los gevonden: {fmtNum(rollup.bySource.discovery.withStelz)} met Stëlz
+                {discoveryJudged > 0 && ` uit ${fmtNum(discoveryJudged)} bekeken video's`}.
+              </strong>{' '}
+              Gevonden via hashtags op TikTok, van accounts die niet op de roster staan — dit is
+              wat er uit zichzelf gebeurde, los van wat er betaald is. Alleen de beelden waar
+              Stëlz daadwerkelijk in staat worden hier getoond; de rest is festivalcontent die
+              een hashtag toevallig opleverde en zegt niets over het merk.
+              {rollup.bySource.discovery.tiktokViews > 0 && (
+                <> Samen {fmtNum(rollup.bySource.discovery.tiktokViews)} weergaven — apart
+                gehouden van de {fmtNum(rollup.bySource.roster.tiktokViews)} van de roster,
+                omdat betaald bereik en organisch bereik niet hetzelfde getal zijn.</>
+              )}
+            </Card>
+          )}
 
           <Card className="mb-6 px-4 py-3 text-[12px] text-[var(--color-ink-muted)] leading-relaxed">
             <strong className="font-medium text-[var(--color-ink)]">Over deze cijfers.</strong>{' '}
@@ -259,9 +372,9 @@ export default function Campaign() {
                 }`}
               >
                 {f.label}
-                {f.id === 'stelz' && rollup.withStelz > 0 && ` · ${rollup.withStelz}`}
-                {f.id === 'near' && rollup.near > 0 && ` · ${rollup.near}`}
-                {f.id === 'pending' && rollup.unanalysed > 0 && ` · ${rollup.unanalysed}`}
+                {f.id === 'stelz' && scoped.withStelz > 0 && ` · ${scoped.withStelz}`}
+                {f.id === 'near' && scoped.near > 0 && ` · ${scoped.near}`}
+                {f.id === 'pending' && scoped.unanalysed > 0 && ` · ${scoped.unanalysed}`}
               </button>
             ))}
             {creator && (
@@ -289,7 +402,7 @@ export default function Campaign() {
                 >{o.label}</button>
               ))}
               <span className="text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
-                {fmtNum(shown.length)} van {fmtNum(rollup.items)}
+                {fmtNum(shown.length)} van {fmtNum(scoped.items)}
               </span>
             </span>
           </div>
@@ -317,14 +430,14 @@ export default function Campaign() {
               <SurfaceCard
                 key={s}
                 surface={s}
-                stats={rollup.bySurface[s]}
+                stats={scoped.bySurface[s]}
                 active={surface === s}
                 onPick={() => setParam('s', surface === s ? null : s)}
               />
             ))}
           </div>
 
-          <CreatorTable rollup={rollup} onPick={(h) => setParam('c', h === creator ? null : h)} />
+          <CreatorTable rollup={scoped} onPick={(h) => setParam('c', h === creator ? null : h)} />
         </>
       )}
 

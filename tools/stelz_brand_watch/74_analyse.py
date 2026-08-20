@@ -40,6 +40,10 @@ ARCHIVES = {
     "tiktok": (ROOT / ".tmp" / "tiktok-archive", "video_id"),
     "ig-posts": (ROOT / ".tmp" / "ig-posts-archive", "item_id"),
     "stories": (ROOT / ".tmp" / "stories-archive", "story_id"),
+    # Everyone at the festival who is NOT on the roster, found by hashtag
+    # (73_lowlands_discovery.py). Same cascade, separate archive: paid delivery
+    # and organic pickup are different claims and must not share a total.
+    "lowlands": (ROOT / ".tmp" / "lowlands-discovery-archive", "video_id"),
 }
 
 

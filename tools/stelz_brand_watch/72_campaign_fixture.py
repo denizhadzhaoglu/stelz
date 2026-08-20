@@ -36,11 +36,17 @@ TMP = ROOT / ".tmp"
 OUT_ITEMS = TMP / "preview-campaign.json"
 OUT_DETS = TMP / "preview-campaign-detections.json"
 
-# (archive dir, id field, surface, platform)
+# (archive dir, id field, surface, platform, source)
+#
+# `source` is the split the dashboard shows: roster content was posted by
+# someone Stëlz is paying, discovery content by anyone else at the same
+# festival. They answer a contract question and a marketing question
+# respectively, and merging them would count strangers as deliverables.
 SOURCES = [
-    ("stories-archive", "story_id", "story", "instagram"),
-    ("ig-posts-archive", "item_id", "post", "instagram"),
-    ("tiktok-archive", "video_id", "tiktok", "tiktok"),
+    ("stories-archive", "story_id", "story", "instagram", "roster"),
+    ("ig-posts-archive", "item_id", "post", "instagram", "roster"),
+    ("tiktok-archive", "video_id", "tiktok", "tiktok", "roster"),
+    ("lowlands-discovery-archive", "video_id", "tiktok", "tiktok", "discovery"),
 ]
 
 
@@ -103,11 +109,18 @@ def item_id(surface: str, raw_id: str) -> str:
 
 
 def to_item(e: dict, v: dict | None, archive: str, surface: str, platform: str,
-            ids: dict[str, str]) -> dict:
+            ids: dict[str, str], source: str = "roster") -> dict:
     raw_id = str(e.get("story_id") or e.get("item_id") or e.get("video_id"))
     is_video = bool(e.get("video_file")) or e.get("media_type") == "video"
+    # A discovery row may be an Instagram post that arrived through a hashtag
+    # search; the row says so and overrides the archive's default.
+    platform = e.get("platform") or platform
+    if source == "discovery" and platform == "instagram":
+        surface = "post"
     return {
         "itemId": item_id(surface, raw_id),
+        "source": source,
+        "foundVia": e.get("found_via"),
         "platform": platform,
         "surface": surface,
         # The PERSON, not the account. See identity_map.
@@ -206,22 +219,24 @@ def main() -> int:
     report: list[str] = []
     ids = identity_map()
 
-    for archive, id_field, surface, platform in SOURCES:
+    for archive, id_field, surface, platform, source in SOURCES:
         base = TMP / archive
         index = read_jsonl(base / "index.jsonl", id_field)
         verdicts = read_jsonl(base / "verdicts.jsonl", "item_id")
         hits = near = 0
         for raw_id, e in index.items():
             v = verdicts.get(raw_id)
-            items.append(to_item(e, v, archive, surface, platform, ids))
+            items.append(to_item(e, v, archive, surface, platform, ids, source))
             # Only judged items get a detection row. An absent row is what makes
             # the UI say "nog niet geanalyseerd" instead of inventing a miss.
             if v is not None:
                 dets.append(to_detection(e, v, archive, surface, platform, ids))
                 hits += bool(v.get("detected"))
                 near += bool(v.get("near_miss"))
-        report.append(f"  {surface:<7} {len(index):>4} items · {len(verdicts):>4} judged · "
-                      f"{hits} with Stëlz · {near} near")
+        label = surface if source == "roster" else f"{surface}*"
+        report.append(f"  {label:<8} {len(index):>4} items · {len(verdicts):>4} judged · "
+                      f"{hits} with Stëlz · {near} near"
+                      + ("   (los gevonden)" if source == "discovery" else ""))
 
     if not items:
         print("No archives found under .tmp/ — harvest first "
@@ -238,6 +253,13 @@ def main() -> int:
     print(f"\n  {len(items)} items · {len(dets)} judged · {len(handles)} people "
           f"across {len(accounts)} accounts")
     print(f"  TikTok views: {tt_views:,}  (the only published viewing figure here)")
+    disc = [i for i in items if i.get("source") == "discovery"]
+    if disc:
+        # Distinct accounts, not posts. Nine sightings from one enthusiast and
+        # nine from nine strangers are very different findings.
+        print(f"  {len(disc)} los gevonden, van "
+              f"{len({i['platformHandle'] for i in disc if i['platformHandle']})} accounts "
+              f"buiten de roster")
     print(f"  wrote {OUT_ITEMS.relative_to(ROOT)}")
     print(f"        {OUT_DETS.relative_to(ROOT)}")
     print("\n  open http://localhost:5180/campagne?preview=campaign")
