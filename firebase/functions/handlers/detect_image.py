@@ -169,10 +169,35 @@ def run(brand_id: str, post_id: str, image_url: str, frame_idx: int | None = Non
     cached = cache.get_cached_detection(brand_id, image_hash, "cascade", prompt_version=11)
     if cached:
         result = cached
+        reverified = False
+        # Cached hits from before the verifier existed never had a second look.
+        # Without this the verifier only ever improved images the pipeline had
+        # not seen yet, and the operator's actual feed — all of it cached —
+        # stayed exactly as it was. Re-verify once, write it back, done.
+        #
+        # Skipped under budget pressure: this is an improvement pass, not part
+        # of detecting anything, so it is the first thing that should stop when
+        # the day's spend is running out. Detection itself keeps going.
+        if verifier.needs_reverify(result) and usage.degrade_level(brand_id) < usage.DEGRADE_TRIM:
+            ref_bytes = refs.load_references(brand_id)
+            verified = _verify_pass(brand_id, brand_name, image_bytes, ref_bytes, result)
+            if verified.get("verify_verdict") not in (None, "error"):
+                result = verified
+                reverified = True
+                cache.save_cached_detection(
+                    brand_id, image_hash, "cascade", result, prompt_version=11
+                )
         _persist(brand_id, post_id, det_id, base_doc, result, source="cache")
         usage.record(brand_id, detections_written=1, detections_hit=1 if result.get("detected") else 0)
-        _log_attempt(brand_id, post_id, image_url, "wrote", "cache_hit", {"detected": bool(result.get("detected"))})
-        return {"status": "ok", "source": "cache", "detected": bool(result.get("detected"))}
+        _log_attempt(brand_id, post_id, image_url, "wrote", "cache_hit", {
+            "detected": bool(result.get("detected")),
+            "reverified": reverified,
+            "verifyVerdict": result.get("verify_verdict"),
+        })
+        return {
+            "status": "ok", "source": "cache",
+            "detected": bool(result.get("detected")), "reverified": reverified,
+        }
 
     # ── 3. Gemini Flash full detection ────────────────────────────────
     # Standalone OCR stays removed — substring matching produced false hits

@@ -69,59 +69,8 @@ describe('formatFollowers', () => {
 })
 
 // ── Top sounds ───────────────────────────────────────────────────────
-
-type Music = { musicId?: string | null; title?: string | null; artist?: string | null }
-
-/** Mirrors the guard + key in DashboardSection's sound tally. */
-function tallySounds(tracks: Music[]): { label: string; count: number }[] {
-  const acc = new Map<string, { label: string; count: number }>()
-  for (const m of tracks) {
-    if (!m.musicId && !(m.title || '').trim()) continue
-    const key = m.musicId || `${m.title || ''}|${m.artist || ''}`
-    if (!key.trim()) continue
-    const cur = acc.get(key) ?? { label: m.title || 'Original sound', count: 0 }
-    cur.count += 1
-    acc.set(key, cur)
-  }
-  return [...acc.values()].sort((a, b) => b.count - a.count)
-}
-
-describe('top sounds', () => {
-  it('drops tracks with no identity instead of pooling them', () => {
-    // The reported symptom: "Top sound is (untitled) with 306 hits". The old
-    // key for a track with no id, title or artist was the literal string "|",
-    // which is not blank — so the skip never fired and every unreadable track
-    // in the data set landed in one bucket that then topped the chart.
-    const out = tallySounds([
-      { musicId: null, title: null, artist: null },
-      { musicId: null, title: '', artist: '' },
-      { musicId: null, title: '   ', artist: null },
-      { musicId: 'm1', title: 'Real Song', artist: 'Someone' },
-    ])
-    expect(out).toHaveLength(1)
-    expect(out[0].label).toBe('Real Song')
-  })
-
-  it('keeps a track that has an id but no title, and does not merge two of them', () => {
-    // These are identifiable and genuinely distinct — TikTok original audio.
-    const out = tallySounds([
-      { musicId: 'a', title: null },
-      { musicId: 'a', title: null },
-      { musicId: 'b', title: null },
-    ])
-    expect(out.map((s) => s.count)).toEqual([2, 1])
-    expect(out.every((s) => s.label === 'Original sound')).toBe(true)
-  })
-
-  it('groups by title when there is no id', () => {
-    const out = tallySounds([
-      { title: 'Zomer', artist: 'X' },
-      { title: 'Zomer', artist: 'X' },
-    ])
-    expect(out).toEqual([{ label: 'Zomer', count: 2 }])
-  })
-
-  it('returns nothing when no track is identifiable', () => {
-    expect(tallySounds([{ musicId: null, title: null }])).toEqual([])
-  })
-})
+// The sound tally used to live inline in DashboardSection and was mirrored
+// here for testability. It moved to lib/sounds.ts (one shared key for the
+// card, the community profiles and the /sounds pages) and is tested directly
+// in sounds.test.ts — including the "(untitled)" pooling guard and the
+// id-without-title distinctness cases that used to live in this file.

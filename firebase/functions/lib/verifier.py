@@ -139,6 +139,44 @@ def should_verify(result: dict[str, Any]) -> bool:
     return float(result.get("confidence") or 0) < 0.85
 
 
+def needs_reverify(result: dict[str, Any]) -> bool:
+    """Should a CACHED detection be sent through the verifier?
+
+    The imageHashCache short-circuits detection entirely: on a hit,
+    detect_image.run persists the stored verdict and returns before the verify
+    pass. That is correct for the Gemini call — the answer would be identical
+    and it would be re-billed — but it meant the verifier only ever touched
+    images the pipeline had never seen. The existing back catalogue, which is
+    what the operator actually looks at in the feed, kept its pre-verifier
+    verdicts forever.
+
+    So a cache hit is re-verified once, when it is a demoted hit that carries no
+    verdict at the current version. It is then written back to the cache and
+    never re-verified again.
+
+    Deliberately lazy rather than a backfill job: work happens only on images a
+    scan actually re-encounters, so the cost is bounded by scan volume instead of
+    by catalogue size, and no migration has to be scheduled or supervised.
+
+    Why not just bump promptVersion to force this? Because the cache holds ONE
+    slot per image hash and promptVersion is a stored field, not part of the key
+    — bumping it invalidates every entry and re-bills full detection on the whole
+    corpus. This re-runs only the cheap second pass, only where it is missing.
+    """
+    if not should_verify(result):
+        return False
+    # Coerce defensively. This runs inside the detection path on every cache
+    # hit, and the value comes back out of Firestore where a bad write or an
+    # older schema could leave anything at all. A crash here would take down
+    # detection for that image, so an unreadable version counts as "not
+    # verified" and the image simply gets a second look.
+    try:
+        seen = int(result.get("verify_version") or 0)
+    except (TypeError, ValueError):
+        seen = 0
+    return seen < VERIFY_VERSION
+
+
 def needs_crop(box: list | None, threshold: float = CROP_AREA_THRESHOLD) -> bool:
     """Is the located container small enough that a crop would add real detail?"""
     if not box or len(box) != 4:

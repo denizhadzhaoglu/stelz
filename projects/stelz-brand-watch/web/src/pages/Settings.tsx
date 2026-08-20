@@ -506,7 +506,11 @@ function HashtagPoolSection() {
     setBusy(true); setMsg(null); setErr(null)
     try {
       await fbUpdateBrandSettings({}, {
-        hashtagPool: next.map(({ tag, platform, priority, active }) => ({ tag, platform, priority, active })),
+        // family/maxResults/kind round-trip as-is. Nulls are safe: the server
+        // (hashtags.pool_patch_docs) only writes fields that are non-null, so
+        // legacy seeded tags are never restamped by a save.
+        hashtagPool: next.map(({ tag, platform, priority, active, family, maxResults, kind }) =>
+          ({ tag, platform, priority, active, family, maxResults, kind })),
         replaceHashtags: replace,
       })
       await refresh()
@@ -519,12 +523,34 @@ function HashtagPoolSection() {
   async function addTag() {
     const t = draft.trim().toLowerCase().replace(/^#/, '')
     if (!t) return
-    const next: HashtagPoolEntry[] = [...items, { id: `${draftPlatform}_${t}`, tag: t, platform: draftPlatform, priority: 5, active: true }]
+    // family "custom" + a 200-results cap, matching the server defaults in
+    // hashtags.pool_patch_docs. The cap is the feature: an uncapped tag
+    // scrapes at the full per-scan depth (500 results ≈ $1.15 per tag per
+    // scan). "custom" also guarantees the tag a slot in every scan via the
+    // family floor in select_tags — client terms are never starved out.
+    const next: HashtagPoolEntry[] = [...items, {
+      id: `${draftPlatform}_${t}`, tag: t, platform: draftPlatform,
+      priority: 5, active: true, family: 'custom', maxResults: 200, kind: 'hashtag',
+    }]
     setDraft('')
     await save(next)
   }
 
   const activeCount = items.filter((i) => i.active).length
+
+  // Cost preview — an UPPER BOUND, stated as one. Apify bills per result
+  // (~$2.30/1k on Instagram; the TikTok actor is free), each tag scrapes at
+  // most min(500, its cap) results, and a scan takes at most 50 tags. The
+  // server-side selection (hashtags.select_tags) may pick fewer or different
+  // tags, so this previews the ceiling, not the invoice.
+  const scanCeiling = (() => {
+    const active = items.filter((i) => i.active)
+    const perTag = (h: HashtagPoolEntry) => Math.min(500, h.maxResults ?? 500)
+    const ig = active.filter((h) => h.platform === 'instagram')
+      .sort((a, b) => perTag(b) - perTag(a)).slice(0, 50)
+    const results = ig.reduce((s, h) => s + perTag(h), 0)
+    return { results, usd: (results * 2.3) / 1000 }
+  })()
   const VISIBLE = 40
   const q = filter.trim().toLowerCase().replace(/^#/, '')
   const filtered = items
@@ -539,8 +565,13 @@ function HashtagPoolSection() {
       title="Hashtags we watch"
       hint="We scan Instagram and TikTok for posts using these tags. Higher-priority tags are scanned first."
       action={
-        <div className="text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
-          {activeCount} active · {items.length} total
+        <div className="text-[11px] text-[var(--color-ink-subtle)] tabular-nums text-right">
+          <div>{activeCount} active · {items.length} total</div>
+          {scanCeiling.results > 0 && (
+            <div title="Upper bound: Apify bills per result (~$2.30/1k on Instagram). A scan takes at most 50 tags at at most their cap; the actual selection can be smaller.">
+              next scan ≤ {scanCeiling.results.toLocaleString()} results (~${scanCeiling.usd.toFixed(2)})
+            </div>
+          )}
         </div>
       }
     >
@@ -603,7 +634,7 @@ function HashtagPoolSection() {
         ) : (
           <ul className="divide-y divide-[var(--color-border)]">
             {shown.map((h) => (
-              <li key={h.id} className="py-3 grid grid-cols-[24px_1fr_88px_120px_60px] gap-3 items-center text-[13px]">
+              <li key={h.id} className="py-3 grid grid-cols-[24px_1fr_88px_84px_120px_110px_60px] gap-3 items-center text-[13px]">
                 <input
                   type="checkbox"
                   checked={h.active}
@@ -615,6 +646,14 @@ function HashtagPoolSection() {
                   #{h.tag}
                 </span>
                 <Badge tone="muted">{h.platform}</Badge>
+                {/* Family drives budget + the guaranteed slot in select_tags.
+                    Legacy docs without one show a dash rather than a made-up
+                    value — the server only stamps families on NEW tags. */}
+                {h.family ? (
+                  <Badge tone={h.family === 'custom' ? 'accent' : 'neutral'}>{h.family.replace(/_/g, ' ')}</Badge>
+                ) : (
+                  <span className="text-[11px] text-[var(--color-ink-subtle)]">—</span>
+                )}
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-subtle)]">Priority</span>
                   <input
@@ -627,6 +666,11 @@ function HashtagPoolSection() {
                     className="w-11 border border-[var(--color-border)] px-2 h-7 text-[12px] tabular-nums text-center disabled:opacity-40"
                   />
                 </div>
+                <CapInput
+                  value={h.maxResults}
+                  disabled={!canWrite || busy}
+                  onCommit={(v) => save(items.map((x) => x.id === h.id ? { ...x, maxResults: v } : x))}
+                />
                 {canWrite ? (
                   <button
                     onClick={() => save(items.filter((x) => x.id !== h.id), true)}
@@ -655,6 +699,48 @@ function HashtagPoolSection() {
     </SectionShell>
   )
 }
+
+/** Per-tag result cap editor.
+ *
+ * Draft state committed on blur/Enter — NOT a save per keystroke. The naive
+ * version fired a full pool save on every digit: typing "150" saved "1" (which
+ * the server clamps to 10), the busy flag then disabled the input mid-word,
+ * and the refresh overwrote what the user was still typing. Review-confirmed.
+ */
+function CapInput({ value, disabled, onCommit }: {
+  value: number | null
+  disabled: boolean
+  onCommit: (v: number | null) => void
+}) {
+  const [draft, setDraft] = useState<string>(value == null ? '' : String(value))
+  // Re-sync when the saved value changes underneath (another row's save
+  // triggered a refresh).
+  useEffect(() => { setDraft(value == null ? '' : String(value)) }, [value])
+  const commit = () => {
+    const v = parseInt(draft)
+    const next = Number.isFinite(v) ? v : null
+    if (next !== value) onCommit(next)
+  }
+  return (
+    <div className="flex items-center gap-2" title="Maximum Apify results per scan for this tag — this is what caps its cost. Empty = scans at the full per-scan depth (500).">
+      <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-subtle)]">Cap</span>
+      <input
+        type="number"
+        min={10}
+        max={1000}
+        step={10}
+        value={draft}
+        placeholder="500"
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        className="w-16 border border-[var(--color-border)] px-2 h-7 text-[12px] tabular-nums text-center disabled:opacity-40"
+      />
+    </div>
+  )
+}
+
 
 // ─── 4. Team (who can change things) ─────────────────────────────────
 

@@ -121,3 +121,78 @@ class TestProjectedResults(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPoolPatchDocs(unittest.TestCase):
+    """The two-regime rule for hashtag-pool saves.
+
+    The dangerous direction: the Settings UI round-trips the ENTIRE pool on
+    every save. If defaults applied to existing tags, one click of Save would
+    restamp all ~117 seeded tags as family="custom" — quietly destroying the
+    taxonomy that select_tags budgets by, with no error anywhere.
+    """
+
+    def test_new_tag_gets_the_cost_cap_by_default(self):
+        # The cap IS the feature: an uncapped UI tag scrapes 500 results
+        # (~$1.15) per scan.
+        [(doc_id, doc)] = hashtags.pool_patch_docs(
+            [{"tag": "zomerfestival"}], existing_ids=set())
+        self.assertEqual(doc_id, "instagram_zomerfestival")
+        self.assertEqual(doc["family"], "custom")
+        self.assertEqual(doc["maxResults"], 200)
+        self.assertEqual(doc["kind"], "hashtag")
+
+    def test_existing_tag_is_never_restamped(self):
+        # Round-tripped seeded tag without explicit family/cap fields: the
+        # write must not contain them at all (merge=True leaves them be).
+        [(_, doc)] = hashtags.pool_patch_docs(
+            [{"tag": "stelz", "priority": 10}],
+            existing_ids={"instagram_stelz"})
+        self.assertNotIn("family", doc)
+        self.assertNotIn("maxResults", doc)
+        self.assertNotIn("kind", doc)
+
+    def test_explicit_fields_do_update_an_existing_tag(self):
+        [(_, doc)] = hashtags.pool_patch_docs(
+            [{"tag": "stelz", "maxResults": 300, "family": "brand_core"}],
+            existing_ids={"instagram_stelz"})
+        self.assertEqual(doc["maxResults"], 300)
+        self.assertEqual(doc["family"], "brand_core")
+
+    def test_cap_is_clamped_to_sane_bounds(self):
+        [(_, lo)] = hashtags.pool_patch_docs([{"tag": "a1", "maxResults": 1}], set())
+        [(_, hi)] = hashtags.pool_patch_docs([{"tag": "b1", "maxResults": 99999}], set())
+        self.assertEqual(lo["maxResults"], 10)
+        self.assertEqual(hi["maxResults"], 1000)
+
+    def test_garbage_cap_falls_back_to_default(self):
+        [(_, doc)] = hashtags.pool_patch_docs(
+            [{"tag": "x1", "maxResults": "veel"}], set())
+        self.assertEqual(doc["maxResults"], 200)
+
+    def test_invalid_family_is_dropped_not_written(self):
+        [(_, doc)] = hashtags.pool_patch_docs(
+            [{"tag": "x1", "family": "spam_family"}], existing_ids={"instagram_x1"})
+        self.assertNotIn("family", doc)
+
+    def test_invalid_kind_becomes_hashtag(self):
+        [(_, doc)] = hashtags.pool_patch_docs([{"tag": "x1", "kind": "regex"}], set())
+        self.assertEqual(doc["kind"], "hashtag")
+
+    def test_keyword_kind_is_accepted_as_data_prep(self):
+        [(_, doc)] = hashtags.pool_patch_docs([{"tag": "hard seltzer", "kind": "keyword"}], set())
+        self.assertEqual(doc["kind"], "keyword")
+
+    def test_custom_family_survives_select_tags(self):
+        # End-to-end with the real selector: a client-added tag must never be
+        # starved out of a scan by the priority sort — that was the original
+        # lifestyle-tag bug in a new coat.
+        pool = hashtags.stelz_pool("instagram")
+        writes = hashtags.pool_patch_docs([{"tag": "mijneigenterm"}], set())
+        pool = pool + [doc for _, doc in writes]
+        picked = hashtags.select_tags(pool, 50)
+        self.assertIn("mijneigenterm", [d["tag"] for d in picked])
+
+    def test_blank_tag_is_skipped(self):
+        self.assertEqual(hashtags.pool_patch_docs([{"tag": "  "}, {"tag": "#ok"}], set())[0][0],
+                         "instagram_ok")

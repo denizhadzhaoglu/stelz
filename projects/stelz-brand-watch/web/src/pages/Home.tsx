@@ -10,16 +10,18 @@ import { Sparkline, LineChart, BarChart, Donut, StackedDayBars, bucketByDay, typ
 import { DetectionDrawer } from '../components/DetectionDrawer'
 import {
   fetchDetections, fetchTopResonance, fetchCreatorSubcultures, fetchSubcultures,
-  fetchCreatorProfiles,
-  loadState, markSeen, rateDetection, type DetectionRow, type ResonanceRow,
+  fetchCreatorProfiles, fetchProjects,
+  loadState, markSeen, rateDetection,
+  type DetectionRow, type ResonanceRow, type Project,
 } from '../lib/data'
 import { imageUrlFor, parentPostKey, dedupeByPost } from '../lib/types'
 import { withSignal, signalCounts, untaggedShare, isBrandTag } from '../lib/signal'
-import { detectionQuality, splitByQuality } from '../lib/quality'
+import { detectionQuality, splitByQuality, isPrimaryAngle } from '../lib/quality'
 import { sceneBreakdown, subcultureBreakdown, type CreatorSceneMap } from '../lib/scenes'
 import { communityProfiles, oneLineSummary, DAY_NAMES, type CommunityProfile } from '../lib/communities'
 import { detectionsCsv, communitiesCsv, downloadCsv, datedFilename } from '../lib/csv'
 import { verifyDetection, sortByEvidence } from '../lib/verify'
+import { tallySounds, soundHref } from '../lib/sounds'
 import {
   fbBootstrapBrand, fbStepHashtags, fbStepCreators, fbStepSrs, fbStepSentiment,
   fbStepSubcultures, fbStepProfiles,
@@ -432,6 +434,7 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
   const [trustFilter, setTrustFilter] = useState<'verified' | 'unreviewed' | 'fp' | null>('verified')
   const [platformFilter, setPlatformFilter] = useState<'instagram' | 'tiktok' | null>(null)
   const [typeFilter, setTypeFilter] = useState<'video' | 'image' | null>(null)
+  const [angleFilter, setAngleFilter] = useState<'primary' | 'background' | null>(null)
   // Default 0.70, NOT 0.85 — and that is a correctness fix, not a preference.
   //
   // `confidence` is overwritten by the backend's strictness gate: any can that
@@ -462,6 +465,8 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
       if (platformFilter && d.platform !== platformFilter) return false
       if (typeFilter === 'video' && d.frame_idx == null) return false
       if (typeFilter === 'image' && d.frame_idx != null) return false
+      if (angleFilter === 'primary' && !isPrimaryAngle(d)) return false
+      if (angleFilter === 'background' && isPrimaryAngle(d)) return false
       if ((d.confidence ?? 0) < minConfidence) return false
       if (search) {
         const q = search.toLowerCase()
@@ -469,7 +474,7 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
       }
       return true
     })
-  }, [rows, search, productFilter, tierFilter, trustFilter, platformFilter, typeFilter, minConfidence])
+  }, [rows, search, productFilter, tierFilter, trustFilter, platformFilter, typeFilter, angleFilter, minConfidence])
 
   const viewCounts = useMemo(() => signalCounts(beforeView), [beforeView])
 
@@ -492,6 +497,8 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
       if (platformFilter && d.platform !== platformFilter) return false
       if (typeFilter === 'video' && d.frame_idx == null) return false
       if (typeFilter === 'image' && d.frame_idx != null) return false
+      if (angleFilter === 'primary' && !isPrimaryAngle(d)) return false
+      if (angleFilter === 'background' && isPrimaryAngle(d)) return false
       if ((d.confidence ?? 0) < minConfidence) return false
       if (search) {
         const q = search.toLowerCase()
@@ -499,10 +506,10 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
       }
       return true
     })
-  }, [rows, view, search, productFilter, tierFilter, trustFilter, platformFilter, typeFilter, minConfidence])
+  }, [rows, view, search, productFilter, tierFilter, trustFilter, platformFilter, typeFilter, angleFilter, minConfidence])
 
   // Reset pagination when any filter narrows/changes the result set.
-  useEffect(() => { setVisibleCount(60) }, [view, search, productFilter, tierFilter, trustFilter, platformFilter, typeFilter, minConfidence])
+  useEffect(() => { setVisibleCount(60) }, [view, search, productFilter, tierFilter, trustFilter, platformFilter, typeFilter, angleFilter, minConfidence])
 
   // Rejected in this session. The write goes to Firestore via rateDetection,
   // but the refetch is on a timer, so the card is pulled optimistically and
@@ -637,6 +644,13 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
           { id: 'video' as const, label: 'Video', count: rows.filter((r) => r.frame_idx != null).length },
           { id: 'image' as const, label: 'Image', count: rows.filter((r) => r.frame_idx == null).length },
         ]} />
+        {/* "Alle hoeken behouden": nothing is ever discarded for being small or
+            non-primary — the gate only caps confidence. This facet makes that
+            visible instead of leaving it a claim in a document. */}
+        <FilterDropdown label="Angle" value={angleFilter} onChange={(v) => setAngleFilter(v as 'primary' | 'background' | null)} options={[
+          { id: 'primary' as const, label: 'Can is the subject', count: rows.filter((r) => isPrimaryAngle(r)).length },
+          { id: 'background' as const, label: 'Background / incidental', count: rows.filter((r) => !isPrimaryAngle(r)).length },
+        ]} />
         <FilterDropdown label="Product" value={productFilter} onChange={(v) => setProductFilter(v as string | null)} options={productLines.map(([k, n]) => ({ id: k, label: PRODUCT_LINE_LABEL[k] ?? k, count: n }))} />
         <FilterDropdown label="Tier" value={tierFilter} onChange={(v) => setTierFilter(v as string | null)} options={['tier_1', 'tier_2', 'tier_3'].map((t, i) => ({ id: t, label: `Tier ${i + 1}`, count: rows.filter((r) => r.creator_tier === t).length }))} />
         {/* "Verified + auto" was a lie: this option only excludes rows a
@@ -656,8 +670,8 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
           { id: 0, label: 'Everything, incl. weak reads', count: rows.length },
         ]} />
         {/* Reset restores the PRODUCT default (untagged), not "show everything". */}
-        {(productFilter || tierFilter || search || platformFilter || typeFilter || trustFilter !== 'verified' || minConfidence !== 0.7 || view !== 'untagged') && (
-          <button onClick={() => { setProductFilter(null); setTierFilter(null); setSearch(''); setTrustFilter('verified'); setPlatformFilter(null); setTypeFilter(null); setMinConfidence(0.7); setView('untagged') }} className="text-[12px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] underline">Reset</button>
+        {(productFilter || tierFilter || search || platformFilter || typeFilter || angleFilter || trustFilter !== 'verified' || minConfidence !== 0.7 || view !== 'untagged') && (
+          <button onClick={() => { setProductFilter(null); setTierFilter(null); setSearch(''); setTrustFilter('verified'); setPlatformFilter(null); setTypeFilter(null); setAngleFilter(null); setMinConfidence(0.7); setView('untagged') }} className="text-[12px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] underline">Reset</button>
         )}
         <span className="ml-auto text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
           {visible.length.toLocaleString()} of {rows.length.toLocaleString()}
@@ -1203,6 +1217,23 @@ function CreatorsTab({ detections, resonance, creatorProfiles }: {
   const [platformFilter, setPlatformFilter] = useState<string | null>(null)
   const [sort, setSort] = useState<'hits' | 'followers' | 'recent'>('hits')
 
+  // Projects: which creators are being tracked, and the strip up top. One
+  // fetch per tab mount; the AddToProject menus keep their own state.
+  const [projects, setProjects] = useState<Project[]>([])
+  useEffect(() => { fetchProjects().then(setProjects).catch(() => setProjects([])) }, [])
+  const projectsByCreator = useMemo(() => {
+    const m = new Map<string, Project[]>()
+    for (const p of projects) {
+      if (p.archived) continue
+      for (const cid of p.creatorIds) {
+        const arr = m.get(cid)
+        if (arr) arr.push(p)
+        else m.set(cid, [p])
+      }
+    }
+    return m
+  }, [projects])
+
   // Built purely from actual detections — no separate scoring table.
   const rows = useMemo(() => {
     type Row = {
@@ -1284,6 +1315,24 @@ function CreatorsTab({ detections, resonance, creatorProfiles }: {
         <span className="ml-auto text-[11px] text-[var(--color-ink-subtle)] tabular-nums">{rows.length} creators</span>
       </div>
 
+      {/* Projects strip — tracked groups. A creator in a project is scanned at
+          the project's cadence (6h/12h vs the default 48h), so this is where
+          "tracking" lives, not a decorative label. */}
+      {projects.filter((p) => !p.archived).length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-subtle)]">Projects</span>
+          {projects.filter((p) => !p.archived).map((p) => (
+            <Link
+              key={p.id}
+              to={`/projects/${p.id}`}
+              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[12px] text-[var(--color-ink)] hover:border-[var(--color-ink)] transition-colors"
+            >
+              {p.name} <span className="tabular-nums text-[var(--color-ink-subtle)]">· {p.creatorIds.length}</span>
+            </Link>
+          ))}
+        </div>
+      )}
+
       {rows.length === 0 ? (
         <Card className="px-6 py-16 text-center text-[13px] text-[var(--color-ink-subtle)]">No creators with confirmed hits yet.</Card>
       ) : (
@@ -1300,7 +1349,18 @@ function CreatorsTab({ detections, resonance, creatorProfiles }: {
                   <Avatar src={avatarByHandle.get(r.handle.toLowerCase()) ?? r.avatar} handle={r.handle} className="w-full h-full text-[14px]" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-[14px] font-medium truncate">@{r.handle}</div>
+                  <div className="text-[14px] font-medium truncate flex items-center gap-1.5">
+                    <span className="truncate">@{r.handle}</span>
+                    {/* Chip only — the add/remove control lives in the
+                        detection drawer and on the project page, because a
+                        button nested in this Link card would be invalid HTML
+                        (the FeedCard was rebuilt for the same reason). */}
+                    {(projectsByCreator.get(`${r.platform}_${r.handle.toLowerCase()}`) ?? []).length > 0 && (
+                      <span title={(projectsByCreator.get(`${r.platform}_${r.handle.toLowerCase()}`) ?? []).map((p) => p.name).join(', ')}>
+                        <Badge tone="accent">tracked</Badge>
+                      </span>
+                    )}
+                  </div>
                   <div className="text-[11px] text-[var(--color-ink-subtle)]">
                     {r.platform === 'tiktok' ? 'TikTok' : 'Instagram'}
                     {r.followers ? ` · ${compactNum(r.followers)} followers` : ''}
@@ -1465,6 +1525,17 @@ function DashboardSection({ detections, rangeRows, days, creatorScenes, sceneLab
     const p = d.product_line || 'unspecified'
     productMix.set(p, (productMix.get(p) ?? 0) + 1)
   }
+  // Primary vs background mix — see the "Camera angle" card for why.
+  const angleMix = (() => {
+    let primary = 0, background = 0
+    for (const d of rangeRows) {
+      if (d.detected !== true) continue
+      if (isPrimaryAngle(d)) primary += 1
+      else background += 1
+    }
+    return { primary, background }
+  })()
+
   const productSlices = [...productMix.entries()].map(([label, value], i) => ({
     label: PRODUCT_LINE_LABEL[label] ?? label,
     value,
@@ -1516,32 +1587,12 @@ function DashboardSection({ detections, rangeRows, days, creatorScenes, sceneLab
     tone: (i >= 5 ? 'accent' : 'ink') as Series['tone'],
   }))
 
-  // ── Top sounds (TikTok music) ────────────────────────────────────
-  const soundCounts = new Map<string, { label: string; url: string | null; count: number; original: boolean; artist: string | null }>()
-  for (const d of rangeRows.filter((x) => x.detected && x.music)) {
-    const m = d.music!
-    // Skip tracks we cannot identify AT ALL. The old key for those was the
-    // literal string "|" (empty title + empty artist), which is not blank, so
-    // the guard below never fired and every unidentifiable track in the data
-    // set collapsed into ONE row labelled "(untitled)" — reported from the
-    // dashboard as "Top sound is (untitled) with 306 hits". It was not a top
-    // sound; it was every sound we failed to read, added together.
-    if (!m.musicId && !(m.title || '').trim()) continue
-    const key = m.musicId || `${m.title || ''}|${m.artist || ''}`
-    if (!key.trim()) continue
-    const cur = soundCounts.get(key) ?? {
-      label: m.title || 'Original sound',
-      url: m.url || null,
-      count: 0,
-      original: !!m.original,
-      artist: m.artist || null,
-    }
-    cur.count += 1
-    soundCounts.set(key, cur)
-  }
-  const topSounds = [...soundCounts.values()]
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 8)
+  // ── Top sounds ───────────────────────────────────────────────────
+  // One shared aggregator (lib/sounds.ts) for this card, the community
+  // profiles and the /sounds pages — three sites used to disagree on the key
+  // (title vs musicId), so their counts could never match. The "(untitled)"
+  // guard history lives in soundKey()'s docstring now.
+  const topSounds = tallySounds(rangeRows).slice(0, 8)
 
   // ── Top effects (TikTok stickers/effects) ────────────────────────
   const effectCounts = new Map<string, number>()
@@ -1938,35 +1989,58 @@ function DashboardSection({ detections, rangeRows, days, creatorScenes, sceneLab
               <Donut slices={platformSlices} centreLabel={`${totalHits}`} centreSub="hits" />
             )}
           </DashCard>
+
+          {/* "Alle hoeken behouden" made measurable: a background find is a can
+              nobody staged — often the strongest evidence in the set. Nothing
+              is dropped for being small/non-primary anywhere in the pipeline;
+              the gate only caps confidence (lib/quality.ts isPrimaryAngle). */}
+          <DashCard title="Camera angle" sub="Can as the subject vs incidental in the background — both are kept, always">
+            {totalHits === 0 ? (
+              <EmptyBlock label="No hits yet." />
+            ) : (
+              <Donut
+                slices={[
+                  { label: 'Can is the subject', value: angleMix.primary, color: 'var(--color-ink)' },
+                  { label: 'Background find', value: angleMix.background, color: 'var(--color-accent)' },
+                ]}
+                centreLabel={`${Math.round((angleMix.background / Math.max(1, angleMix.primary + angleMix.background)) * 100)}%`}
+                centreSub="background"
+              />
+            )}
+          </DashCard>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <DashCard title="Top sounds" sub="Most-used audio on hit videos">
+          <DashCard title="Top sounds" sub="Most-used audio on hit videos — trend within your own hits, not platform-wide">
             {topSounds.length === 0 ? (
               <EmptyBlock label="No music data yet." />
             ) : (
-              <ul className="divide-y divide-[var(--color-border)]">
-                {topSounds.map((s, i) => (
-                  <li key={i} className="flex items-center gap-3 py-2.5">
-                    <span className="w-8 h-8 rounded-full bg-[var(--color-bg)] border border-[var(--color-border)] flex items-center justify-center text-[13px] text-[var(--color-ink)] shrink-0">
-                      ♫
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      {s.url ? (
-                        <a href={s.url} target="_blank" rel="noopener" className="hover:underline truncate block text-[13px] font-medium">{s.label}</a>
-                      ) : (
-                        <span className="truncate block text-[13px] font-medium">{s.label}</span>
-                      )}
-                      <div className="text-[11px] text-[var(--color-ink-subtle)] truncate mt-0.5">
-                        {s.artist || '—'}{s.original ? ' · original sound' : ''}
+              <>
+                <ul className="divide-y divide-[var(--color-border)]">
+                  {topSounds.map((s) => (
+                    <li key={s.key} className="flex items-center gap-3 py-2.5">
+                      <span className="w-8 h-8 rounded-full bg-[var(--color-bg)] border border-[var(--color-border)] flex items-center justify-center text-[13px] text-[var(--color-ink)] shrink-0">
+                        ♫
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        {/* Into our own drill-down, not off to TikTok — the
+                            external link lives on the drill-down page. */}
+                        <Link to={soundHref(s.key)} className="hover:underline truncate block text-[13px] font-medium">{s.label}</Link>
+                        <div className="text-[11px] text-[var(--color-ink-subtle)] truncate mt-0.5">
+                          {s.artist || '—'}{s.original ? ' · original sound' : ''}
+                          {s.creators > 1 ? ` · ${s.creators} creators` : ''}
+                        </div>
                       </div>
-                    </div>
-                    <span className="rounded-full border border-[var(--color-ink)] px-2 py-0.5 text-[10px] tabular-nums text-[var(--color-ink)] shrink-0">
-                      ×{s.count}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+                      <span className="rounded-full border border-[var(--color-ink)] px-2 py-0.5 text-[10px] tabular-nums text-[var(--color-ink)] shrink-0">
+                        ×{s.hits}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <Link to="/sounds" className="block mt-3 text-[12px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] underline">
+                  All sounds →
+                </Link>
+              </>
             )}
           </DashCard>
 

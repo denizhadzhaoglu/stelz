@@ -258,3 +258,59 @@ def projected_results(tags: list[dict], per_tag: int) -> int:
         cap = d.get("maxResults")
         total += min(per_tag, int(cap)) if isinstance(cap, (int, float)) and cap else per_tag
     return total
+
+
+def pool_patch_docs(pool: list[dict], existing_ids: set[str]) -> list[tuple[str, dict]]:
+    """Turn a client hashtag-pool payload into (doc_id, doc) writes.
+
+    Pure — extracted from api_brand_settings_update so the two-regime rule
+    below is testable without the functions runtime.
+
+    NEW tag (id not in existing_ids — i.e. a client-added custom term):
+    defaults family="custom", maxResults=200, kind="hashtag". The cap is the
+    feature: an uncapped UI-added tag scrapes at the caller's full per_tag
+    (500 results ~= $1.15/tag/scan; ten of them is +$11.50 per scan click
+    against a $5/day budget). family="custom" also buys the FAMILY_FLOOR
+    guarantee in select_tags, so client terms are never starved by priority.
+
+    EXISTING tag: only fields the client explicitly sent are written. The UI
+    round-trips the entire pool on save, and defaulting here would silently
+    restamp every seeded brand_core/lifestyle tag as "custom" — corrupting the
+    taxonomy select_tags budgets by.
+
+    "keyword" kind is accepted as data-model prep only; nothing scrapes
+    keywords yet (no actor exists) and publish_tags treats every doc as a
+    hashtag.
+    """
+    valid_families = set(FAMILIES) | {"custom"}
+    out: list[tuple[str, dict]] = []
+    for h in pool:
+        tag = (h.get("tag") or "").strip().lower().lstrip("#")
+        platform = h.get("platform") or "instagram"
+        if not tag:
+            continue
+        doc_id = f"{platform}_{tag}"
+        doc: dict = {
+            "tag": tag,
+            "platform": platform,
+            "priority": int(h.get("priority", 5)),
+            "active": bool(h.get("active", True)),
+        }
+        is_new = doc_id not in existing_ids
+        fam = h.get("family")
+        if fam is not None or is_new:
+            fam = fam or "custom"
+            if fam in valid_families:
+                doc["family"] = fam
+        cap = h.get("maxResults")
+        if cap is not None or is_new:
+            try:
+                cap = int(cap) if cap is not None else 200
+            except (TypeError, ValueError):
+                cap = 200
+            doc["maxResults"] = max(10, min(1000, cap))
+        kind = h.get("kind")
+        if kind is not None or is_new:
+            doc["kind"] = kind if kind in ("hashtag", "keyword") else "hashtag"
+        out.append((doc_id, doc))
+    return out

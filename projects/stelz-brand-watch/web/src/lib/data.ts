@@ -119,3 +119,12 @@ export function toggleHidden(handle: string) {
   saveState({ ...s, hidden: next })
   return next
 }
+
+// ────────────── Creator projects ──────────────
+// Reads are plain Firestore (any signed-in user); writes go through
+// api_projects server-side because project membership changes scan cadence.
+export {
+  fbListProjects as fetchProjects,
+  fbProjectsAction as projectsAction,
+} from './firestore'
+export type { Project } from './firestore'

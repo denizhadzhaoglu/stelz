@@ -108,3 +108,17 @@ export function splitByQuality(rows: DetectionRow[]): { clear: DetectionRow[]; r
   for (const r of rows) (detectionQuality(r).needsLook ? review : clear).push(r)
   return { clear, review }
 }
+
+/**
+ * Is the can the PRIMARY subject of this shot, or a background appearance?
+ *
+ * Answers the client's "alle hoeken behouden" concern with a facet instead of
+ * a promise: nothing in the pipeline discards a hit for being small or
+ * non-primary (the gate only caps confidence — see the module header), and
+ * this predicate is what lets the UI show that. Background finds are often the
+ * MOST valuable rows in the feed: nobody staged them.
+ */
+export function isPrimaryAngle(d: Pick<DetectionRow, 'is_primary_subject' | 'size_in_frame'>): boolean {
+  if (d.is_primary_subject === true) return true
+  return d.size_in_frame === 'dominant' || d.size_in_frame === 'large'
+}

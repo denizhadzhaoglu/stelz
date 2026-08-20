@@ -590,6 +590,12 @@ export type HashtagPoolEntry = {
   platform: 'instagram' | 'tiktok'
   priority: number
   active: boolean
+  /** Budget family (lib/hashtags.py FAMILIES + "custom"); null on legacy docs. */
+  family: string | null
+  /** Per-scan Apify result cap; null = scrapes at the caller's full per_tag. */
+  maxResults: number | null
+  /** "hashtag" | "keyword" — keyword is data-model prep, nothing scrapes it yet. */
+  kind: string | null
 }
 
 export async function fbListHashtagPool(brandId = BRAND_ID): Promise<HashtagPoolEntry[]> {
@@ -602,8 +608,69 @@ export async function fbListHashtagPool(brandId = BRAND_ID): Promise<HashtagPool
       platform: x.platform ?? 'instagram',
       priority: x.priority ?? 5,
       active: x.active ?? true,
+      // Absent on pre-taxonomy docs; the Settings UI shows them as unknown
+      // rather than inventing a default the backend never wrote.
+      family: (x.family as string | null) ?? null,
+      maxResults: (x.maxResults as number | null) ?? null,
+      kind: (x.kind as string | null) ?? null,
     }
   })
+}
+
+// ────────────── Creator projects ──────────────
+
+export type Project = {
+  id: string
+  name: string
+  note: string | null
+  trackingTier: 'tier_1' | 'tier_2'
+  creatorIds: string[]
+  archived: boolean
+  createdBy: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+function mapProject(id: string, x: Record<string, unknown>): Project {
+  const ts = (v: unknown) => {
+    const d = v as { toDate?: () => Date } | null
+    return d?.toDate ? d.toDate().toISOString() : null
+  }
+  return {
+    id,
+    name: (x.name as string) ?? '(naamloos)',
+    note: (x.note as string | null) || null,
+    trackingTier: (x.trackingTier as Project['trackingTier']) ?? 'tier_1',
+    creatorIds: (x.creatorIds as string[] | undefined) ?? [],
+    archived: !!x.archived,
+    createdBy: (x.createdBy as string | null) ?? null,
+    createdAt: ts(x.createdAt),
+    updatedAt: ts(x.updatedAt),
+  }
+}
+
+export async function fbListProjects(brandId = BRAND_ID): Promise<Project[]> {
+  const snap = await getDocs(collection(fbDb, 'brands', brandId, 'projects'))
+  return snap.docs
+    .map((d) => mapProject(d.id, d.data()))
+    .sort((a, b) => Number(a.archived) - Number(b.archived) || a.name.localeCompare(b.name))
+}
+
+/** All writes go through api_projects — membership-gated server-side, because
+ * adding a creator to a project changes their scan cadence, which is spend. */
+export async function fbProjectsAction(
+  action: 'create' | 'rename' | 'archive' | 'unarchive' | 'addCreators' | 'removeCreators',
+  params: {
+    projectId?: string; name?: string; note?: string; trackingTier?: string
+    creatorIds?: string[]
+    // addCreators only: {compositeId: displayName} from list imports, so a
+    // roster shows real names before the first profile refresh.
+    names?: Record<string, string>
+  },
+  brandId = BRAND_ID,
+): Promise<Project> {
+  const out = await authedFetch('api_projects', { brandId, action, ...params }) as { project: Record<string, unknown> & { id: string } }
+  return mapProject(out.project.id, out.project)
 }
 
 // ────────────── Daily usage (Settings → Usage card) ──────────────
