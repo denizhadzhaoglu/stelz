@@ -72,6 +72,13 @@ export type DetectionRow = {
   content_type?: 'image' | 'video' | 'story' | 'unknown' | null
   expires_at?: string | null   // stories only: postedAt + 24h
   frame_idx?: number | null  // present when the detection came from a video frame
+  // How many images the model actually looked at to reach this verdict: 1 for a
+  // photo, cover + sampled frames for a video. Production leaves this unset —
+  // detect_video writes one detection document PER frame, so counting the
+  // documents for a post is the same number. It is set explicitly by fixtures
+  // and by any path that batches frames into a single call, where the documents
+  // would otherwise under-report what was examined.
+  frames_judged?: number | null
   post_id?: string | null    // groups multiple frame-hits of the same post
   frame_hits?: number        // UI-only: how many detections were collapsed into this row
   // UI-only, same as frame_hits: attached by signal.withSignal() after dedupe.

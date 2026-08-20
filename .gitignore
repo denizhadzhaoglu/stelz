@@ -55,8 +55,11 @@ firebase/functions/venv/
 # Staged hosting build — generated from projects/stelz-brand-watch/web/dist
 firebase/web-dist/
 
-# Local UI preview fixture: signed Instagram CDN URLs that expire within hours,
-# so a committed copy is a snapshot of broken images. Regenerate with
-# tools/stelz_brand_watch/61_stories_preview_fixture.py
+# Local UI preview fixtures now live in .tmp/stories-archive/ (already ignored)
+# and reach the dev server through a serve-only middleware in web/vite.config.ts.
+# These two entries stay as a backstop: anything dropped into public/ is copied
+# into dist/ and published by `firebase deploy --only hosting`, and these files
+# hold scraped Instagram data and signed CDN URLs.
 projects/stelz-brand-watch/web/public/preview-stories.json
 projects/stelz-brand-watch/web/public/preview-story-posts.json
+projects/stelz-brand-watch/web/public/preview-media

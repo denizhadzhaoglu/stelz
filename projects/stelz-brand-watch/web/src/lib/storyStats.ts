@@ -49,6 +49,12 @@ export type StoryRow = StoryPost & {
    *  Cloud Storage image, which outlives the post's signed CDN link. */
   detection: DetectionRow | null
   confidence: number | null
+  /** How many images the model looked at for this story — 1 for a photo, cover
+   *  plus sampled frames for a video, 0 when nothing has judged it. On screen
+   *  as "beoordeeld op N beelden": the difference between "we found nothing"
+   *  and "we never looked" is the whole point of the verdict column, and a
+   *  count is the only thing that proves which one happened. */
+  framesJudged: number
 }
 
 /** The image to render: the mirrored copy first, because the story's own
@@ -63,6 +69,10 @@ export function storyImage(row: StoryRow): string | null {
  * A story can produce several detection documents — a video contributes its
  * cover plus up to six frames. The strongest evidence wins, so a can visible
  * in one frame of a fourteen-second story counts as visible.
+ *
+ * Pass the RAW detections, not the output of dedupeByPost. This groups by
+ * post_id itself with the same rule, and the size of each group is what says
+ * how many images were examined — collapsing first throws that away.
  */
 export function joinStories(posts: StoryPost[], detections: DetectionRow[]): StoryRow[] {
   const byPost = new Map<string, DetectionRow[]>()
@@ -82,8 +92,40 @@ export function joinStories(posts: StoryPost[], detections: DetectionRow[]): Sto
       detection: best,
       confidence: best?.confidence ?? null,
       verdict: verdictFor(best),
+      framesJudged: framesJudgedIn(group),
     }
   })
+}
+
+/**
+ * Which pair of arrays the page should join.
+ *
+ * Extracted because getting it wrong is invisible: both pages used to pass
+ * `preview ? [] : detections`, which silently discarded every locally produced
+ * verdict and rendered analysed stories as "nog niet geanalyseerd". Nothing
+ * failed, nothing logged — the screen just quietly under-reported. A preview
+ * carries BOTH halves or neither, and that rule now lives in one tested place.
+ */
+export function storySource(
+  previewPosts: StoryPost[] | null,
+  previewDetections: DetectionRow[] | null,
+  posts: StoryPost[],
+  detections: DetectionRow[],
+): { posts: StoryPost[]; detections: DetectionRow[]; preview: boolean } {
+  if (previewPosts) {
+    return { posts: previewPosts, detections: previewDetections ?? [], preview: true }
+  }
+  return { posts, detections, preview: false }
+}
+
+/** One document per examined frame is the production shape, so the group size
+ *  is the count. A row that states its own `frames_judged` overrides that: a
+ *  batched call produces one document for many frames, and trusting the
+ *  document count there would report "1 beeld" for a thirteen-frame video. */
+function framesJudgedIn(group: DetectionRow[]): number {
+  if (group.length === 0) return 0
+  const stated = group.reduce((sum, d) => sum + (d.frames_judged ?? 0), 0)
+  return Math.max(stated, group.length)
 }
 
 /** Strongest evidence in the group: a rejection is decisive, then a hit, then
@@ -139,6 +181,12 @@ export type StoryRollup = {
   absent: number
   unanalysed: number
   rejected: number
+  /** Stories a verdict was actually reached on. */
+  judged: number
+  /** Images the model looked at across all of them — a video contributes its
+   *  cover plus every sampled frame. This is the number that answers "is er
+   *  echt naar gekeken?", which one story-level count cannot. */
+  imagesSeen: number
   /** Sum of follower counts over DISTINCT creators who posted. Audience size,
    *  not views — see the file header. */
   reach: number
@@ -176,6 +224,7 @@ export function storyRollup(
   const out: StoryRollup = {
     stories: 0, creatorsPosted: 0,
     withStelz: 0, visible: 0, small: 0, absent: 0, unanalysed: 0, rejected: 0,
+    judged: 0, imagesSeen: 0,
     reach: 0, reachKnownFor: 0, pollVotes: 0, mentions: 0, links: 0,
     videoSeconds: 0, byCreator: [], postedAts: [],
   }
@@ -189,6 +238,8 @@ export function storyRollup(
     out.stories += 1
     c.stories += 1
     out[r.verdict] += 1
+    out.imagesSeen += r.framesJudged
+    if (r.verdict !== 'unanalysed') out.judged += 1
     if (r.verdict === 'visible') c.visible += 1
     if (r.verdict === 'small') c.small += 1
     if (r.verdict === 'unanalysed') c.unanalysed += 1
@@ -232,7 +283,6 @@ export function storyRollup(
 /** Share of captured stories with Stëlz in them, or null when nothing analysed
  *  yet — a 0% that only means "we haven't looked" is a lie in a KPI box. */
 export function stelzShare(r: StoryRollup): number | null {
-  const judged = r.stories - r.unanalysed
-  if (judged <= 0) return null
-  return (r.withStelz / judged) * 100
+  if (r.judged <= 0) return null
+  return (r.withStelz / r.judged) * 100
 }

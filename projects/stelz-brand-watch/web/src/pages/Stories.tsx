@@ -20,15 +20,16 @@ import {
   type StoryPost, type CreatorProfile,
 } from '../lib/firestore'
 import { fetchProjects, type Project } from '../lib/data'
-import { dedupeByPost, type DetectionRow } from '../lib/types'
+import { type DetectionRow } from '../lib/types'
 import {
-  joinStories, storyRollup, stelzShare, isStelzStory, storyImage,
+  joinStories, storySource, storyRollup, stelzShare, isStelzStory, storyImage,
   VERDICT_LABEL, type StoryRow, type StoryVerdict,
 } from '../lib/storyStats'
+import { StoryDetail } from '../components/StoryDetail'
 import { storyExpiry, storyChip } from '../lib/stories'
 import { fmtNum, compactNum, timeAgo } from '../lib/format'
 import { splitCreatorId } from '../lib/projects'
-import { useStoryPostsPreview } from '../lib/devPreview'
+import { useStoryPostsPreview, useStoryPreview } from '../lib/devPreview'
 
 /** Hard ceiling on one fetch. Stated on screen when it binds. */
 const FETCH_LIMIT = 2000
@@ -78,8 +79,10 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [open, setOpen] = useState<StoryRow | null>(null)
 
   const preview = useStoryPostsPreview()
+  const previewDetections = useStoryPreview()
 
   useEffect(() => {
     let cancelled = false
@@ -93,7 +96,11 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
         ])
         if (cancelled) return
         setPosts(p)
-        setDetections(dedupeByPost(d))
+        // Raw, NOT dedupeByPost: joinStories groups by post itself with the
+        // same rule, and the number of documents per story is what says how
+        // many frames were examined. Collapsing first reports a thirteen-frame
+        // video as one image looked at.
+        setDetections(d)
         setProfiles(pr)
         setProjects(pj)
       } catch (e) {
@@ -111,10 +118,13 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
     [project],
   )
 
-  const allRows = useMemo(
-    () => joinStories(preview ?? posts, preview ? [] : detections),
-    [preview, posts, detections],
-  )
+  // storySource, not an inline ternary: passing [] for the preview's detections
+  // is what made every locally analysed story render as "nog niet
+  // geanalyseerd", and an inline ternary is exactly where that hides.
+  const allRows = useMemo(() => {
+    const src = storySource(preview, previewDetections, posts, detections)
+    return joinStories(src.posts, src.detections)
+  }, [preview, previewDetections, posts, detections])
 
   // Campaign scope first: the rollup below must describe the same set the grid
   // shows, or the KPI row and the tiles disagree on screen.
@@ -147,13 +157,18 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
     data: bucketByDay(rollup.postedAts, 30),
   }
   const share = stelzShare(rollup)
+  const videoCount = scoped.filter((r) => r.mediaType === 'video').length
 
   const body = (
     <>
       {preview && (
         <Card className="mb-6 px-4 py-2.5 text-[12px] text-[var(--color-warn)]">
-          Preview: echte gescrapte stories uit een lokaal bestand, niet uit de database. Nog niet
-          geanalyseerd, dus elk oordeel staat op "nog niet geanalyseerd".
+          Preview: echte gescrapte stories uit een lokaal bestand, niet uit de database.
+          {rollup.judged > 0
+            ? ` De oordelen komen uit een lokale analyse met hetzelfde model, dezelfde prompt en
+               dezelfde referentiefoto's als productie — ${fmtNum(rollup.judged)} van
+               ${fmtNum(rollup.stories)} beoordeeld.`
+            : ' Nog niet geanalyseerd, dus elk oordeel staat op "nog niet geanalyseerd".'}
         </Card>
       )}
       {error && <Card className="mb-6 p-4 text-[12px] text-[var(--color-bad)]">{error}</Card>}
@@ -164,7 +179,7 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
         <EmptyState project={project} />
       ) : (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
             <Kpi
               label="Stories vastgelegd"
               value={fmtNum(rollup.stories)}
@@ -172,12 +187,23 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
                 roster.length ? ` van ${roster.length}` : ''
               }`}
             />
+            {/* "0% Stëlz" is only worth reading next to proof that something
+                looked. Images seen, not stories judged: a video is one story
+                and thirteen images, and the story count hides that entirely. */}
+            <Kpi
+              label="Geanalyseerd"
+              value={`${fmtNum(rollup.judged)}/${fmtNum(rollup.stories)}`}
+              sub={rollup.imagesSeen > 0
+                ? `${fmtNum(rollup.imagesSeen)} beelden bekeken · ${
+                    fmtNum(videoCount)} video${videoCount === 1 ? '' : "'s"}`
+                : 'nog niets beoordeeld'}
+            />
             <Kpi
               label="Stëlz zichtbaar"
               value={share == null ? '—' : `${Math.round(share)}%`}
               sub={share == null
                 ? 'nog niets geanalyseerd'
-                : `${rollup.withStelz} van ${rollup.stories - rollup.unanalysed} beoordeeld`}
+                : `${rollup.withStelz} van ${rollup.judged} beoordeeld`}
             />
             <Kpi
               label="Bereik (volgers)"
@@ -205,6 +231,21 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
               <> Poll-stemmen zijn wél exact en publiek: {fmtNum(rollup.pollVotes)} mensen hebben
               gestemd, en elke stem is iemand die de story zag. Dat is een geverifieerde ondergrens.</>
             )}
+            {rollup.judged > 0 && (
+              <>
+                {' '}
+                <strong className="font-medium text-[var(--color-ink)]">Over de analyse.</strong>{' '}
+                Elke foto is aan het model voorgelegd, en van elke video de cover plus frames uit
+                de hele looptijd — samen {fmtNum(rollup.imagesSeen)} beelden. Klik een story aan
+                om te zien wat het model in dat beeld beschreef en op hoeveel beelden het oordeel
+                rust.
+                {rollup.unanalysed > 0 && (
+                  <> {fmtNum(rollup.unanalysed)} {rollup.unanalysed === 1 ? 'story is' : 'stories zijn'}{' '}
+                  níet beoordeeld; die staan apart onder "nog niet geanalyseerd" en tellen niet
+                  mee als "geen Stëlz".</>
+                )}
+              </>
+            )}
           </Card>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
@@ -219,7 +260,7 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
                 Wat er in zat
               </h3>
               <dl className="space-y-2 text-[12px]">
-                <Row label="Video's" value={`${fmtNum(scoped.filter((r) => r.mediaType === 'video').length)} · ${Math.round(rollup.videoSeconds)}s`} />
+                <Row label="Video's" value={`${fmtNum(videoCount)} · ${Math.round(rollup.videoSeconds)}s`} />
                 <Row label="@-vermeldingen" value={fmtNum(rollup.mentions)} />
                 <Row label="Link-stickers" value={fmtNum(rollup.links)} />
                 <Row label="Polls" value={fmtNum(scoped.filter((r) => r.pollCount > 0).length)} />
@@ -270,13 +311,14 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
             </Card>
           ) : (
             <div className="flex flex-wrap gap-2 mb-8">
-              {shown.map((r) => <StoryCard key={r.postId} row={r} />)}
+              {shown.map((r) => <StoryCard key={r.postId} row={r} onOpen={() => setOpen(r)} />)}
             </div>
           )}
 
           <CreatorTable rollup={rollup} onPick={(h) => setParam('c', h === creator ? null : h)} />
         </>
       )}
+      <StoryDetail row={open} onClose={() => setOpen(null)} />
     </>
   )
 
@@ -304,7 +346,7 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
   )
 }
 
-function StoryCard({ row }: { row: StoryRow }) {
+function StoryCard({ row, onOpen }: { row: StoryRow; onOpen: () => void }) {
   const exp = storyExpiry({ content_type: 'story', expires_at: row.expiresAt })
   const body = (
     <>
@@ -312,6 +354,15 @@ function StoryCard({ row }: { row: StoryRow }) {
         <span className={`absolute top-1 left-1 text-[9px] uppercase tracking-wider px-1.5 py-0.5 ${VERDICT_TONE[row.verdict]}`}>
           {row.verdict === 'visible' ? 'Stëlz' : row.verdict === 'small' ? 'Stëlz klein' : VERDICT_LABEL[row.verdict]}
         </span>
+        {/* Only when the verdict rests on more than the one image you are
+            looking at. For a photo the verdict chip already says it was
+            judged; for a video "13" is the difference between a glance at the
+            cover and the whole clip, and that is not visible any other way. */}
+        {row.framesJudged > 1 && (
+          <span className="absolute bottom-1 left-1 text-[9px] px-1 py-0.5 bg-[var(--color-ink)]/70 text-white tabular-nums">
+            {row.framesJudged} beelden
+          </span>
+        )}
         {row.mediaType === 'video' && (
           <span className="absolute bottom-1 right-1 text-[9px] px-1 py-0.5 bg-[var(--color-ink)]/80 text-white">
             ▶ {row.videoDuration ? `${Math.round(row.videoDuration)}s` : 'video'}
@@ -329,16 +380,25 @@ function StoryCard({ row }: { row: StoryRow }) {
       </span>
     </>
   )
-  const cls = `shrink-0 w-[112px] block border transition-colors ${
+  const cls = `shrink-0 w-[112px] block border text-left transition-colors ${
     isStelzStory(row.verdict)
       ? 'border-[var(--color-good)] hover:border-[var(--color-ink)]'
       : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)]'
   }`
-  // The permalink dies with the story; without one there is nothing to open,
-  // so the tile stays a plain block rather than a link that goes nowhere.
-  return row.url
-    ? <a href={row.url} target="_blank" rel="noreferrer" className={cls} title={`@${row.creatorHandle}`}>{body}</a>
-    : <div className={cls}>{body}</div>
+  // Opens the analysis, not Instagram. The permalink dies with the story — it
+  // was the tile's only action, so a day later every tile led nowhere, and the
+  // one thing that survives (what the model saw) had no way in at all. The
+  // Instagram link is offered inside the panel, labelled as perishable.
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={cls}
+      title={`@${row.creatorHandle} · ${VERDICT_LABEL[row.verdict]}`}
+    >
+      {body}
+    </button>
+  )
 }
 
 function CreatorTable({ rollup, onPick }: {

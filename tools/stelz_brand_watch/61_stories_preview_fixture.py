@@ -13,15 +13,18 @@ first (that one costs money) and then run this.
     ./firebase/functions/venv/bin/python \\
         tools/stelz_brand_watch/61_stories_preview_fixture.py
 
-Writes projects/stelz-brand-watch/web/public/preview-stories.json, which the
-dev server serves at /preview-stories.json for `?preview=stories`. The file is
-gitignored: it holds signed Instagram CDN URLs that expire within hours, so a
-committed copy would be a snapshot of broken images.
+Writes .tmp/stories-archive/preview-stories.json, which the dev server serves
+at /preview-stories.json for `?preview=stories` via a serve-only Vite
+middleware. Deliberately outside web/public: public/ is copied into dist/ and
+deployed, and this file holds scraped Instagram data and signed CDN URLs.
 
 Note what this proves and what it does not. It exercises the real
 _normalize_item, the real expiry maths and the real rendering path. It does NOT
-exercise the Firestore write or the Gemini detect fan-out — every row comes out
-detected=null, because nothing has looked at these images yet.
+exercise the Firestore write or the Gemini detect fan-out.
+
+Verdicts come from .tmp/stories-archive/verdicts.jsonl when 64_stories_analyse.py
+has run; a story with no verdict gets no detection row at all, so the UI shows it
+as "nog niet geanalyseerd" instead of as a miss nobody looked for.
 """
 from __future__ import annotations
 
@@ -39,9 +42,14 @@ from handlers.scan_stories import STORIES_ACTOR, STORY_TTL_HOURS, _normalize_ite
 
 ARCHIVE = ROOT / ".tmp" / "stories-archive"
 VERDICTS = ARCHIVE / "verdicts.jsonl"
-PUBLIC = ROOT / "projects" / "stelz-brand-watch" / "web" / "public"
-OUT = PUBLIC / "preview-stories.json"          # DetectionRow[] — the strip
-OUT_POSTS = PUBLIC / "preview-story-posts.json"  # StoryPost[] — the /stories page
+INDEX = ARCHIVE / "index.jsonl"
+MEDIA = ARCHIVE / "media"
+# NOT web/public: everything in public/ is copied into dist/, so a fixture
+# there is published by `vite build && firebase deploy --only hosting`. These
+# hold scraped Instagram data and signed CDN URLs. The dev server reaches them
+# through a serve-only middleware in web/vite.config.ts instead.
+OUT = ARCHIVE / "preview-stories.json"          # DetectionRow[] — the strip
+OUT_POSTS = ARCHIVE / "preview-story-posts.json"  # StoryPost[] — the /stories page
 APIFY = "https://api.apify.com/v2"
 
 
@@ -78,6 +86,38 @@ def last_dataset_items(actor: str, tok: str) -> list[dict]:
     return out.json()
 
 
+def load_archive() -> dict[str, dict]:
+    """Archived media, keyed by story id (62_stories_archive.py)."""
+    if not INDEX.exists():
+        return {}
+    out: dict[str, dict] = {}
+    for line in INDEX.read_text().splitlines():
+        if line.strip():
+            try:
+                e = json.loads(line)
+                out[e["story_id"]] = e
+            except Exception:
+                continue
+    return out
+
+
+def have_media() -> bool:
+    """Can the dev server serve the archived files at /preview-media/<file>?
+
+    Two reasons to prefer them, and the second matters more. Instagram's story
+    URLs are signed and expire within hours, so a fixture built on them is a
+    page of broken images by tomorrow. And the archived bytes are the exact
+    bytes the model judged — showing a re-fetched CDN copy next to a verdict
+    invites the two to drift apart.
+
+    The route is a dev-server middleware in web/vite.config.ts, NOT a symlink
+    under public/: `vite build` copies public/ into dist/ and follows symlinks,
+    which would push 118 MB of other people's photographs into the deployed
+    bundle. Nothing here writes into the web directory at all.
+    """
+    return MEDIA.is_dir() and any(MEDIA.iterdir())
+
+
 def load_verdicts() -> dict[str, dict]:
     """Local analysis results, keyed by story id (64_stories_analyse.py).
 
@@ -98,7 +138,20 @@ def load_verdicts() -> dict[str, dict]:
     return out
 
 
-def to_row(norm: dict, idx: int, verdict: dict | None = None) -> dict:
+def resolve_media(norm: dict, arch: dict | None, local: bool) -> tuple[str | None, str | None]:
+    """Archived file first, signed CDN URL second. The archive is permanent and
+    is what the analysis actually read; the CDN link is a few hours from
+    expiring and is only a fallback for a story that was never archived."""
+    img, vid = norm["image_url"], norm["video_url"]
+    if local and arch:
+        if arch.get("image_file"):
+            img = f"/preview-media/{arch['image_file']}"
+        if arch.get("video_file"):
+            vid = f"/preview-media/{arch['video_file']}"
+    return img, vid
+
+
+def to_row(norm: dict, idx: int, verdict: dict | None, image_url: str | None) -> dict:
     """One normalized story -> one DetectionRow, matching lib/types.ts.
 
     Every field the type declares is present. A row missing a key the UI reads
@@ -122,7 +175,7 @@ def to_row(norm: dict, idx: int, verdict: dict | None = None) -> dict:
         "confidence": (verdict or {}).get("confidence"),
         "size_in_frame": (verdict or {}).get("size_in_frame"),
         "is_primary_subject": (verdict or {}).get("is_primary_subject"),
-        "image_url": norm["image_url"],
+        "image_url": image_url,
         "stored_path": None,
         "post_url": f"https://www.instagram.com/stories/{handle}/{story_id}/",
         "post_caption": None,
@@ -141,6 +194,13 @@ def to_row(norm: dict, idx: int, verdict: dict | None = None) -> dict:
         "content_type": "story",
         "expires_at": expires.isoformat(),
         "frame_idx": None,
+        # How many images the model actually received. Production writes one
+        # detection document per frame, so the UI can count documents there;
+        # 64_stories_analyse.py batches a video's frames into ONE call, so
+        # without this a thirteen-frame verdict would render as "1 beeld
+        # bekeken" — understating the evidence, which is the same failure as
+        # overstating it.
+        "frames_judged": (verdict or {}).get("frames_judged"),
         "post_id": f"instagram_story{story_id}",
         "surface_type": (verdict or {}).get("surface_type"),
         "visible_text": (verdict or {}).get("visible_text"),
@@ -161,13 +221,13 @@ def to_row(norm: dict, idx: int, verdict: dict | None = None) -> dict:
     }
 
 
-def to_post(norm: dict) -> dict:
+def to_post(norm: dict, image_url: str | None, video_url: str | None) -> dict:
     """One normalized story -> one StoryPost, matching lib/firestore.ts.
 
     The /stories page is driven by POSTS, not detections, so the preview has to
     supply posts or it would exercise a different code path than production.
-    No detections accompany them, which is correct: nothing has analysed these,
-    and the page renders every row as "nog niet geanalyseerd".
+    The verdicts ride alongside in preview-stories.json and are joined on
+    postId, exactly as Firestore's two collections are.
     """
     posted = norm["posted_at"] or dt.datetime.now(dt.timezone.utc)
     expires = norm.get("expires_at") or posted + dt.timedelta(hours=STORY_TTL_HOURS)
@@ -177,8 +237,8 @@ def to_post(norm: dict) -> dict:
         "creatorHandle": norm["handle"],
         "creatorTier": "tier_2",
         "url": f"https://www.instagram.com/stories/{norm['handle']}/{story_id}/",
-        "coverUrl": norm["image_url"],
-        "videoUrl": norm["video_url"],
+        "coverUrl": image_url,
+        "videoUrl": video_url,
         "mediaType": norm["media_type"],
         "videoDuration": norm["video_duration"],
         "postedAt": posted.isoformat(),
@@ -210,18 +270,26 @@ def main() -> int:
     print(f"  raw items: {len(items)}")
 
     verdicts = load_verdicts()
-    rows, posts, leaked = [], [], 0
+    archive = load_archive()
+    local = have_media()
+    print(f"  media: {'archived files via /preview-media' if local else 'signed CDN URLs (expire in hours)'}")
+
+    rows, posts, leaked, from_archive = [], [], 0, 0
     for i, item in enumerate(items):
         norm = _normalize_item(item)
         if norm is None:
             leaked += 1
             continue
+        arch = archive.get(norm["story_id"])
+        img, vid = resolve_media(norm, arch, local)
+        if local and arch:
+            from_archive += 1
         v = verdicts.get(norm["story_id"])
         # Only stories that were actually judged get a detection row. An absent
         # row is what makes the UI say "nog niet geanalyseerd".
         if v is not None:
-            rows.append(to_row(norm, i, v))
-        posts.append(to_post(norm))
+            rows.append(to_row(norm, i, v, img))
+        posts.append(to_post(norm, img, vid))
     print(f"  stories after leak filter: {len(rows)}   rejected as non-story: {leaked}")
 
     if not rows:
@@ -238,7 +306,13 @@ def main() -> int:
     hits = sum(1 for r in rows if r["detected"])
     print(f"  {sum(1 for p in posts if p['mediaType'] == 'video')} video · "
           f"{polls:,} poll votes · {sum(len(p['mentions']) for p in posts)} mentions")
-    print(f"  {judged} of {len(posts)} analysed · {hits} with Stëlz visible")
+    seen = sum(r["frames_judged"] or 1 for r in rows)
+    print(f"  {judged} of {len(posts)} analysed on {seen} images · {hits} with Stëlz visible")
+    if local:
+        print(f"  {from_archive} of {len(posts)} served from the archive "
+              f"(the exact bytes the analysis read)")
+    if from_archive < len(posts):
+        print(f"  ({len(posts) - from_archive} on signed CDN links — re-run 62_stories_archive.py)")
     if judged < len(posts):
         print(f"  ({len(posts) - judged} unjudged — run 64_stories_analyse.py)")
     print("  open http://localhost:5180/stories?preview=stories")

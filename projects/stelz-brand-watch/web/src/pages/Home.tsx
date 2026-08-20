@@ -40,8 +40,9 @@ import {
   pickWorthALook, biggestFanToday, detectSpike, countNewSince,
 } from '../lib/score'
 import { useMembership, ReadOnlyNotice } from '../lib/membership'
-import { useStoryPostsPreview } from '../lib/devPreview'
-import { joinStories } from '../lib/storyStats'
+import { useStoryPostsPreview, useStoryPreview } from '../lib/devPreview'
+import { joinStories, storySource, type StoryRow } from '../lib/storyStats'
+import { StoryDetail } from '../components/StoryDetail'
 
 type Tab = 'briefing' | 'feed' | 'review' | 'creators'
 type PipelineCounts = { creators: number; posts: number; detections: number; detectionsHit: number; discoveryQueue: number }
@@ -91,6 +92,7 @@ export default function Home() {
     setParams(t === 'briefing' ? {} : { tab: t }, { replace: true })
   }, [setParams])
   const [activeDetection, setActiveDetection] = useState<DetectionRow | null>(null)
+  const [openStory, setOpenStory] = useState<StoryRow | null>(null)
 
   // Boot from cache if we have one — the dashboard is visible instantly,
   // even before the fresh Firestore reads finish. `refreshing` shows a
@@ -138,7 +140,9 @@ export default function Home() {
       setDetections(d)
       setResonance(r)
       setCounts(c)
-      setStoryDetections(dedupeByPost(s))
+      // Raw: joinStories does its own grouping, and one document per examined
+      // frame is how it knows a video verdict rests on thirteen images.
+      setStoryDetections(s)
       setStoryPosts(sp)
       saveCache({ savedAt: Date.now(), detections: d, resonance: r, counts: c })
     } catch (e) {
@@ -196,12 +200,15 @@ export default function Home() {
   useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
   // Dev server only; compiled out of production builds. See lib/devPreview.
   const storyPreview = useStoryPostsPreview()
+  const storyPreviewDetections = useStoryPreview()
   // One join, used by the strip here and by the /stories page, so the two can
-  // never report different totals for the same set.
-  const storyRows = useMemo(
-    () => joinStories(storyPreview ?? storyPosts ?? [], storyPreview ? [] : storyDetections),
-    [storyPreview, storyPosts, storyDetections],
-  )
+  // never report different totals for the same set. Preview brings its own
+  // detections — passing [] threw away every locally produced verdict and made
+  // analysed stories read as "nog niet geanalyseerd".
+  const storyRows = useMemo(() => {
+    const src = storySource(storyPreview, storyPreviewDetections, storyPosts ?? [], storyDetections)
+    return joinStories(src.posts, src.detections)
+  }, [storyPreview, storyPreviewDetections, storyPosts, storyDetections])
   const fetchStories = useCallback(async () => {
     setStoriesFetching(true)
     setStoriesError(null)
@@ -295,7 +302,10 @@ export default function Home() {
           <StoriesStrip
             rows={storyRows}
             state={storiesState}
-            onOpen={(r) => r.detection && setActiveDetection(r.detection)}
+            // The story panel, not the detection drawer: a story tile has to
+            // open even when nothing was found in it, and the detection drawer
+            // has nothing to show for a story with no hit.
+            onOpen={(r) => setOpenStory(r)}
             onFetch={fetchStories}
             fetching={storiesFetching}
             canWrite={canWrite}
@@ -347,6 +357,7 @@ export default function Home() {
           .sort((a, b) => (a.frame_idx ?? 0) - (b.frame_idx ?? 0)) : []}
         onClose={() => setActiveDetection(null)}
       />
+      <StoryDetail row={openStory} onClose={() => setOpenStory(null)} />
     </PageShell>
   )
 }

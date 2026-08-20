@@ -5,7 +5,7 @@
 // added up per story instead of per creator.
 import { describe, expect, it } from 'vitest'
 import {
-  joinStories, storyRollup, stelzShare, isStelzStory, storyImage, VERDICT_LABEL,
+  joinStories, storySource, storyRollup, stelzShare, isStelzStory, storyImage, VERDICT_LABEL,
 } from './storyStats'
 import type { StoryPost } from './firestore'
 import type { DetectionRow } from './types'
@@ -191,5 +191,82 @@ describe('stelzShare', () => {
     )
     // 1 hit out of 2 analysed = 50%, not 33% of all three.
     expect(stelzShare(storyRollup(rows))).toBeCloseTo(50)
+  })
+})
+
+describe('proof that something looked', () => {
+  // The bug this pins: /stories and the dashboard both joined their preview
+  // posts against an EMPTY detection array. Sixty-nine locally analysed
+  // stories rendered as "nog niet geanalyseerd" and the page reported 0
+  // analysed while verdicts.jsonl held 69 of them. Nothing threw.
+  it('keeps the preview verdicts instead of dropping them', () => {
+    const posts = [post({ postId: 'p1', creatorHandle: 'anna' })]
+    const dets = [det({ post_id: 'p1', detected: false })]
+    const src = storySource(posts, dets, [], [])
+    expect(src.preview).toBe(true)
+    expect(src.detections).toHaveLength(1)
+    expect(joinStories(src.posts, src.detections)[0].verdict).toBe('absent')
+  })
+
+  it('falls back to live data only when there is no preview', () => {
+    const live = storySource(null, null, [post({ postId: 'p9', creatorHandle: 'bo' })], [])
+    expect(live.preview).toBe(false)
+    expect(live.posts).toHaveLength(1)
+  })
+
+  it('a preview with posts but no verdict file stays honest', () => {
+    // Not a crash and not a fabricated miss — just unjudged.
+    const src = storySource([post({ postId: 'p1', creatorHandle: 'anna' })], null, [], [])
+    expect(joinStories(src.posts, src.detections)[0].verdict).toBe('unanalysed')
+  })
+
+  it('counts one image per detection document — the production shape', () => {
+    // detect_video calls detect_image once per frame, so a 13-image verdict is
+    // 13 documents. The count is what separates "we found nothing" from "we
+    // never looked", so it has to come from the documents, not be assumed.
+    const rows = joinStories(
+      [post({ postId: 'v1', creatorHandle: 'anna', mediaType: 'video' })],
+      [0, 1, 2, 3].map((i) =>
+        det({ post_id: 'v1', detection_id: `d${i}`, frame_idx: i, detected: false })),
+    )
+    expect(rows[0].framesJudged).toBe(4)
+  })
+
+  it('believes a row that states how many frames one call covered', () => {
+    // The local analyser batches a video into ONE Gemini call, so counting
+    // documents would report "1 beeld" for a thirteen-frame video.
+    const rows = joinStories(
+      [post({ postId: 'v2', creatorHandle: 'anna', mediaType: 'video' })],
+      [det({ post_id: 'v2', detected: false, frames_judged: 13 })],
+    )
+    expect(rows[0].framesJudged).toBe(13)
+  })
+
+  it('is zero images for a story nothing judged', () => {
+    const rows = joinStories([post({ postId: 'p1', creatorHandle: 'anna' })], [])
+    expect(rows[0].framesJudged).toBe(0)
+    expect(storyRollup(rows).imagesSeen).toBe(0)
+    expect(storyRollup(rows).judged).toBe(0)
+  })
+
+  it('totals judged stories and images seen across the set', () => {
+    const rows = joinStories(
+      [
+        post({ postId: 'p1', creatorHandle: 'anna' }),
+        post({ postId: 'v1', creatorHandle: 'anna', mediaType: 'video' }),
+        post({ postId: 'p3', creatorHandle: 'bo' }),   // never analysed
+      ],
+      [
+        det({ post_id: 'p1', detected: false }),
+        det({ post_id: 'v1', detected: false, frames_judged: 7 }),
+      ],
+    )
+    const r = storyRollup(rows)
+    expect(r.stories).toBe(3)
+    expect(r.judged).toBe(2)
+    expect(r.unanalysed).toBe(1)
+    // 1 photo + 7 video images. Not 2 — the story count hides the video work
+    // entirely, which is why the KPI reports images.
+    expect(r.imagesSeen).toBe(8)
   })
 })

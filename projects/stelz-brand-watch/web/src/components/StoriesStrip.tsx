@@ -38,7 +38,8 @@ export function StoriesStrip({
 }: {
   rows: StoryRow[]
   state: StoriesState | null
-  /** Optional: the drawer only opens for a story that was actually analysed. */
+  /** Optional: opens the story panel. Every tile opens, analysed or not — for
+   *  an unjudged story "nothing looked at this yet" is the thing to show. */
   onOpen?: (row: StoryRow) => void
   onFetch?: () => void
   fetching?: boolean
@@ -55,6 +56,7 @@ export function StoriesStrip({
   const [onlyHits, setOnlyHits] = useState(false)
   const feed = splitByExpiry(rows)
   const hits = feed.all.filter((r) => isStelzStory(r.verdict))
+  const judged = feed.all.filter((r) => r.verdict !== 'unanalysed').length
   const shown = (onlyHits ? hits : feed.all).slice(0, SHOWN)
 
   return (
@@ -68,8 +70,13 @@ export function StoriesStrip({
           )}
           {feed.active.length > 0 && feed.expired.length > 0 && ' · '}
           {feed.expired.length > 0 && `${feed.expired.length} verlopen`}
-          {feed.all.length > 0 && hits.length > 0 && (
-            <span className="text-[var(--color-good)]"> · {hits.length}× Stëlz</span>
+          {/* "0 × Stëlz" is only meaningful once something looked, so the
+              count of judged stories carries it. Saying nothing here made a
+              swept-and-analysed roster look identical to an untouched one. */}
+          {feed.all.length > 0 && judged > 0 && (
+            hits.length > 0
+              ? <span className="text-[var(--color-good)]"> · {hits.length}× Stëlz</span>
+              : <span> · {judged} beoordeeld, geen Stëlz</span>
           )}
         </span>
 
@@ -107,7 +114,10 @@ export function StoriesStrip({
       {preview && (
         <p className="px-4 py-2.5 text-[12px] text-[var(--color-warn)] border-b border-[var(--color-border)]">
           Preview: echte gescrapte stories uit een lokaal bestand, niet uit de database.
-          Nog niet geanalyseerd, dus nog geen Stëlz-oordeel.
+          {judged > 0
+            ? ` Beoordeeld met hetzelfde model en dezelfde referentiefoto's als productie —
+               ${judged} van ${feed.all.length}.`
+            : ' Nog niet geanalyseerd, dus nog geen Stëlz-oordeel.'}
         </p>
       )}
 
