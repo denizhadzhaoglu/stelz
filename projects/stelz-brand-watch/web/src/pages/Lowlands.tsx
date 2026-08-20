@@ -96,14 +96,16 @@ export default function LowlandsPage() {
       ) : (
         <Card className="p-5 space-y-4">
           <div className="text-[13px] text-[var(--color-ink-muted)] leading-relaxed max-w-2xl">
-            De lijst hieronder is overgenomen uit de Stelz-sheet (28 creators, 53 profielen) en is
-            nog aan te passen vóór het importeren. Importeren maakt het project
+            De lijst hieronder is overgenomen uit de Stelz-sheet (28 creators, 53 profielen).
+            Elke cel is direct aan te passen — klik op een naam of handle om te corrigeren,
+            vink rijen uit die niet mee moeten, of voeg rijen toe. Importeren maakt het project
             &ldquo;{LOWLANDS_SEED_NAME}&rdquo; aan op een 12-uurs scancadans: elke Run scan pakt
             due creators mee en alles waar Stëlz in beeld is verschijnt in de feed.
           </div>
           <div className="text-[11px] text-[var(--color-warn)]">
             ⚠ Check rij 3 (Rein van Duivenboden): de TikTok-handle was slecht leesbaar in de
-            bron-sheet. Een verkeerde handle kost niets, maar levert ook niets op.
+            bron-sheet — vergelijk met de sheet en pas hem hier direct in de tabel aan.
+            Een verkeerde handle kost niets, maar levert ook niets op.
           </div>
           <PasteImport
             initialText={LOWLANDS_SEED}
