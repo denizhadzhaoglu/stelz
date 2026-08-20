@@ -3,7 +3,7 @@
 // pinned here, plus a pre-flight over the actual Lowlands seed so a
 // transcription typo fails CI instead of a live import.
 import { describe, expect, it } from 'vitest'
-import { extractHandle, parseCreatorList } from './importList'
+import { buildSelection, extractHandle, parseCreatorList, toEditableRows } from './importList'
 import { LOWLANDS_SEED } from '../data/lowlandsSeed'
 import { splitCreatorId } from './projects'
 
@@ -101,6 +101,52 @@ describe('parseCreatorList', () => {
     const out = parseCreatorList('Anna\thttps://www.instagram.com/p/xyz/\tGeen')
     expect(out.rows[0].creatorIds).toEqual([])
     expect(out.rows[0].warnings).toHaveLength(1)
+  })
+})
+
+describe('editable-table helpers', () => {
+  it('toEditableRows keeps handles, empties absent cells, keeps raw junk to fix', () => {
+    const rows = toEditableRows(parseCreatorList(
+      'Anna\thttps://www.instagram.com/anna/\tGeen\n' +
+      'Broken\thttps://www.instagram.com/p/xyz/\t@broken',
+    ))
+    expect(rows[0]).toEqual({ name: 'Anna', instagram: 'anna', tiktok: '', included: true })
+    // The unparseable cell survives verbatim so the user sees what to fix.
+    expect(rows[1].instagram).toBe('https://www.instagram.com/p/xyz/')
+    expect(rows[1].tiktok).toBe('broken')
+  })
+
+  it('buildSelection re-validates edited cells like a fresh paste', () => {
+    const out = buildSelection([
+      { name: 'Rein van Duivenboden', instagram: 'rvdofficial', tiktok: '@ReinVD', included: true },
+      { name: 'Uitgezet', instagram: 'weg', tiktok: '', included: false },
+      { name: 'Kapot', instagram: 'niet geldig!', tiktok: '', included: true },
+    ])
+    expect(out.creatorIds).toEqual(['instagram_rvdofficial', 'tiktok_reinvd'])
+    expect(out.names).toEqual({
+      instagram_rvdofficial: 'Rein van Duivenboden',
+      tiktok_reinvd: 'Rein van Duivenboden',
+    })
+    // Excluded rows contribute nothing; broken cells warn instead of vanishing.
+    expect(out.warnings).toHaveLength(1)
+    expect(out.warnings[0]).toMatch(/rij 3/)
+  })
+
+  it('buildSelection dedupes across rows with a warning', () => {
+    const out = buildSelection([
+      { name: 'A', instagram: 'anna', tiktok: '', included: true },
+      { name: 'B', instagram: 'anna', tiktok: '', included: true },
+    ])
+    expect(out.creatorIds).toEqual(['instagram_anna'])
+    expect(out.warnings[0]).toMatch(/dubbele/)
+    expect(out.names.instagram_anna).toBe('A')
+  })
+
+  it('the seed round-trips through the editable table unchanged', () => {
+    const out = buildSelection(toEditableRows(parseCreatorList(LOWLANDS_SEED)))
+    expect(out.creatorIds).toHaveLength(53)
+    expect(out.warnings).toEqual([])
+    expect(Object.keys(out.names)).toHaveLength(53)
   })
 })
 

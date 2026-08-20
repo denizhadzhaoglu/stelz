@@ -14,6 +14,10 @@ export type ImportRow = {
   name: string | null
   instagram: string | null
   tiktok: string | null
+  // The cells as pasted, so an editor can show what FAILED to parse for the
+  // user to fix, instead of a silently emptied field.
+  rawInstagram: string
+  rawTiktok: string
   creatorIds: string[]
   warnings: string[]
 }
@@ -114,6 +118,8 @@ export function parseCreatorList(text: string): ParsedImport {
       name,
       instagram: ig.handle,
       tiktok: tt.handle,
+      rawInstagram: cells[1] ?? '',
+      rawTiktok: cells[2] ?? '',
       creatorIds: [],
       warnings: [ig.warning, tt.warning].filter((w): w is string => w != null),
     }
@@ -138,6 +144,72 @@ export function parseCreatorList(text: string): ParsedImport {
   }
 
   return { rows, creatorIds, names, warnings }
+}
+
+// ── Editable-table support ──────────────────────────────────────────────
+//
+// After the paste is parsed, the preview table is the editor: each cell can
+// be corrected by hand (the client's sheet had at least one barely-legible
+// handle). The table's state is plain rows of strings; this turns them into
+// the same {creatorIds, names} contract the parser produces, re-validating
+// every cell through extractHandle so a manual edit gets exactly the same
+// scrutiny as a pasted one.
+
+export type EditableRow = {
+  name: string
+  instagram: string
+  tiktok: string
+  included: boolean
+}
+
+export function buildSelection(rows: EditableRow[]): {
+  creatorIds: string[]
+  names: Record<string, string>
+  warnings: string[]
+} {
+  const creatorIds: string[] = []
+  const names: Record<string, string> = {}
+  const warnings: string[] = []
+  const seen = new Set<string>()
+
+  rows.forEach((row, i) => {
+    if (!row.included) return
+    for (const [platform, raw] of [['instagram', row.instagram], ['tiktok', row.tiktok]] as const) {
+      const { handle, warning } = extractHandle(raw, platform)
+      if (warning) {
+        warnings.push(`rij ${i + 1}: ${warning}`)
+        continue
+      }
+      if (!handle) continue
+      const cid = `${platform}_${handle}`
+      if (seen.has(cid)) {
+        warnings.push(`rij ${i + 1}: dubbele handle overgeslagen (${cid})`)
+        continue
+      }
+      seen.add(cid)
+      creatorIds.push(cid)
+      const name = row.name.trim()
+      if (name) names[cid] = name.slice(0, 120)
+    }
+  })
+
+  return { creatorIds, names, warnings }
+}
+
+/** Parsed rows → editable rows. A cell that failed to parse keeps its RAW
+ * pasted value so the user sees what to fix; a cell marked absent ("Geen")
+ * becomes empty. */
+export function toEditableRows(parsed: ParsedImport): EditableRow[] {
+  return parsed.rows.map((r) => ({
+    name: r.name ?? '',
+    instagram: r.instagram ?? (hasWarningFor(r.rawInstagram, 'instagram') ? r.rawInstagram : ''),
+    tiktok: r.tiktok ?? (hasWarningFor(r.rawTiktok, 'tiktok') ? r.rawTiktok : ''),
+    included: true,
+  }))
+}
+
+function hasWarningFor(raw: string, platform: 'instagram' | 'tiktok'): boolean {
+  return extractHandle(raw, platform).warning != null
 }
 
 function decodeSafe(s: string): string {

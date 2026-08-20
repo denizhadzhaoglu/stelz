@@ -1,14 +1,23 @@
-// Paste-import — textarea → parsed preview → one bulk add.
+// Paste-import — paste once, then the preview table IS the editor.
 //
-// The preview table is the contract: what the user sees checked is exactly
-// what one addCreators call sends (the parser is pure and shared with the
-// seed's pre-flight test). Rows with unparseable cells surface their warning
-// inline instead of being silently dropped — for a campaign roster, a creator
-// that quietly falls off the list is the worst possible failure mode.
+// The client's sheet is the starting point, not the truth: at least one handle
+// in it was barely legible, so every cell (name, Instagram, TikTok) can be
+// corrected by hand before anything is imported. Edited cells go through the
+// exact same extractHandle validation as pasted ones (buildSelection), so what
+// the footer counts is exactly what one addCreators call sends. Rows with a
+// broken cell keep the raw pasted value visible — a creator that silently
+// falls off a campaign roster is the worst possible failure mode.
 
 import { useMemo, useState } from 'react'
 import { Button, Textarea } from './ui'
-import { parseCreatorList } from '../lib/importList'
+import {
+  buildSelection, extractHandle, parseCreatorList, toEditableRows, type EditableRow,
+} from '../lib/importList'
+
+type Row = EditableRow & { key: number }
+
+let nextKey = 0
+const withKeys = (rows: EditableRow[]): Row[] => rows.map((r) => ({ ...r, key: nextKey++ }))
 
 export function PasteImport({
   initialText = '',
@@ -23,55 +32,65 @@ export function PasteImport({
   onImport: (creatorIds: string[], names: Record<string, string>) => void
   placeholder?: string
 }) {
-  const [text, setText] = useState(initialText)
-  const [excluded, setExcluded] = useState<Set<number>>(new Set())
+  const [rows, setRows] = useState<Row[]>(() => withKeys(toEditableRows(parseCreatorList(initialText))))
+  const [text, setText] = useState('')
+  // With a pre-filled list the table leads; without one, pasting is step 1.
+  const [showPaste, setShowPaste] = useState(rows.length === 0)
 
-  const parsed = useMemo(() => parseCreatorList(text), [text])
+  const selection = useMemo(() => buildSelection(rows), [rows])
+  const igCount = selection.creatorIds.filter((c) => c.startsWith('instagram_')).length
+  const ttCount = selection.creatorIds.length - igCount
 
-  const selectedIds: string[] = []
-  const selectedNames: Record<string, string> = {}
-  let igCount = 0
-  let ttCount = 0
-  for (const row of parsed.rows) {
-    if (excluded.has(row.line)) continue
-    for (const cid of row.creatorIds) {
-      selectedIds.push(cid)
-      if (parsed.names[cid]) selectedNames[cid] = parsed.names[cid]
-      if (cid.startsWith('instagram_')) igCount++
-      else ttCount++
-    }
-  }
+  const patchRow = (key: number, patch: Partial<EditableRow>) =>
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
 
-  const toggleRow = (line: number) => {
-    setExcluded((prev) => {
-      const next = new Set(prev)
-      if (next.has(line)) next.delete(line)
-      else next.add(line)
-      return next
-    })
+  const applyPaste = () => {
+    const parsed = parseCreatorList(text)
+    if (parsed.rows.length === 0) return
+    setRows(withKeys(toEditableRows(parsed)))
+    setText('')
+    setShowPaste(false)
   }
 
   return (
     <div className="space-y-4">
-      <Textarea
-        rows={8}
-        value={text}
-        onChange={(e) => { setText(e.target.value); setExcluded(new Set()) }}
-        placeholder={placeholder}
-        className="font-mono text-[12px]"
-        spellCheck={false}
-      />
-
-      {parsed.warnings.length > 0 && (
-        <ul className="text-[11px] text-[var(--color-warn)] space-y-0.5">
-          {parsed.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
-        </ul>
+      {showPaste ? (
+        <div className="space-y-2">
+          <Textarea
+            rows={8}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={placeholder}
+            className="font-mono text-[12px]"
+            spellCheck={false}
+          />
+          <div className="flex items-center gap-3">
+            <Button size="sm" variant="secondary" disabled={!text.trim()} onClick={applyPaste}>
+              {rows.length > 0 ? 'Vervang tabel door geplakte lijst' : 'Zet om naar tabel'}
+            </Button>
+            {rows.length > 0 && (
+              <button
+                onClick={() => setShowPaste(false)}
+                className="text-[11px] text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)] underline"
+              >
+                sluiten — tabel behouden
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowPaste(true)}
+          className="text-[11px] text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)] underline"
+        >
+          Opnieuw plakken uit een sheet ▾
+        </button>
       )}
 
-      {parsed.rows.length > 0 && (
-        <div className="border border-[var(--color-border)] max-h-80 overflow-y-auto">
+      {rows.length > 0 && (
+        <div className="border border-[var(--color-border)] max-h-96 overflow-y-auto">
           <table className="w-full text-[12px]">
-            <thead className="sticky top-0 bg-[var(--color-bg)]">
+            <thead className="sticky top-0 bg-[var(--color-bg)] z-10">
               <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--color-ink-subtle)]">
                 <th className="px-2 py-1.5 w-8"></th>
                 <th className="px-2 py-1.5">Naam</th>
@@ -80,23 +99,35 @@ export function PasteImport({
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-border)]">
-              {parsed.rows.map((row) => (
-                <tr key={row.line} className={excluded.has(row.line) ? 'opacity-40' : ''}>
-                  <td className="px-2 py-1.5">
+              {rows.map((row) => (
+                <tr key={row.key} className={row.included ? '' : 'opacity-40'}>
+                  <td className="px-2 py-1.5 align-top">
                     <input
                       type="checkbox"
-                      checked={!excluded.has(row.line)}
-                      disabled={row.creatorIds.length === 0}
-                      onChange={() => toggleRow(row.line)}
+                      checked={row.included}
+                      onChange={() => patchRow(row.key, { included: !row.included })}
                     />
                   </td>
-                  <td className="px-2 py-1.5 font-medium">{row.name ?? '—'}</td>
-                  <td className="px-2 py-1.5 tabular-nums">{row.instagram ? `@${row.instagram}` : '—'}</td>
-                  <td className="px-2 py-1.5 tabular-nums">
-                    {row.tiktok ? `@${row.tiktok}` : '—'}
-                    {row.warnings.length > 0 && (
-                      <span className="block text-[10px] text-[var(--color-warn)]">{row.warnings.join(' · ')}</span>
-                    )}
+                  <td className="px-2 py-1 align-top">
+                    <CellInput
+                      value={row.name}
+                      onChange={(v) => patchRow(row.key, { name: v })}
+                      className="font-medium"
+                    />
+                  </td>
+                  <td className="px-2 py-1 align-top">
+                    <HandleCell
+                      value={row.instagram}
+                      platform="instagram"
+                      onChange={(v) => patchRow(row.key, { instagram: v })}
+                    />
+                  </td>
+                  <td className="px-2 py-1 align-top">
+                    <HandleCell
+                      value={row.tiktok}
+                      platform="tiktok"
+                      onChange={(v) => patchRow(row.key, { tiktok: v })}
+                    />
                   </td>
                 </tr>
               ))}
@@ -105,19 +136,74 @@ export function PasteImport({
         </div>
       )}
 
+      {rows.length > 0 && (
+        <button
+          onClick={() => setRows((rs) => [...rs, ...withKeys([{ name: '', instagram: '', tiktok: '', included: true }])])}
+          className="text-[11px] text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)]"
+        >
+          + Rij toevoegen
+        </button>
+      )}
+
+      {selection.warnings.length > 0 && (
+        <ul className="text-[11px] text-[var(--color-warn)] space-y-0.5">
+          {selection.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
+        </ul>
+      )}
+
       <div className="flex items-center justify-between gap-3">
         <span className="text-[11px] text-[var(--color-ink-subtle)]">
-          {selectedIds.length} creators geselecteerd ({igCount} Instagram, {ttCount} TikTok)
+          {selection.creatorIds.length} profielen geselecteerd ({igCount} Instagram, {ttCount} TikTok)
         </span>
         <Button
           variant="primary"
           size="sm"
-          disabled={busy || selectedIds.length === 0}
-          onClick={() => onImport(selectedIds, selectedNames)}
+          disabled={busy || selection.creatorIds.length === 0}
+          onClick={() => onImport(selection.creatorIds, selection.names)}
         >
-          {busy ? 'Bezig…' : submitLabel(selectedIds.length)}
+          {busy ? 'Bezig…' : submitLabel(selection.creatorIds.length)}
         </Button>
       </div>
+    </div>
+  )
+}
+
+function CellInput({
+  value, onChange, className = '', invalid = false,
+}: {
+  value: string
+  onChange: (v: string) => void
+  className?: string
+  invalid?: boolean
+}) {
+  return (
+    <input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      spellCheck={false}
+      className={`w-full min-w-24 bg-transparent border-b py-0.5 text-[12px] focus:outline-none ${
+        invalid
+          ? 'border-[var(--color-warn)]'
+          : 'border-transparent hover:border-[var(--color-border-strong)] focus:border-[var(--color-ink)]'
+      } ${className}`}
+    />
+  )
+}
+
+function HandleCell({
+  value, platform, onChange,
+}: {
+  value: string
+  platform: 'instagram' | 'tiktok'
+  onChange: (v: string) => void
+}) {
+  // Same validator as the parser and the final selection — a cell edit is a
+  // fresh paste of one cell, nothing less strict.
+  const { warning } = value.trim() ? extractHandle(value, platform) : { warning: null }
+  return (
+    <div>
+      <CellInput value={value} onChange={onChange} invalid={warning != null} className="tabular-nums" />
+      {warning && <div className="text-[10px] text-[var(--color-warn)] mt-0.5">{warning}</div>}
     </div>
   )
 }
