@@ -9,6 +9,7 @@ import Home from './pages/Home'
 import Creator from './pages/Creator'
 import Sounds from './pages/Sounds'
 import StoriesPage from './pages/Stories'
+import CampaignPage from './pages/Campaign'
 import { useMembership } from './lib/membership'
 import Costs from './pages/Costs'
 import ProjectPage from './pages/Project'
@@ -39,6 +40,7 @@ const NAV: { to: string; label: string; matchPrefix?: string; adminOnly?: boolea
   // matchPrefix '/projects': the Lowlands tab stays lit while reading any
   // project roster — the tab redirects there once the roster exists.
   { to: '/lowlands', label: 'Lowlands', matchPrefix: '/projects' },
+  { to: '/campagne', label: 'Campagne', matchPrefix: '/campagne' },
   { to: '/stories', label: 'Stories', matchPrefix: '/stories' },
   { to: '/sounds', label: 'Sounds', matchPrefix: '/sounds' },
   { to: '/kosten', label: 'Kosten', matchPrefix: '/kosten', adminOnly: true },
@@ -78,6 +80,7 @@ export default function App() {
       <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
         <Route path="/" element={<Home />} />
         <Route path="/creators/:handle" element={<Creator />} />
+        <Route path="/campagne" element={<CampaignPage />} />
         <Route path="/stories" element={<StoriesPage />} />
         <Route path="/kosten" element={<Costs />} />
         <Route path="/sounds" element={<Sounds />} />

@@ -34,11 +34,12 @@ import { useStoryPostsPreview, useStoryPreview } from '../lib/devPreview'
 /** Hard ceiling on one fetch. Stated on screen when it binds. */
 const FETCH_LIMIT = 2000
 
-type Filter = 'all' | 'stelz' | 'none' | 'pending'
+type Filter = 'all' | 'stelz' | 'near' | 'none' | 'pending'
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'Alle stories' },
   { id: 'stelz', label: 'Met Stëlz' },
+  { id: 'near', label: 'Mogelijk Stëlz' },
   { id: 'none', label: 'Zonder Stëlz' },
   { id: 'pending', label: 'Nog niet geanalyseerd' },
 ]
@@ -46,6 +47,8 @@ const FILTERS: { id: Filter; label: string }[] = [
 const VERDICT_TONE: Record<StoryVerdict, string> = {
   visible: 'bg-[var(--color-good)] text-white',
   small: 'bg-[var(--color-warn)] text-white',
+  // Accent, not warn: a near miss is a question for a human, not a weaker hit.
+  near: 'bg-[var(--color-accent)] text-white',
   absent: 'bg-[var(--color-ink)]/70 text-white',
   unanalysed: 'bg-[var(--color-ink-subtle)] text-white',
   rejected: 'bg-[var(--color-bad)] text-white',
@@ -140,6 +143,7 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
     let out = scoped
     if (creator) out = out.filter((r) => r.creatorHandle === creator)
     if (filter === 'stelz') out = out.filter((r) => isStelzStory(r.verdict))
+    if (filter === 'near') out = out.filter((r) => r.verdict === 'near')
     if (filter === 'none') out = out.filter((r) => r.verdict === 'absent')
     if (filter === 'pending') out = out.filter((r) => r.verdict === 'unanalysed')
     return [...out].sort((a, b) => (b.postedAt ?? '').localeCompare(a.postedAt ?? ''))
@@ -282,6 +286,7 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
               >
                 {f.label}
                 {f.id === 'stelz' && rollup.withStelz > 0 && ` · ${rollup.withStelz}`}
+                {f.id === 'near' && rollup.near > 0 && ` · ${rollup.near}`}
                 {f.id === 'pending' && rollup.unanalysed > 0 && ` · ${rollup.unanalysed}`}
               </button>
             ))}
@@ -352,7 +357,9 @@ function StoryCard({ row, onOpen }: { row: StoryRow; onOpen: () => void }) {
     <>
       <MediaTile src={storyImage(row)} size="story" alt={`Story van @${row.creatorHandle}`}>
         <span className={`absolute top-1 left-1 text-[9px] uppercase tracking-wider px-1.5 py-0.5 ${VERDICT_TONE[row.verdict]}`}>
-          {row.verdict === 'visible' ? 'Stëlz' : row.verdict === 'small' ? 'Stëlz klein' : VERDICT_LABEL[row.verdict]}
+          {row.verdict === 'visible' ? 'Stëlz'
+            : row.verdict === 'small' ? 'Stëlz klein'
+            : row.verdict === 'near' ? 'Mogelijk' : VERDICT_LABEL[row.verdict]}
         </span>
         {/* Only when the verdict rests on more than the one image you are
             looking at. For a photo the verdict chip already says it was
@@ -383,7 +390,9 @@ function StoryCard({ row, onOpen }: { row: StoryRow; onOpen: () => void }) {
   const cls = `shrink-0 w-[112px] block border text-left transition-colors ${
     isStelzStory(row.verdict)
       ? 'border-[var(--color-good)] hover:border-[var(--color-ink)]'
-      : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)]'
+      : row.verdict === 'near'
+        ? 'border-[var(--color-accent)] hover:border-[var(--color-ink)]'
+        : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)]'
   }`
   // Opens the analysis, not Instagram. The permalink dies with the story — it
   // was the tile's only action, so a day later every tile led nowhere, and the

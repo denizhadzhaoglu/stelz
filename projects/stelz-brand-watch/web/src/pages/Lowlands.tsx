@@ -13,7 +13,7 @@
 // tier_1 allowance, and two Run-scan clicks a day cover the festival weekend.
 
 import { useCallback, useEffect, useState } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { Card, PageShell } from '../components/ui'
 import { PasteImport } from '../components/PasteImport'
 import { fetchProjects, projectsAction, type Project } from '../lib/data'
@@ -85,6 +85,17 @@ export default function LowlandsPage() {
     <PageShell
       title="Lowlands"
       subtitle="Importeer de creatorlijst van Stelz — daarna is deze tab de roster"
+      actions={
+        // The roster answers "who is on the list"; the campaign page answers
+        // "what did they actually post, on either platform". Without a link
+        // between them the second page is only findable by knowing it exists.
+        <Link
+          to="/campagne"
+          className="text-[12px] px-3 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-ink)] transition-colors"
+        >
+          Campagne: wie plaatste wat →
+        </Link>
+      }
     >
       {error && <Card className="p-4 mb-4 text-[12px] text-[var(--color-bad)]">{error}</Card>}
 

@@ -79,6 +79,18 @@ export type DetectionRow = {
   // and by any path that batches frames into a single call, where the documents
   // would otherwise under-report what was examined.
   frames_judged?: number | null
+  // The model called this a hit and the gate or the verifier overturned it.
+  // Set explicitly by the local analyser; in production it is derived from
+  // `gate` / `verify_verdict` (see storyStats.isNearMiss), because those two
+  // already carry the same fact. Worth its own state on screen: a picture the
+  // detector argued about is not the same as one it had nothing to say about,
+  // and collapsing the two hides every disagreement the system ever had.
+  near_miss?: boolean | null
+  near_miss_reason?: string | null
+  // True when a video's clip could not be obtained and only its cover was
+  // judged. A thumbnail is a chosen frame, so "nothing found" on a cover is a
+  // much weaker claim than "nothing found" across the whole clip.
+  cover_only?: boolean | null
   post_id?: string | null    // groups multiple frame-hits of the same post
   frame_hits?: number        // UI-only: how many detections were collapsed into this row
   // UI-only, same as frame_hits: attached by signal.withSignal() after dedupe.

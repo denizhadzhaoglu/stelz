@@ -25,28 +25,31 @@
 import { useEffect, useState } from 'react'
 import type { DetectionRow } from './types'
 import type { StoryPost } from './firestore'
+import type { CampaignItem } from './campaign'
+
+export type PreviewKind = 'stories' | 'campaign'
 
 /** Pure matching rule, testable without a DOM. Exact match only: `?preview=1`
  *  and `?preview=storiesx` must not switch anything on. */
-export function matchesPreview(search: string, kind: 'stories'): boolean {
+export function matchesPreview(search: string, kind: PreviewKind): boolean {
   return new URLSearchParams(search).get('preview') === kind
 }
 
-function usePreviewFixture<T>(file: string): T[] | null {
+function usePreviewFixture<T>(file: string, kind: PreviewKind): T[] | null {
   const [rows, setRows] = useState<T[] | null>(null)
   useEffect(() => {
     // Inline, not extracted — see rule 1 above. Both checks have to sit in the
     // block they guard for the minifier to fold them away.
     if (!import.meta.env.DEV) return
     if (!file) return
-    if (!matchesPreview(window.location.search, 'stories')) return
+    if (!matchesPreview(window.location.search, kind)) return
     let cancelled = false
     void fetch(file)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => { if (!cancelled && Array.isArray(data)) setRows(data as T[]) })
       .catch(() => { /* no fixture generated yet — stay on live data */ })
     return () => { cancelled = true }
-  }, [file])
+  }, [file, kind])
   return rows
 }
 
@@ -59,11 +62,26 @@ function usePreviewFixture<T>(file: string): T[] | null {
 
 /** Story detections for the strip, or null outside preview mode. */
 export function useStoryPreview(): DetectionRow[] | null {
-  return usePreviewFixture<DetectionRow>(import.meta.env.DEV ? '/preview-stories.json' : '')
+  return usePreviewFixture<DetectionRow>(
+    import.meta.env.DEV ? '/preview-stories.json' : '', 'stories')
 }
 
 /** Story POSTS for the /stories page — the page is driven by posts, so the
  *  preview has to supply posts or it exercises a different path than prod. */
 export function useStoryPostsPreview(): StoryPost[] | null {
-  return usePreviewFixture<StoryPost>(import.meta.env.DEV ? '/preview-story-posts.json' : '')
+  return usePreviewFixture<StoryPost>(
+    import.meta.env.DEV ? '/preview-story-posts.json' : '', 'stories')
+}
+
+/** Campaign items — IG stories, IG posts and TikToks in one list. */
+export function useCampaignPreview(): CampaignItem[] | null {
+  return usePreviewFixture<CampaignItem>(
+    import.meta.env.DEV ? '/preview-campaign.json' : '', 'campaign')
+}
+
+/** The verdicts that go with them. Both halves or neither — see
+ *  storyStats.storySource for what happens when only one arrives. */
+export function useCampaignDetectionsPreview(): DetectionRow[] | null {
+  return usePreviewFixture<DetectionRow>(
+    import.meta.env.DEV ? '/preview-campaign-detections.json' : '', 'campaign')
 }

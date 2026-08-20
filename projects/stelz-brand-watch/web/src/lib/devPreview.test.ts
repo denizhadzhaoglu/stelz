@@ -47,7 +47,15 @@ describe('preview mode is dev-only', () => {
     // before being caught by grepping the built bundle.
     // `return ...` anchors this to call sites; without it the regex also
     // matched the function's own declaration and read its parameter list.
-    const calls = [...src.matchAll(/return usePreviewFixture<[^>]+>\(([^\n]*)\)/g)].map((m) => m[1])
+    // [\s\S] rather than [^\n]: the calls wrap across lines, and a line-bound
+    // regex silently matched nothing — which is why the assertion below that
+    // there IS at least one call site is the load-bearing half of this test.
+    const calls = [...src.matchAll(/return usePreviewFixture<[^>]+>\(([\s\S]*?)\)\n/g)]
+      .map((m) => m[1])
+    // One per exported hook. A hook added without a DEV gate must break this,
+    // not slip past a regex that stopped matching.
+    const hooks = [...src.matchAll(/^export function use\w+Preview\b/gm)].length
+    expect(calls.length).toBe(hooks)
     expect(calls.length).toBeGreaterThan(0)
     for (const c of calls) {
       expect(c, `argument must be DEV-gated: ${c}`).toContain("import.meta.env.DEV ? '/")
