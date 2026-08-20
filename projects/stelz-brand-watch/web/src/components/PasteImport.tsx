@@ -73,7 +73,7 @@ export function PasteImport({
                 onClick={() => setShowPaste(false)}
                 className="text-[11px] text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)] underline"
               >
-                annuleren
+                sluiten — tabel behouden
               </button>
             )}
           </div>
