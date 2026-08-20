@@ -1,5 +1,10 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import type { ReactNode, ButtonHTMLAttributes, InputHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import { PAGE_WIDTH, type PageWidth } from './mediaTokens'
+
+export { CARD_GRID, HAIRLINE_GRID, TILE, PAGE_WIDTH } from './mediaTokens'
+export type { TileSize, PageWidth } from './mediaTokens'
 
 export function Logo({ small = false }: { small?: boolean }) {
   return (
@@ -14,32 +19,55 @@ export function PageShell({
   title,
   subtitle,
   actions,
+  crumbs,
+  width = 'default',
+  brandMark = true,
   children,
 }: {
   title: string
   subtitle?: string
   actions?: ReactNode
+  /** Trail back out of a detail page. Breadcrumbs, not history.back(): a page
+   *  reached from a shared link has no history to go back to. */
+  crumbs?: { label: string; to: string }[]
+  width?: PageWidth
+  /** Detail pages about a person lead with the person, not the brand logo. */
+  brandMark?: boolean
   children?: ReactNode
 }) {
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 xl:px-10 py-6 lg:py-8">
-      <div className="mb-6 lg:mb-8 pb-5 lg:pb-6 border-b border-[var(--color-border)] flex flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0 flex items-center gap-4">
-          <img
-            src="/stelz-logo.png"
-            alt="Stëlz"
-            className="w-12 h-12 lg:w-14 lg:h-14 shrink-0 object-contain"
-          />
-          <div className="min-w-0">
-            {subtitle && (
-              <div className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-1.5">
-                {subtitle}
-              </div>
+    <div className={PAGE_WIDTH[width]}>
+      <div className="mb-6 lg:mb-8 pb-5 lg:pb-6 border-b border-[var(--color-border)]">
+        {crumbs && crumbs.length > 0 && (
+          <nav className="mb-3 flex items-center gap-1.5 text-[11px] text-[var(--color-ink-subtle)]">
+            {crumbs.map((c, i) => (
+              <span key={c.to} className="flex items-center gap-1.5">
+                {i > 0 && <span aria-hidden>›</span>}
+                <Link to={c.to} className="hover:text-[var(--color-ink)] hover:underline">{c.label}</Link>
+              </span>
+            ))}
+          </nav>
+        )}
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0 flex items-center gap-4">
+            {brandMark && (
+              <img
+                src="/stelz-logo.png"
+                alt="Stëlz"
+                className="w-12 h-12 lg:w-14 lg:h-14 shrink-0 object-contain"
+              />
             )}
-            <h1 className="stelz-display text-[24px] sm:text-[28px] lg:text-[32px] leading-none text-[var(--color-ink)]">{title}</h1>
+            <div className="min-w-0">
+              {subtitle && (
+                <div className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-1.5">
+                  {subtitle}
+                </div>
+              )}
+              <h1 className="stelz-display text-[24px] sm:text-[28px] lg:text-[32px] leading-none text-[var(--color-ink)]">{title}</h1>
+            </div>
           </div>
+          {actions && <div className="flex items-center gap-2 flex-wrap">{actions}</div>}
         </div>
-        {actions && <div className="flex items-center gap-2 flex-wrap">{actions}</div>}
       </div>
       {children}
     </div>
@@ -211,30 +239,31 @@ export function formatFollowers(n: number | null | undefined): string | null {
   return n && n > 0 ? n.toLocaleString() : null
 }
 
-export function ImagePlaceholder({ label, aspect = 'aspect-square' }: { label?: string; aspect?: string }) {
-  return (
-    <div className={`${aspect} bg-[var(--color-bg)] border border-[var(--color-border)] flex items-center justify-center text-[10px] uppercase tracking-widest text-[var(--color-ink-subtle)]`}>
-      {label ?? 'image'}
-    </div>
-  )
-}
-
 export function Img({
   src,
   alt = '',
   className = '',
   fit = 'cover',
+  priority = false,
+  small = false,
 }: {
   src?: string | null
   alt?: string
   className?: string
   fit?: 'cover' | 'contain'
+  /** Hero image: fetch it eagerly and ahead of the grid below it. */
+  priority?: boolean
+  /** A 48px strip should not compete with the hero for bandwidth. */
+  small?: boolean
 }) {
   const [errored, setErrored] = useState(false)
   if (!src || errored) {
+    // w-full h-full is NOT optional here: without it the fallback collapses to
+    // text height inside an aspect box, so a feed whose Instagram CDN URLs have
+    // expired renders as a row of slivers and looks broken rather than empty.
     return (
-      <div className={`${className} bg-[var(--color-bg)] border border-[var(--color-border)] flex items-center justify-center text-[10px] uppercase tracking-widest text-[var(--color-ink-subtle)]`}>
-        no image
+      <div className={`${className} w-full h-full bg-[var(--color-bg)] border border-[var(--color-border)] flex items-center justify-center text-[10px] uppercase tracking-widest text-[var(--color-ink-subtle)]`}>
+        geen beeld
       </div>
     )
   }
@@ -242,7 +271,9 @@ export function Img({
     <img
       src={src}
       alt={alt}
-      loading="lazy"
+      loading={priority ? 'eager' : 'lazy'}
+      decoding="async"
+      fetchPriority={priority ? 'high' : small ? 'low' : 'auto'}
       onError={() => setErrored(true)}
       className={`${className} ${fit === 'cover' ? 'object-cover' : 'object-contain'} w-full h-full bg-[var(--color-bg)]`}
     />

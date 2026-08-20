@@ -5,7 +5,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   PageShell, Card, Badge, Button, Img, Avatar, Input, Tabs, formatFollowers, PRODUCT_LINE_LABEL,
+  CARD_GRID, HAIRLINE_GRID,
 } from '../components/ui'
+import { MediaTile } from '../components/MediaTile'
 import { Sparkline, LineChart, BarChart, Donut, StackedDayBars, bucketByDay, type Series } from '../components/Chart'
 import { DetectionDrawer } from '../components/DetectionDrawer'
 import {
@@ -316,7 +318,7 @@ function BriefingTab({
         {worthLook.length === 0 ? (
           <Card className="p-10 text-center text-[13px] text-[var(--color-ink-muted)]">No standout detections yet.</Card>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
+          <div className={HAIRLINE_GRID}>
             {worthLook.map((d) => (
               <PickCard key={d.detection_id} d={d} onOpen={() => onOpen(d)} />
             ))}
@@ -333,8 +335,8 @@ function BriefingTab({
             </header>
             <Card className="overflow-hidden">
               <div className="grid grid-cols-[120px_1fr]">
-                <div className="aspect-square border-r border-[var(--color-border)]">
-                  <Img src={biggestFan.topDetection ? imageUrlFor(biggestFan.topDetection) : null} />
+                <div className="border-r border-[var(--color-border)]">
+                  <MediaTile src={biggestFan.topDetection ? imageUrlFor(biggestFan.topDetection) : null} size="square" />
                 </div>
                 <div className="p-5">
                   <div className="flex items-center gap-2 mb-2">
@@ -736,7 +738,7 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
       ) : (
         <>
           {bands.clear.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className={CARD_GRID}>
               {bands.clear.map((d) => (
                 <FeedCard
                   key={d.detection_id}
@@ -785,7 +787,7 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
                   </button>
                 )}
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              <div className={CARD_GRID}>
                 {bands.review.map((d) => (
                   <FeedCard
                     key={d.detection_id}
@@ -899,8 +901,7 @@ function FeedCard({ d, isNew, onOpen, onReject }: { d: DetectionRow; isNew: bool
       className="cursor-pointer text-left bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-border-strong)] focus-visible:border-[var(--color-ink)] focus-visible:outline-none transition-colors flex flex-col group"
     >
       {/* Media */}
-      <div className="relative aspect-[4/5] bg-[var(--color-bg)] overflow-hidden">
-        <Img src={imageUrlFor(d)} />
+      <MediaTile src={imageUrlFor(d)} size="card">
         {isNew && (
           <span className="absolute top-2 left-2 text-[10px] uppercase tracking-widest bg-[var(--color-accent)] text-white px-2 py-0.5">
             New
@@ -930,7 +931,7 @@ function FeedCard({ d, isNew, onOpen, onReject }: { d: DetectionRow; isNew: bool
             ✕
           </button>
         )}
-      </div>
+      </MediaTile>
 
       {/* Body */}
       <div className="p-3.5 flex flex-col gap-2.5 flex-1">
@@ -1089,9 +1090,9 @@ function ReviewTab({ detections, allDetections }: { detections: DetectionRow[]; 
       <Card className="overflow-hidden">
         {/* Media */}
         <div className="relative bg-[var(--color-bg)]">
-          <div className="aspect-[4/3]">
-            <Img src={imageUrlFor(current)} fit="contain" />
-          </div>
+          {/* The judgement surface: contain, not cover — a moderator must see
+              the whole frame, not a crop of it. */}
+          <MediaTile src={imageUrlFor(current)} size="hero" fit="contain" priority />
           <span className="absolute top-3 right-3 text-[10px] uppercase tracking-widest bg-[var(--color-ink)]/80 text-white px-2 py-0.5">
             {current.platform === 'tiktok' ? 'TikTok' : 'Instagram'}
           </span>
@@ -1375,15 +1376,14 @@ function CreatorsTab({ detections, resonance, creatorProfiles }: {
               {/* Recent content strip */}
               <div className="grid grid-cols-4 gap-1">
                 {r.recent.map((d) => (
-                  <div key={d.detection_id} className="relative aspect-square bg-[var(--color-bg)] border border-[var(--color-border)] overflow-hidden">
-                    <Img src={imageUrlFor(d)} />
+                  <MediaTile key={d.detection_id} src={imageUrlFor(d)} size="thumb" className="border border-[var(--color-border)]">
                     {d.frame_idx != null && (
                       <span className="absolute bottom-0.5 right-0.5 text-[8px] bg-[var(--color-ink)]/80 text-white px-1">▶</span>
                     )}
-                  </div>
+                  </MediaTile>
                 ))}
                 {Array.from({ length: Math.max(0, 4 - r.recent.length) }).map((_, i) => (
-                  <div key={`e${i}`} className="aspect-square bg-[var(--color-bg)] border border-[var(--color-border)]" />
+                  <div key={`e${i}`} className="w-full pb-[100%] bg-[var(--color-bg)] border border-[var(--color-border)]" />
                 ))}
               </div>
 
@@ -2278,8 +2278,11 @@ function KpiTile({ label, value, sub }: { label: string; value: string; sub: str
 function PickCard({ d, onOpen }: { d: DetectionRow; onOpen: () => void }) {
   return (
     <div className="bg-[var(--color-surface)] flex flex-col">
-      <button onClick={onOpen} className="block aspect-[4/3] bg-[var(--color-bg)] text-left">
-        <Img src={imageUrlFor(d)} />
+      {/* Same tile size as the feed: one detection used to render 4:3 here and
+          4:5 there, so the identical post looked cropped differently depending
+          on which surface you found it on. */}
+      <button onClick={onOpen} className="block text-left w-full">
+        <MediaTile src={imageUrlFor(d)} size="card" />
       </button>
       <div className="p-4 flex flex-col gap-3 flex-1">
         <div className="flex items-center gap-2 flex-wrap">

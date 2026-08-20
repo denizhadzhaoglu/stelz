@@ -5,8 +5,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
-  PageShell, Card, Badge, Button, Img, Avatar, PRODUCT_LINE_LABEL,
+  PageShell, Card, Badge, Button, Avatar, PRODUCT_LINE_LABEL, CARD_GRID,
 } from '../components/ui'
+import { MediaTile } from '../components/MediaTile'
 import { imageUrlFor, dedupeByPost, parentPostKey, type DetectionRow, type ResonanceRow } from '../lib/types'
 import { fetchDetections, fetchResonanceForCreator, fetchCreatorProfile } from '../lib/data'
 import { DetectionDrawer } from '../components/DetectionDrawer'
@@ -183,7 +184,7 @@ export default function Creator() {
               <h2 className="stelz-display text-[22px] lg:text-[26px] leading-none text-[var(--color-ink)]">Where Stëlz shows up</h2>
             </header>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className={CARD_GRID}>
               {posts.map((d) => {
                 const conf = (d.confidence ?? 0) * 100
                 return (
@@ -192,8 +193,7 @@ export default function Creator() {
                     onClick={() => setActive(d)}
                     className="text-left bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-border-strong)] transition-colors flex flex-col"
                   >
-                    <div className="relative aspect-[4/5] bg-[var(--color-bg)] overflow-hidden">
-                      <Img src={imageUrlFor(d)} />
+                    <MediaTile src={imageUrlFor(d)} size="card">
                       {d.frame_idx != null && (
                         <span className="absolute bottom-2 right-2 text-[10px] bg-[var(--color-ink)]/80 text-white px-2 py-0.5">
                           ▶ video{(d.frame_hits ?? 0) > 1 ? ` · ${d.frame_hits} frames` : ''}
@@ -202,7 +202,7 @@ export default function Creator() {
                       {d.verified === true && (
                         <span className="absolute top-2 left-2 text-[10px] uppercase tracking-widest bg-[var(--color-good)] text-white px-2 py-0.5">✓</span>
                       )}
-                    </div>
+                    </MediaTile>
                     <div className="p-3 flex flex-col gap-1.5">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[11px] text-[var(--color-ink-muted)] truncate">

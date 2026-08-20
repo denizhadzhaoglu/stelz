@@ -6,8 +6,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { activeReferenceIds, REFERENCE_SLOTS } from '../lib/refselect'
 import {
-  PageShell, Card, Button, Badge, Field, Input, Textarea, Img,
+  PageShell, Card, Button, Badge, Field, Input, Textarea,
 } from '../components/ui'
+import { MediaTile } from '../components/MediaTile'
 import {
   fbListReferenceImages,
   fbUploadReferenceImage,
@@ -396,7 +397,7 @@ function TrainingSection() {
                   className={`bg-[var(--color-surface)] p-1.5 relative group ${activeIds.has(it.id) ? '' : 'opacity-40'}`}
                   title={activeIds.has(it.id) ? 'Sent to the detector' : 'Stored, but not sent — the detector only takes 8'}
                 >
-                  <div className="aspect-square"><Img src={it.url} /></div>
+                  <MediaTile src={it.url} size="thumb" />
                   {activeIds.has(it.id) && (
                     <span className="absolute bottom-2 left-2 text-[9px] uppercase tracking-widest bg-[var(--color-ink)]/80 text-white px-1.5 py-0.5">
                       in use
