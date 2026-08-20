@@ -26,6 +26,8 @@ import { fbFetchCreatorProfiles, type CreatorProfile } from '../lib/firestore'
 import { fetchProjects, type Project } from '../lib/data'
 import type { DetectionRow } from '../lib/types'
 import { splitCreatorId } from '../lib/projects'
+import { parseCreatorList } from '../lib/importList'
+import { LOWLANDS_SEED } from '../data/lowlandsSeed'
 import { fmtNum, compactNum, timeAgo } from '../lib/format'
 import { useCampaignPreview, useCampaignDetectionsPreview } from '../lib/devPreview'
 
@@ -78,11 +80,28 @@ export default function Campaign() {
   }, [])
 
   const project = projects.find((p) => p.id === params.get('p')) ?? projects[0] ?? null
-  const roster = useMemo(
-    () => (project ? project.creatorIds.map((cid) => splitCreatorId(cid).handle.toLowerCase()) : []),
-    [project],
-  )
+  // The roster is what makes "who delivered nothing" answerable, and it is the
+  // most useful column on the page. Falling back to the committed seed keeps it
+  // working when no project has loaded — which is every visit on localhost,
+  // where fetchProjects needs an authenticated Firestore. INSTAGRAM handles
+  // only: the fixture already resolves TikTok accounts to the same person, so
+  // adding the TikTok ids here would list everyone twice.
+  const roster = useMemo(() => {
+    if (project) return project.creatorIds.map((cid) => splitCreatorId(cid).handle.toLowerCase())
+    return [...new Set(
+      parseCreatorList(LOWLANDS_SEED).creatorIds
+        .filter((cid) => cid.startsWith('instagram_'))
+        .map((cid) => splitCreatorId(cid).handle.toLowerCase()),
+    )]
+  }, [project])
 
+  // Preview-only for now, and deliberately not faked from a partial live
+  // source. The three surfaces live in the posts collection, and the only
+  // fetcher that exists reads `contentType == 'story'` (fbFetchStoryPosts) —
+  // so a "live" version today would show stories and silently claim TikTok and
+  // feed posts were empty, which is the exact failure this page is meant to
+  // cure. Wiring it up needs one server-side fetch (posts, all content types)
+  // and nothing else; until scan_creators is deployed there is nothing to read.
   const rows = useMemo(
     () => joinCampaign(previewItems ?? ([] as CampaignItem[]),
                        previewDetections ?? ([] as DetectionRow[])),
