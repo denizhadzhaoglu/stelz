@@ -216,6 +216,26 @@ aan veranderen (zie §3) — het gaat puur om beoordelen.
 
 ---
 
+## 4x. Nieuw: Sounds, Projects en custom zoektermen
+
+Drie nieuwe onderdelen sinds de vorige testronde:
+
+**Sounds** — klik op het Briefing-dashboard in de kaart *Top sounds* op een
+sound, of op *All sounds →*.
+- [ ] Telt de lijst op /sounds hetzelfde als de dashboardkaart?
+- [ ] Opent een sound een detailpagina met creators en een trendgrafiek?
+
+**Projects** — open een detectie en klik **Track in project** (alleen zichtbaar
+voor members; testers zien de knop niet — dat is expres).
+- [ ] Verschijnt het project als chip op de Creators-tab, met een eigen pagina?
+- [ ] Zie je op de projectpagina ook leden *zonder* hits? (bewust: stilte is informatie)
+- [ ] Members: probeer meer dan 25 creators totaal te tracken — de foutmelding
+      hoort uit te leggen waarom er een limiet is (scankosten).
+
+**Custom zoektermen** — Settings → Hashtags (alleen members kunnen toevoegen).
+- [ ] Krijgt een nieuwe tag automatisch het label `custom` en een cap van 200?
+- [ ] Staat rechtsboven een kostenschatting voor de volgende scan?
+
 ## 5. Wat wel en niet werkt
 
 ### Wat sinds kort wél werkt

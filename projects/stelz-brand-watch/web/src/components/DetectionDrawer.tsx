@@ -4,6 +4,7 @@ import { Badge, Button, Img, formatFollowers, PRODUCT_LINE_LABEL } from './ui'
 import { imageUrlFor, loadState, toggleShortlist, toggleHidden, type DetectionRow } from '../lib/data'
 import { isBrandTag } from '../lib/signal'
 import { detectionQuality } from '../lib/quality'
+import { AddToProject } from './AddToProject'
 import { verifyDetection } from '../lib/verify'
 
 export function DetectionDrawer({
@@ -147,7 +148,11 @@ export function DetectionDrawer({
             >
               {inShortlist ? '✓ Shortlisted' : '+ Shortlist'}
             </Button>
-            <Button size="sm" variant="secondary">Promote to tier 1</Button>
+            {/* Replaces the old "Promote to tier 1" button, which had no
+                onClick — a visual promise with nothing behind it. Adding to a
+                project is what promotion actually is now: the server patches
+                the tier and the cadence map does the rest. */}
+            <AddToProject creatorId={`${d.platform || 'instagram'}_${d.creator_handle.toLowerCase()}`} />
             <Button
               size="sm"
               variant="ghost"

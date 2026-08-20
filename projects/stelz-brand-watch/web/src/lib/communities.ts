@@ -25,6 +25,7 @@
 // a zero is not.
 
 import { classifySignal, isBrandTag, BRAND_OWNED_HANDLES } from './signal'
+import { soundKey, soundLabel } from './sounds'
 import { sceneKeyFor } from './scenes'
 import type { CreatorSceneMap } from './scenes'
 import type { DetectionRow } from './types'
@@ -136,6 +137,8 @@ export function communityProfiles(
     hits: number; untagged: number
     creators: Map<string, { hits: number; followers: number | null; avatar: string | null; ageCounted?: boolean }>
     hashtags: Map<string, number>; sounds: Map<string, number>
+    /** soundKey -> display label; sounds is keyed by soundKey (see below). */
+    soundLabels: Map<string, string>
     activities: Map<string, number>; settings: Map<string, number>; cities: Map<string, number>
     likes: number[]; days: number[]
     sentiment: Record<string, number>; scored: number
@@ -144,7 +147,7 @@ export function communityProfiles(
   const acc = new Map<string, Acc>()
   const blank = (): Acc => ({
     hits: 0, untagged: 0, creators: new Map(),
-    hashtags: new Map(), sounds: new Map(), activities: new Map(),
+    hashtags: new Map(), sounds: new Map(), soundLabels: new Map(), activities: new Map(),
     settings: new Map(), cities: new Map(), likes: [], days: [],
     sentiment: { positive: 0, neutral: 0, negative: 0, promotional: 0 }, scored: 0,
     ages: [],
@@ -177,10 +180,14 @@ export function communityProfiles(
       e.hashtags.set(k, (e.hashtags.get(k) ?? 0) + 1)
     }
 
-    const m = d.music
-    if (m && (m.musicId || (m.title || '').trim())) {
-      const label = m.title?.trim() || 'Original sound'
-      e.sounds.set(label, (e.sounds.get(label) ?? 0) + 1)
+    // Keyed by soundKey, NOT by title: two distinct original sounds share the
+    // title "original sound", and keying on it merged them here while the
+    // dashboard card (keyed by musicId) kept them apart — so the two surfaces
+    // could disagree on the same data. The label map keeps display names.
+    const mk = soundKey(d.music)
+    if (mk) {
+      e.sounds.set(mk, (e.sounds.get(mk) ?? 0) + 1)
+      if (!e.soundLabels.has(mk)) e.soundLabels.set(mk, soundLabel(d.music))
     }
 
     const activity = (d.activity ?? '').trim().toLowerCase()
@@ -263,7 +270,7 @@ export function communityProfiles(
         followersKnownFor: followers.length,
         medianLikes: median(e.likes),
         topHashtags: topN(e.hashtags, 6),
-        topSounds: topN(e.sounds, 3),
+        topSounds: topN(e.sounds, 3).map((r) => ({ ...r, label: e.soundLabels.get(r.label) ?? r.label })),
         topActivities: topN(e.activities, 4),
         topSettings: topN(e.settings, 4),
         topCities: topN(e.cities, 4),

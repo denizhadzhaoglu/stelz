@@ -5,6 +5,8 @@ import { useAuth } from './lib/auth'
 
 import Home from './pages/Home'
 import Creator from './pages/Creator'
+import Sounds from './pages/Sounds'
+import ProjectPage from './pages/Project'
 import Settings from './pages/Settings'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
@@ -57,6 +59,9 @@ export default function App() {
       <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
         <Route path="/" element={<Home />} />
         <Route path="/creators/:handle" element={<Creator />} />
+        <Route path="/sounds" element={<Sounds />} />
+        <Route path="/sounds/:soundKey" element={<Sounds />} />
+        <Route path="/projects/:projectId" element={<ProjectPage />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
 

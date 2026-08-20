@@ -131,6 +131,14 @@ def members_col(brand_id: str):
     return brand_doc(brand_id).collection("members")
 
 
+def projects_col(brand_id: str):
+    """Team-shared creator projects: named groups of creators the brand is
+    actively tracking (campaigns, collab shortlists). Readable by any signed-in
+    user via the rules catch-all — deliberately nothing sensitive in here —
+    writable only through api_projects (membership-gated)."""
+    return brand_doc(brand_id).collection("projects")
+
+
 # ─── Batch helpers ──────────────────────────────────────────
 
 def chunked(items: list[Any], n: int = 400):

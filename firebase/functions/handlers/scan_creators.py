@@ -203,6 +203,18 @@ def _persist_post(
         is_video = item.get("type") == "Video" or bool(item.get("videoUrl"))
         if is_video:
             video_url = item.get("videoUrl")  # signed CDN URL, short-lived
+        # IG Reels audio. The hashtag-scan path has written this since day one
+        # (scan_hashtags.py musicInfo branch) but this deep-scan path never did
+        # — so a creator's reels showed music when found via #stelz and none
+        # when found via their own feed, and the sounds dashboard undercounted
+        # exactly the tracked creators it matters most for.
+        mi = item.get("musicInfo") or {}
+        if mi:
+            music = {
+                "title": mi.get("songName") or mi.get("song_name") or mi.get("title"),
+                "artist": mi.get("artistName") or mi.get("artist_name") or mi.get("author"),
+                "original": bool(mi.get("isOriginal")),
+            }
         # Carousel / single
         images = item.get("childPosts") or []
         if not images and item.get("displayUrl"):

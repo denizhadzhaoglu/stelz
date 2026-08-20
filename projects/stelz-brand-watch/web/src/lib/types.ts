@@ -172,8 +172,14 @@ export function dedupeByPost(detections: DetectionRow[]): DetectionRow[] {
     // siblings are scored and others aren't. Inheriting it from whichever slot
     // won on confidence would blank the label on a post that has one.
     const scored = group.find((g) => g.sentiment != null) ?? best
+    // Music is also a property of the POST (one reel, one soundtrack), but a
+    // music-less IG carousel child can win on confidence — inheriting from
+    // `best` alone then drops the parent's music and the sound dashboards
+    // undercount. Same reasoning as the sentiment merge above.
+    const withMusic = group.find((g) => g.music != null) ?? best
     out.push({
       ...best,
+      music: withMusic.music,
       sentiment: scored.sentiment,
       sentiment_score: scored.sentiment_score,
       sentiment_rationale: scored.sentiment_rationale,

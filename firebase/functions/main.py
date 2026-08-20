@@ -48,6 +48,7 @@ if not firebase_admin._apps:
 from handlers import (
     analyze_sentiment,
     bootstrap_brand,
+    projects,
     refresh_profiles,
     seed_subcultures,
     scan_hashtags,
@@ -404,24 +405,17 @@ def api_brand_settings_update(req: https_fn.Request) -> https_fn.Response:
         safe["updatedBy"] = uid
         fs.brand_doc(brand_id).set(safe, merge=True)
 
-        # Optional hashtag pool patch
+        # Optional hashtag pool patch. The new/existing two-regime rule
+        # (custom-tag defaults incl. the cost cap vs. never restamping seeded
+        # tags) lives in hashtags.pool_patch_docs — pure, tested.
         pool = body.get("hashtagPool")
         if isinstance(pool, list):
+            from lib import hashtags as hashtags_lib
             existing = {d.id: d for d in fs.hashtag_pool_col(brand_id).stream()}
-            seen = set()
-            for h in pool:
-                tag = (h.get("tag") or "").strip().lower().lstrip("#")
-                platform = h.get("platform") or "instagram"
-                if not tag:
-                    continue
-                doc_id = f"{platform}_{tag}"
-                seen.add(doc_id)
-                fs.hashtag_pool_col(brand_id).document(doc_id).set({
-                    "tag": tag,
-                    "platform": platform,
-                    "priority": int(h.get("priority", 5)),
-                    "active": bool(h.get("active", True)),
-                }, merge=True)
+            writes = hashtags_lib.pool_patch_docs(pool, set(existing))
+            seen = {doc_id for doc_id, _ in writes}
+            for doc_id, doc in writes:
+                fs.hashtag_pool_col(brand_id).document(doc_id).set(doc, merge=True)
             # Optionally remove tags the client says are gone (body.replaceHashtags)
             if body.get("replaceHashtags") is True:
                 for doc_id, doc in existing.items():
@@ -554,6 +548,40 @@ def api_brand_members(req: https_fn.Request) -> https_fn.Response:
         log.exception("brand_members failed")
         return https_fn.Response(json.dumps({"error": str(e)}), status=500, mimetype="application/json")
 
+
+
+@https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.MB_512, timeout_sec=60)
+def api_projects(req: https_fn.Request) -> https_fn.Response:
+    """Creator projects: create / rename / archive / addCreators / removeCreators.
+
+    Thin HTTP wrapper — all rules live in handlers/projects.py so they are
+    testable against the in-memory Firestore double, same as bootstrap_brand.
+    Members only: adding a creator to a project changes their scan cadence,
+    which is spend.
+    """
+    if req.method == "OPTIONS":
+        return https_fn.Response("", status=204)
+    if req.method != "POST":
+        return https_fn.Response("Method not allowed", status=405)
+    try:
+        uid = _require_auth(req)
+        body = req.get_json(silent=True) or {}
+        brand_id = body.get("brandId")
+        action = (body.get("action") or "").strip()
+        if not brand_id or not action:
+            return https_fn.Response(json.dumps({"error": "brandId + action required"}), status=400, mimetype="application/json")
+        _require_brand_member(uid, brand_id)
+        out = projects.run(brand_id, uid, action, body)
+        return https_fn.Response(json.dumps(out), status=200, mimetype="application/json")
+    except projects.ProjectError as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=e.status, mimetype="application/json")
+    except NotAuthenticated as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=401, mimetype="application/json")
+    except NotABrandMember as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=403, mimetype="application/json")
+    except Exception as e:
+        log.exception("api_projects failed")
+        return https_fn.Response(json.dumps({"error": str(e)}), status=500, mimetype="application/json")
 
 @https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.MB_512, timeout_sec=120)
 def api_recompute_centroid(req: https_fn.Request) -> https_fn.Response:

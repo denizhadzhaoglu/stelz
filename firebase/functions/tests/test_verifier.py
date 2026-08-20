@@ -325,3 +325,55 @@ class TestNegativeExemplars(unittest.TestCase):
         label, _ = verifier.build_negative_exemplars(rows)[0]
         self.assertIn("NEGATIVE", label)
         self.assertNotIn('wrongly read ""', label)
+
+
+class TestNeedsReverify(unittest.TestCase):
+    """Cache hits short-circuit detection, so before this the verifier only ever
+    touched images the pipeline had never seen. The whole existing catalogue —
+    which is what the operator looks at — kept its pre-verifier verdicts."""
+
+    DEMOTED = {"detected": True, "confidence": 0.70, "gate": "capped_small_object"}
+
+    def test_old_cached_hit_with_no_verdict_is_reverified(self):
+        self.assertTrue(verifier.needs_reverify(self.DEMOTED))
+
+    def test_already_verified_at_current_version_is_left_alone(self):
+        # The guard against re-billing the same image on every scan.
+        r = {**self.DEMOTED, "verify_version": verifier.VERIFY_VERSION,
+             "verify_verdict": "confirmed"}
+        self.assertFalse(verifier.needs_reverify(r))
+
+    def test_stale_version_is_reverified(self):
+        r = {**self.DEMOTED, "verify_version": verifier.VERIFY_VERSION - 1}
+        self.assertTrue(verifier.needs_reverify(r))
+
+    def test_inconclusive_is_not_retried_forever(self):
+        # "I could not tell" is an answer. Retrying it every scan would bill
+        # repeatedly for the same non-result.
+        r = {**self.DEMOTED, "verify_version": verifier.VERIFY_VERSION,
+             "verify_verdict": "inconclusive"}
+        self.assertFalse(verifier.needs_reverify(r))
+
+    def test_clean_high_confidence_cached_hit_is_never_reverified(self):
+        # Not in the population the verifier exists for, so re-verifying the
+        # whole cached catalogue would be pure cost.
+        self.assertFalse(verifier.needs_reverify(
+            {"detected": True, "confidence": 0.95, "gate": None}))
+
+    def test_cached_non_detection_is_never_reverified(self):
+        self.assertFalse(verifier.needs_reverify(
+            {"detected": False, "confidence": 0.0, "gate": "rejected_no_brand_text"}))
+
+    def test_a_verdict_carried_without_a_version_still_reverifies(self):
+        # Defensive: a verdict with no version cannot be placed against the
+        # current rules, so treat it as unverified rather than trusting it.
+        r = {**self.DEMOTED, "verify_verdict": "confirmed"}
+        self.assertTrue(verifier.needs_reverify(r))
+
+    def test_garbage_version_does_not_crash(self):
+        for bad in (None, "", "v1", [], {}):
+            r = {**self.DEMOTED, "verify_version": bad}
+            try:
+                verifier.needs_reverify(r)
+            except (TypeError, ValueError):
+                self.fail(f"crashed on verify_version={bad!r}")
