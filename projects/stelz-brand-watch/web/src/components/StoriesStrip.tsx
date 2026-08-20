@@ -32,6 +32,7 @@ export function StoriesStrip({
   onFetch,
   fetching = false,
   canWrite = true,
+  error = null,
 }: {
   rows: DetectionRow[]
   state: StoriesState | null
@@ -40,6 +41,8 @@ export function StoriesStrip({
   fetching?: boolean
   /** Read-only viewers see the strip but not the fetch button. */
   canWrite?: boolean
+  /** Failure from the last manual fetch, shown where the button was clicked. */
+  error?: string | null
 }) {
   const [onlyHits, setOnlyHits] = useState(false)
   const feed = storyFeed(rows)
@@ -88,6 +91,14 @@ export function StoriesStrip({
           )}
         </span>
       </div>
+
+      {/* Next to the button that caused it, not in a page-level banner the eye
+          has already scrolled past. */}
+      {error && (
+        <p className="px-4 py-2.5 text-[12px] text-[var(--color-bad)] border-b border-[var(--color-border)]">
+          {error}
+        </p>
+      )}
 
       {shown.length === 0 ? (
         <EmptyStories state={state} onlyHits={onlyHits && hits.length === 0 && feed.all.length > 0} />

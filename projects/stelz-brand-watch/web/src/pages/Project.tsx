@@ -111,16 +111,18 @@ export default function ProjectPage() {
   // 24 hours later, so this leads the page rather than sitting below the KPIs.
   const [storiesState, setStoriesState] = useState<StoriesState | null>(null)
   const [storiesFetching, setStoriesFetching] = useState(false)
+  const [storiesError, setStoriesError] = useState<string | null>(null)
   useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
   const fetchStories = useCallback(async () => {
     setStoriesFetching(true)
+    setStoriesError(null)
     try {
       await fbStepStories()
       await load()
       // Detections trail the sweep by a fan-out; look again shortly.
       window.setTimeout(() => { void load() }, 20_000)
     } catch (e) {
-      setError((e as Error).message)
+      setStoriesError((e as Error).message)
     } finally {
       setStoriesFetching(false)
     }
@@ -241,6 +243,7 @@ export default function ProjectPage() {
         onFetch={fetchStories}
         fetching={storiesFetching}
         canWrite={canWrite && !project.archived}
+        error={storiesError}
       />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">

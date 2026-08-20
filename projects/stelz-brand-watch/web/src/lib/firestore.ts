@@ -385,18 +385,42 @@ export async function fbFetchLatestScanRun(brandId = BRAND_ID) {
 
 // ────────────── Writes (via Cloud Functions) ──────────────
 
+/**
+ * A Cloud Function that is merged but NOT DEPLOYED looks like a CORS bug.
+ *
+ * Google's Functions frontend answers a request for a non-existent function
+ * with a bare 404 that carries no Access-Control-Allow-Origin header, so the
+ * browser refuses to hand the response to JS and reports "blocked by CORS
+ * policy" plus a `TypeError: Failed to fetch`. Nothing about that message
+ * points at the actual cause, and it has now cost two debugging sessions —
+ * once on api_projects, once on api_step_stories.
+ *
+ * So: catch the network-level failure and say what it almost always means.
+ * A genuine outage produces the same signature, which is why the wording
+ * names both possibilities rather than asserting one.
+ */
 async function authedFetch(path: string, body: unknown) {
   const user = fbAuth.currentUser
   if (!user) throw new Error('Not signed in')
   const token = await user.getIdToken()
-  const res = await fetch(`${FUNCTIONS_BASE}/${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(body),
-  })
+  let res: Response
+  try {
+    res = await fetch(`${FUNCTIONS_BASE}/${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new Error(
+      `${path} is niet bereikbaar. Meestal betekent dit dat deze functie nog niet ` +
+      `is uitgerold naar productie (een 404 van Cloud Functions komt zonder ` +
+      `CORS-header binnen en leest in de browser als een CORS-fout). ` +
+      `Anders: geen netwerkverbinding.`,
+    )
+  }
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`${path} failed: ${res.status} ${text}`)

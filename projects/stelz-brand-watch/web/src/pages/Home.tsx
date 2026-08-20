@@ -184,9 +184,11 @@ export default function Home() {
   // their last-run stamp is a separate subscription rather than a scan step.
   const [storiesState, setStoriesState] = useState<StoriesState | null>(null)
   const [storiesFetching, setStoriesFetching] = useState(false)
+  const [storiesError, setStoriesError] = useState<string | null>(null)
   useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
   const fetchStories = useCallback(async () => {
     setStoriesFetching(true)
+    setStoriesError(null)
     try {
       await fbStepStories()
       // The sweep only writes posts; the detections the strip renders arrive
@@ -194,6 +196,8 @@ export default function Home() {
       // rather than leaving an empty strip behind a finished button.
       await refreshData()
       window.setTimeout(() => { void refreshData() }, 20_000)
+    } catch (e) {
+      setStoriesError((e as Error).message)
     } finally {
       setStoriesFetching(false)
     }
@@ -279,6 +283,7 @@ export default function Home() {
             onFetch={fetchStories}
             fetching={storiesFetching}
             canWrite={canWrite}
+            error={storiesError}
           />
           <Tabs items={tabItems} active={tab} onChange={(id) => setTab(id as Tab)} />
 
