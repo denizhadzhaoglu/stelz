@@ -54,3 +54,8 @@ firebase/.firebase/
 firebase/functions/venv/
 # Staged hosting build — generated from projects/stelz-brand-watch/web/dist
 firebase/web-dist/
+
+# Local UI preview fixture: signed Instagram CDN URLs that expire within hours,
+# so a committed copy is a snapshot of broken images. Regenerate with
+# tools/stelz_brand_watch/61_stories_preview_fixture.py
+projects/stelz-brand-watch/web/public/preview-stories.json

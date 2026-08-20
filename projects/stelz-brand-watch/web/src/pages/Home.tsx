@@ -38,6 +38,7 @@ import {
   pickWorthALook, biggestFanToday, detectSpike, countNewSince,
 } from '../lib/score'
 import { useMembership, ReadOnlyNotice } from '../lib/membership'
+import { useStoryPreview } from '../lib/devPreview'
 
 type Tab = 'briefing' | 'feed' | 'review' | 'creators'
 type PipelineCounts = { creators: number; posts: number; detections: number; detectionsHit: number; discoveryQueue: number }
@@ -186,6 +187,8 @@ export default function Home() {
   const [storiesFetching, setStoriesFetching] = useState(false)
   const [storiesError, setStoriesError] = useState<string | null>(null)
   useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
+  // Dev server only; compiled out of production builds. See lib/devPreview.
+  const storyPreview = useStoryPreview()
   const fetchStories = useCallback(async () => {
     setStoriesFetching(true)
     setStoriesError(null)
@@ -277,13 +280,14 @@ export default function Home() {
               tomorrow; a story is gone in 24 hours, so it does not get filed
               behind a tab someone has to remember to open. */}
           <StoriesStrip
-            rows={storyRows ?? uniqueDetections}
+            rows={storyPreview ?? storyRows ?? uniqueDetections}
             state={storiesState}
             onOpen={setActiveDetection}
             onFetch={fetchStories}
             fetching={storiesFetching}
             canWrite={canWrite}
             error={storiesError}
+            preview={storyPreview != null}
           />
           <Tabs items={tabItems} active={tab} onChange={(id) => setTab(id as Tab)} />
 

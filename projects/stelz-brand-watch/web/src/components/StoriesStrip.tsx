@@ -33,6 +33,7 @@ export function StoriesStrip({
   fetching = false,
   canWrite = true,
   error = null,
+  preview = false,
 }: {
   rows: DetectionRow[]
   state: StoriesState | null
@@ -43,6 +44,8 @@ export function StoriesStrip({
   canWrite?: boolean
   /** Failure from the last manual fetch, shown where the button was clicked. */
   error?: string | null
+  /** Rows came from a local fixture, not Firestore. Must be stated, not implied. */
+  preview?: boolean
 }) {
   const [onlyHits, setOnlyHits] = useState(false)
   const feed = storyFeed(rows)
@@ -79,7 +82,7 @@ export function StoriesStrip({
         )}
 
         <span className="ml-auto flex items-center gap-3 text-[11px] text-[var(--color-ink-subtle)]">
-          <LastRun state={state} />
+          {!preview && <LastRun state={state} />}
           {canWrite && onFetch && (
             <button
               onClick={onFetch}
@@ -91,6 +94,14 @@ export function StoriesStrip({
           )}
         </span>
       </div>
+
+      {/* Never let preview data pass for live data. */}
+      {preview && (
+        <p className="px-4 py-2.5 text-[12px] text-[var(--color-warn)] border-b border-[var(--color-border)]">
+          Preview: echte gescrapte stories uit een lokaal bestand, niet uit de database.
+          Nog niet geanalyseerd, dus nog geen Stëlz-oordeel.
+        </p>
+      )}
 
       {/* Next to the button that caused it, not in a page-level banner the eye
           has already scrolled past. */}

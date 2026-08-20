@@ -26,6 +26,7 @@ import {
 } from '../lib/firestore'
 import { rollupProject, splitCreatorId } from '../lib/projects'
 import { useMembership } from '../lib/membership'
+import { useStoryPreview } from '../lib/devPreview'
 
 /** One row of cards at the widest grid step; the rest lives in the feed. */
 const SHOWN_POSTS = 10
@@ -113,6 +114,7 @@ export default function ProjectPage() {
   const [storiesFetching, setStoriesFetching] = useState(false)
   const [storiesError, setStoriesError] = useState<string | null>(null)
   useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
+  const storyPreview = useStoryPreview()
   const fetchStories = useCallback(async () => {
     setStoriesFetching(true)
     setStoriesError(null)
@@ -237,13 +239,14 @@ export default function ProjectPage() {
       {scanMsg && <Card className="p-4 mb-4 text-[12px] text-[var(--color-ink-muted)]">{scanMsg}</Card>}
 
       <StoriesStrip
-        rows={storyRows ?? rows}
+        rows={storyPreview ?? storyRows ?? rows}
         state={storiesState}
         onOpen={setActive}
         onFetch={fetchStories}
         fetching={storiesFetching}
         canWrite={canWrite && !project.archived}
         error={storiesError}
+        preview={storyPreview != null}
       />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
