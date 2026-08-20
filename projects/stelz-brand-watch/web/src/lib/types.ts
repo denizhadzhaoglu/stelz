@@ -93,6 +93,14 @@ export type DetectionRow = {
   verify_verdict: string | null
   verify_brand: string | null
   verify_reason: string | null
+  // How the post talks about the brand, scored from the CAPTION after the fact
+  // (handlers/analyze_sentiment.py) — never from the image, and never inside
+  // the detection call. Null on any hit the sentiment pass hasn't reached yet,
+  // which on rollout is most of the back catalogue: treat null as "not scored",
+  // never as neutral.
+  sentiment: 'positive' | 'neutral' | 'negative' | 'promotional' | null
+  sentiment_score: number | null   // -1.0 … +1.0
+  sentiment_rationale: string | null
   brand_id: string
   detected: boolean | null
   is_false_positive: boolean | null
@@ -110,6 +118,12 @@ export type ResonanceRow = {
   geo: number | null
   visual: number | null
   bootstrap_mode: 'cold' | 'warm' | 'hot' | null
+  // Did the subculture layer actually contribute to `srs`? False on brands
+  // with no seed data (its weight is redistributed instead), and undefined on
+  // docs written before the layer was revived — treat undefined as "unknown,
+  // assume live" only because the weights then match what was used.
+  subculture_layer_live?: boolean
+  primary_subculture?: string | null
   computed_at: string
   creator_id: string | null
   full_name: string | null
@@ -152,8 +166,17 @@ export function dedupeByPost(detections: DetectionRow[]): DetectionRow[] {
     const detectedOnes = group.filter((g) => g.detected === true)
     const pool = detectedOnes.length > 0 ? detectedOnes : group
     const best = pool.reduce((a, b) => ((b.confidence ?? 0) > (a.confidence ?? 0) ? b : a))
+    // Sentiment is a property of the POST — it is scored from the caption, and
+    // every frame/slot of one post shares that caption. But it is written per
+    // detection doc, and the sentiment pass is batched, so at any moment some
+    // siblings are scored and others aren't. Inheriting it from whichever slot
+    // won on confidence would blank the label on a post that has one.
+    const scored = group.find((g) => g.sentiment != null) ?? best
     out.push({
       ...best,
+      sentiment: scored.sentiment,
+      sentiment_score: scored.sentiment_score,
+      sentiment_rationale: scored.sentiment_rationale,
       frame_hits: detectedOnes.length || group.length,
       verified: group.some((g) => g.verified === true) ? true : best.verified,
       is_false_positive: group.some((g) => g.is_false_positive === true) ? true : best.is_false_positive,

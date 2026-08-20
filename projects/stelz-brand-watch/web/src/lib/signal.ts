@@ -35,6 +35,18 @@ export type SignalInfo = {
    * NOT affect `signal`. See the caption note below.
    */
   namedInCaption: boolean
+  /**
+   * A hashtag that is a near-miss of the brand name — #steltz, #stelzz.
+   * DISPLAY ONLY, for the same reason as namedInCaption: the brand searching
+   * their own spelling still would not find this post, so it remains a genuine
+   * discovery and `signal` stays visual_only.
+   *
+   * It exists because "no tag" printed next to a visible #steltz chip reads as
+   * a broken tool. It is not — the two statements are about different things —
+   * but a label nobody can reconcile with what they see is a bad label whatever
+   * its logic. This lets the card say which of the two is happening.
+   */
+  misspelledTag: string | null
 }
 
 export type SignalInput = Pick<
@@ -159,7 +171,10 @@ export function classifySignal(d: SignalInput): SignalInfo {
   const namedInCaption = isNamedInCaption(d.post_caption)
 
   if (BRAND_OWNED_HANDLES.has(normalize(d.creator_handle))) {
-    return { signal: 'brand_owned', findable: true, matched: [normalize(d.creator_handle)], namedInCaption }
+    return {
+      signal: 'brand_owned', findable: true,
+      matched: [normalize(d.creator_handle)], namedInCaption, misspelledTag: null,
+    }
   }
 
   let tags = d.post_hashtags ?? []
@@ -173,15 +188,77 @@ export function classifySignal(d: SignalInput): SignalInfo {
 
   const matchedTags = tags.filter(isBrandTag)
   if (matchedTags.length) {
-    return { signal: 'hashtag', findable: true, matched: matchedTags, namedInCaption }
+    return { signal: 'hashtag', findable: true, matched: matchedTags, namedInCaption, misspelledTag: null }
   }
 
   const matchedMentions = (d.post_mentions ?? []).filter(isBrandMention)
   if (matchedMentions.length) {
-    return { signal: 'mention', findable: true, matched: matchedMentions, namedInCaption }
+    return { signal: 'mention', findable: true, matched: matchedMentions, namedInCaption, misspelledTag: null }
   }
 
-  return { signal: 'visual_only', findable: false, matched: [], namedInCaption }
+  return {
+    signal: 'visual_only',
+    findable: false,
+    matched: [],
+    namedInCaption,
+    misspelledTag: tags.map(nearMissBrandTag).find(Boolean) ?? null,
+  }
+}
+
+/**
+ * Is this hashtag a misspelling of the brand rather than an unrelated word?
+ *
+ * Edit distance 1 against the canonical name, after the exact-match rules have
+ * already had their say. One edit is the whole budget on purpose: at two, real
+ * Dutch words start matching a five-letter brand name and the badge would fire
+ * on tags that have nothing to do with it.
+ *
+ * Deliberately NOT used to change findability. #steltz is not #stelz, and a
+ * brand searching their own spelling will not see this post — the discovery
+ * claim stands. This only decides which words the card uses.
+ */
+export function nearMissBrandTag(tag: string): string | null {
+  const t = normalize(tag).replace(/^#/, '')
+  if (!t || isBrandTag(t)) return null
+  if (NON_BRAND_TAGS.has(t) || NON_BRAND_PREFIXES.some((p) => t.startsWith(p))) return null
+  // Guard the short-word case: at 4 characters or fewer, one edit from "stelz"
+  // sweeps in far too much.
+  if (t.length < 5 || t.length > 8) return null
+  return editDistanceWithin1(t, 'stelz') ? t : null
+}
+
+/**
+ * True when a and b differ by at most one insertion, deletion, substitution or
+ * TRANSPOSITION of adjacent characters — Damerau-Levenshtein distance 1.
+ *
+ * Transposition has to be in there. Plain Levenshtein scores "stlez" as two
+ * edits away from "stelz" and would miss it, yet swapping two adjacent letters
+ * is among the most common ways a name gets mistyped — the backend's own
+ * variant generator (identity.generate_variants) emits stlez, setlz and stezl
+ * for exactly that reason.
+ */
+function editDistanceWithin1(a: string, b: string): boolean {
+  if (a === b) return true
+  // One adjacent swap, same length.
+  if (a.length === b.length) {
+    const diffs: number[] = []
+    for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) diffs.push(k)
+    if (diffs.length === 1) return true                       // substitution
+    if (diffs.length === 2 && diffs[1] === diffs[0] + 1) {     // transposition
+      return a[diffs[0]] === b[diffs[1]] && a[diffs[1]] === b[diffs[0]]
+    }
+    return false
+  }
+  // One insertion or deletion.
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+  if (long.length - short.length > 1) return false
+  let i = 0, j = 0, edits = 0
+  while (i < short.length && j < long.length) {
+    if (short[i] === long[j]) { i++; j++; continue }
+    if (++edits > 1) return false
+    j++
+  }
+  return true
 }
 
 /** Annotate rows in place-ish (returns new objects). Call once, after dedupe. */

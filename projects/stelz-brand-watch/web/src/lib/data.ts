@@ -7,6 +7,10 @@ import {
   fbFetchDetections,
   fbFetchResonanceForCreator,
   fbFetchTopResonance,
+  fbFetchCreatorSubcultures,
+  fbFetchCreatorProfiles,
+  fbFetchCreatorProfile,
+  fbListSubcultures,
   fbRateDetection,
 } from './firestore'
 import { imageUrlFor as _imageUrlFor, type DetectionRow, type ResonanceRow } from './types'
@@ -22,6 +26,24 @@ export function fetchResonanceForCreator(handle: string, _platform?: string): Pr
 
 export function fetchTopResonance(limit = 50): Promise<ResonanceRow[]> {
   return fbFetchTopResonance(limit)
+}
+
+// ────────────── Subcultures ──────────────
+
+export function fetchCreatorSubcultures() {
+  return fbFetchCreatorSubcultures()
+}
+
+export function fetchSubcultures() {
+  return fbListSubcultures()
+}
+
+export function fetchCreatorProfiles() {
+  return fbFetchCreatorProfiles()
+}
+
+export function fetchCreatorProfile(handle: string) {
+  return fbFetchCreatorProfile(handle)
 }
 
 export function tierLabel(tier: string | null | number | null): 'T1' | 'T2' | 'T3' | null {

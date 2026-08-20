@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Badge, Button, Img, PRODUCT_LINE_LABEL } from './ui'
+import { Badge, Button, Img, formatFollowers, PRODUCT_LINE_LABEL } from './ui'
 import { imageUrlFor, loadState, toggleShortlist, toggleHidden, type DetectionRow } from '../lib/data'
 import { isBrandTag } from '../lib/signal'
 import { detectionQuality } from '../lib/quality'
@@ -127,9 +127,15 @@ export function DetectionDrawer({
           <div>
             <Link to={`/creators/${d.creator_handle}`} className="text-[16px] font-medium hover:underline">@{d.creator_handle}</Link>
             <div className="text-[12px] text-[var(--color-ink-muted)] mt-0.5 tabular-nums">
-              {(d.follower_count ?? 0).toLocaleString()} followers
-              {d.likes_count ? ` · ${d.likes_count.toLocaleString()} likes` : ''}
-              {d.posted_at ? ` · ${new Date(d.posted_at).toLocaleString('nl-NL', { dateStyle: 'medium', timeStyle: 'short' })}` : ''}
+              {/* Omitted entirely when unknown. Instagram's hashtag scrape does
+                  not return follower counts, so "0 followers" was being shown
+                  for most creators — a false statement, not a missing one. */}
+              {formatFollowers(d.follower_count) ? `${formatFollowers(d.follower_count)} followers` : ''}
+              {formatFollowers(d.follower_count) && d.likes_count ? ' · ' : ''}
+              {d.likes_count ? `${d.likes_count.toLocaleString()} likes` : ''}
+              {d.posted_at
+                ? `${(formatFollowers(d.follower_count) || d.likes_count) ? ' · ' : ''}${new Date(d.posted_at).toLocaleString('nl-NL', { dateStyle: 'medium', timeStyle: 'short' })}`
+                : ''}
             </div>
           </div>
 
@@ -160,6 +166,33 @@ export function DetectionDrawer({
             <div>
               <div className="text-[10px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-2">Caption</div>
               <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{d.post_caption}</p>
+            </div>
+          )}
+
+          {d.sentiment && (
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-2">
+                How it's talked about
+              </div>
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-[13px] font-medium capitalize">{d.sentiment}</span>
+                {d.sentiment_score != null && (
+                  <span className="text-[11px] tabular-nums text-[var(--color-ink-subtle)]">
+                    {d.sentiment_score > 0 ? '+' : ''}{d.sentiment_score.toFixed(2)}
+                  </span>
+                )}
+              </div>
+              {d.sentiment_rationale && (
+                <p className="mt-1.5 text-[12px] text-[var(--color-ink-muted)] leading-relaxed">
+                  {d.sentiment_rationale}
+                </p>
+              )}
+              {/* Says where the judgement came from. Without this the label
+                  reads as a verdict on the photo, which it is not — the model
+                  never sees the image on this call. */}
+              <p className="mt-1.5 text-[11px] text-[var(--color-ink-subtle)] leading-relaxed">
+                Read from the caption, not the image.
+              </p>
             </div>
           )}
 

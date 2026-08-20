@@ -10,7 +10,7 @@ import requests
 from google import genai
 from google.genai import types as genai_types
 
-from lib import verifier
+from lib import sentiment, verifier
 
 
 def _key() -> str:
@@ -305,6 +305,35 @@ def detect_frames_batch(
 # Its signal (relevance 0-10, dutch speaker, content theme) is already
 # covered by SRS layers (hashtag cosine + geo) at zero Gemini cost.
 # See plan: ~/.claude/plans/slack-gibi-disariya-bisye-witty-dream.md §B.
+
+
+def analyze_sentiment(
+    brand_name: str,
+    summary: str,
+    model: str = "gemini-2.5-flash",
+) -> dict[str, Any] | None:
+    """How this post talks about the brand. Text-only — no images.
+
+    Returns None when the model's answer is unusable, so the caller can leave
+    the field unset and retry the post on a later run rather than persist a
+    guess. See lib/sentiment.py for why this is not folded into detect_image.
+    """
+    contents: list[Any] = [sentiment.build_prompt(brand_name), summary]
+    resp = client().models.generate_content(
+        model=model,
+        contents=contents,
+        config=genai_types.GenerateContentConfig(
+            # Fixed answer set, same reasoning as verify_brand: sampling
+            # variance on a four-way classification is pure downside.
+            temperature=0.0,
+            response_mime_type="application/json",
+        ),
+    )
+    parsed = sentiment.parse_verdict(resp.text or "")
+    if parsed is None:
+        return None
+    parsed["model"] = model
+    return parsed
 
 
 def verify_brand(

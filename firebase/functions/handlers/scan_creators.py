@@ -188,6 +188,7 @@ def _persist_post(
     video_url: str | None = None  # if set, post is a video; fans out to detect-video
     music: dict | None = None
     extras: dict | None = None
+    follower_count: int | None = None
 
     if platform == "instagram":
         ext_id = str(item.get("id") or item.get("shortCode") or "")
@@ -208,6 +209,7 @@ def _persist_post(
             images = [{"displayUrl": item.get("displayUrl")}]
         image_urls = [img.get("displayUrl") for img in images if img.get("displayUrl")]
     else:  # tiktok — always a video
+        follower_count = (item.get("authorMeta") or {}).get("fans")
         ext_id = str(item.get("id") or item.get("aweme_id") or "")
         url = item.get("webVideoUrl") or item.get("shareUrl")
         caption = item.get("text") or item.get("desc") or ""
@@ -303,9 +305,27 @@ def _persist_post(
         "music": music,
         "ingestedAt": SERVER_TIMESTAMP,
     }
+    # detect_image copies followerCount from the post onto every detection, so
+    # a post that doesn't carry it produces detections that can't show it.
+    if follower_count:
+        doc["followerCount"] = int(follower_count)
     if extras:
         doc["extras"] = extras
     posts_col.document(post_id).set(doc, merge=True)
+
+    # Keep the creator record current too — it is what compute_resonance reads,
+    # and what the Creator page falls back to when detections lack the number.
+    if follower_count or extras:
+        patch: dict[str, Any] = {}
+        if follower_count:
+            patch["followerCount"] = int(follower_count)
+        author = (extras or {}).get("author") or {}
+        if author.get("signature"):
+            patch["bio"] = author["signature"]
+        if author.get("avatar"):
+            patch["avatarUrl"] = author["avatar"]
+        if patch:
+            creator_ref.set(patch, merge=True)
 
     # Persist content-type + optional video URL on the post.
     content_type = "video" if video_url else ("image" if image_urls else "unknown")

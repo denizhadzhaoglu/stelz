@@ -2,15 +2,20 @@
 
 Pure compute over Firestore data. No external APIs.
 
-Layers (weights in 'hot' mode after subculture drop in productization cleanup):
-  Graph 35%, Hashtag 25%, Comment 20%, Geo 10%, Visual 10%
-  (Subculture layer dropped — no creator_subcultures seed data; its 15%
-  weight was redistributed: +5 graph, +5 hashtag, +5 comment.)
+Layers (weights in 'hot' mode, WITH subculture data present):
+  Graph 30%, Hashtag 20%, Comment 15%, Geo 10%, Visual 10%, Subculture 15%
+
+The subculture layer was dead for a long time — the seed data lived in the
+Supabase database that was removed in 2026-06, so the layer was disabled and
+its 15% redistributed. handlers/seed_subcultures.py now produces that data
+again, so the layer is live WHENEVER the data exists and is redistributed
+exactly as before when it doesn't. A brand that has never run the seeding step
+scores identically to how it did yesterday.
 
 Bootstrap modes (auto-selected from #tier-1 verified hits):
-  cold (<10):  Hashtag 45, Geo 30, Comment 20, Graph 5, Visual 0
-  warm (10-50): Hashtag 30, Graph 25, Comment 20, Geo 15, Visual 10
-  hot (>=50):   Graph 35, Hashtag 25, Comment 20, Geo 10, Visual 10
+  cold (<10):  Hashtag 40, Geo 25, Comment 15, Graph 5, Visual 0,  Subculture 15
+  warm (10-50): Hashtag 25, Graph 20, Comment 15, Geo 15, Visual 10, Subculture 15
+  hot (>=50):   Graph 30, Hashtag 20, Comment 15, Geo 10, Visual 10, Subculture 15
 
 v2 (SRS_VERSION = 2): the Hashtag layer now EXCLUDES brand-specific tags. It
 previously scored a creator on how well their hashtags matched the brand's —
@@ -36,8 +41,10 @@ log = logging.getLogger(__name__)
 
 # Bump whenever the scoring changes in a way that makes old and new scores
 # incomparable. v2: brand-specific hashtags excluded from the hashtag layer —
-# see the long comment in run(). Persisted on every resonance doc.
-SRS_VERSION = 2
+# see the long comment in run(). v3: the subculture layer is live again where
+# seed data exists, which moves every other layer's weight. Persisted on every
+# resonance doc.
+SRS_VERSION = 3
 
 
 def redistribute_weight(weights: dict[str, int], dead_layer: str) -> dict[str, int]:
@@ -84,17 +91,19 @@ def run(brand_id: str) -> dict[str, Any]:
         .get()
     )
     n_tier1 = tier1_q[0][0].value if tier1_q else 0
-    # Weights sum to 100. Subculture removed (no seed data); its share split
-    # across graph + hashtag + comment.
+    # Weights sum to 100 in every mode, or scores stop being comparable across
+    # modes. The subculture share is carved back out of the layers it was
+    # redistributed into when it was dropped; if no seed data exists it is
+    # redistributed again below, landing back on the previous numbers.
     if n_tier1 < 10:
         mode = "cold"
-        w = {"graph": 5, "hashtag": 45, "comment": 20, "geo": 30, "visual": 0}
+        w = {"graph": 5, "hashtag": 40, "comment": 15, "geo": 25, "visual": 0, "subculture": 15}
     elif n_tier1 < 50:
         mode = "warm"
-        w = {"graph": 25, "hashtag": 30, "comment": 20, "geo": 15, "visual": 10}
+        w = {"graph": 20, "hashtag": 25, "comment": 15, "geo": 15, "visual": 10, "subculture": 15}
     else:
         mode = "hot"
-        w = {"graph": 35, "hashtag": 25, "comment": 20, "geo": 10, "visual": 10}
+        w = {"graph": 30, "hashtag": 20, "comment": 15, "geo": 10, "visual": 10, "subculture": 15}
 
     # 2) Edges → graph in-degree + per-type counts. ONE stream over edges.
     in_deg = defaultdict(float)
@@ -120,6 +129,10 @@ def run(brand_id: str) -> dict[str, Any]:
     cand_hashtags: dict[str, Counter] = defaultdict(Counter)
     cand_n_posts: dict[str, int] = defaultdict(int)
     cand_avg_conf: dict[str, list[float]] = defaultdict(list)
+    # Moderator-verified hits per creator. Feeds the subculture layer's scene
+    # density — collected in the stream we are already making rather than in a
+    # second pass over the same collection.
+    verified_hits: dict[str, int] = defaultdict(int)
     has_hit = set()
     brand_yield_counter: Counter = Counter()
     brand_total_hits = 0
@@ -153,6 +166,8 @@ def run(brand_id: str) -> dict[str, Any]:
         has_hit.add(handle)
         cand_n_posts[handle] += 1
         cand_avg_conf[handle].append(float(dd.get("confidence") or 0))
+        if dd.get("verified") is True:
+            verified_hits[handle] += 1
         for h in (dd.get("postHashtags") or []):
             tag = h.lower()
             if _is_brand_tag(tag):
@@ -176,6 +191,75 @@ def run(brand_id: str) -> dict[str, Any]:
             f"Weight {spare} redistributed -> {w}"
         )
 
+    # 3b) SUBCULTURE LAYER — how brand-dense are the scenes this creator is in?
+    #
+    # The layer answers "is this person deep in a scene where the brand already
+    # lands well", which is different from every other layer: graph asks who
+    # they know, hashtag asks what they post about, this asks about the company
+    # they keep. A creator in a scene with a high share of verified hits is a
+    # better bet than one in a scene the brand has never landed in, even at
+    # identical follower counts.
+    #
+    # Density per scene = verified hits by its members / total hits by its
+    # members. Using verified rather than raw hits matters: raw hits reward the
+    # scenes discovery happened to scrape hardest, which is a fact about our
+    # crawler, not about the audience.
+    links_by_handle: dict[str, list[dict]] = {}
+    for doc in fs.brand_doc(brand_id).collection("creatorSubcultures").stream():
+        d = doc.to_dict() or {}
+        handle = (d.get("handle") or doc.id or "").lower()
+        if handle:
+            links_by_handle[handle] = d.get("links") or []
+
+    subculture_layer_live = any(links_by_handle.values())
+
+    scene_hits: dict[str, int] = defaultdict(int)
+    scene_verified: dict[str, int] = defaultdict(int)
+    if subculture_layer_live:
+        for handle, n in cand_n_posts.items():
+            for link in links_by_handle.get(handle, []):
+                slug = link.get("slug")
+                if not slug:
+                    continue
+                scene_hits[slug] += n
+                scene_verified[slug] += verified_hits.get(handle, 0)
+
+    # Raw density is a ratio in a small sample; a scene with 1 hit and 1
+    # verified would otherwise score a perfect 100 off a single post. Shrink
+    # toward the brand-wide rate with a pseudo-count, so a scene has to earn a
+    # high density with volume.
+    PRIOR_WEIGHT = 20
+    total_hits_all = sum(scene_hits.values())
+    total_verified_all = sum(scene_verified.values())
+    base_rate = (total_verified_all / total_hits_all) if total_hits_all else 0.0
+    scene_density = {
+        slug: ((scene_verified[slug] + base_rate * PRIOR_WEIGHT) / (n + PRIOR_WEIGHT))
+        for slug, n in scene_hits.items()
+    }
+    # Normalise to 0-100 against the best scene, so the layer uses its full
+    # range whatever the brand's absolute verification rate happens to be.
+    best_density = max(scene_density.values()) if scene_density else 0.0
+
+    def _subculture_score(handle: str) -> float:
+        links = links_by_handle.get(handle) or []
+        if not links or not best_density:
+            return 0.0
+        # Confidence-weighted best scene, not the average: belonging weakly to
+        # a second scene should never drag down a strong primary membership.
+        return max(
+            (scene_density.get(l.get("slug"), 0.0) / best_density) * float(l.get("confidence") or 0) * 100
+            for l in links
+        )
+
+    if not subculture_layer_live and w["subculture"]:
+        spare = w["subculture"]
+        w = redistribute_weight(w, "subculture")
+        log.info(
+            f"[{brand_id}] subculture layer disabled: no creatorSubcultures data. "
+            f"Run handlers/seed_subcultures to enable it. "
+            f"Weight {spare} redistributed -> {w}"
+        )
+
     # 4) Candidate set = anyone with a hit OR an edge. Skip dead creators.
     candidate_handles = has_edge | has_hit
 
@@ -195,6 +279,19 @@ def run(brand_id: str) -> dict[str, Any]:
             candidate_meta[(cd.get("handle") or "").lower()] = cd
 
     # 6) Score each candidate (pure compute)
+    #
+    # Two layers can be silently dead, and were. `aiSummary` and `visualScore`
+    # are read off the creator record, but NOTHING in this codebase writes
+    # either one — they came from Supabase-era scripts (21_ai_score_creators.py,
+    # 55_score_visual.py) that were never ported. The effect was not a crash: geo
+    # scored a flat 30.0 for every creator and visual a flat 0.0, so 20% of the
+    # weight in hot mode ranked nobody above anybody while still diluting the
+    # layers that do work — and the UI presented both as measurements.
+    #
+    # Detected here rather than assumed, so the layers switch back on by
+    # themselves the day something starts writing those fields.
+    geo_layer_live = False
+    visual_layer_live = False
     out = []
     for handle in candidate_handles:
         cd = candidate_meta.get(handle, {})
@@ -213,10 +310,16 @@ def run(brand_id: str) -> dict[str, Any]:
         ai = cd.get("aiSummary") or {}
         geo = 80.0 if ai.get("is_dutch_speaker") else 30.0
         visual = float(cd.get("visualScore") or 0)
+        subculture = _subculture_score(handle)
+        if ai:
+            geo_layer_live = True
+        if visual > 0:
+            visual_layer_live = True
 
         srs = (
             graph * w["graph"] + hashtag * w["hashtag"]
             + comment * w["comment"] + geo * w["geo"] + visual * w["visual"]
+            + subculture * w["subculture"]
         ) / 100.0
 
         out.append({
@@ -228,6 +331,8 @@ def run(brand_id: str) -> dict[str, Any]:
             "comment": round(comment, 1),
             "geo": round(geo, 1),
             "visual": round(visual, 1),
+            "subculture": round(subculture, 1) if subculture_layer_live else None,
+            "primarySubculture": (links_by_handle.get(handle) or [{}])[0].get("slug"),
             "bootstrapMode": mode,
             # v2 excludes brand-specific tags from the hashtag layer, so scores
             # are NOT comparable with v1 — and the client has already seen v1
@@ -235,6 +340,7 @@ def run(brand_id: str) -> dict[str, Any]:
             # this creator drop" is unanswerable.
             "srsVersion": SRS_VERSION,
             "hashtagLayerLive": hashtag_layer_live,
+            "subcultureLayerLive": subculture_layer_live,
             "weights": dict(w),
             "tier": cd.get("tier"),
             "fullName": cd.get("fullName"),
@@ -245,6 +351,32 @@ def run(brand_id: str) -> dict[str, Any]:
             "latestDetectionAt": cd.get("lastDetectionAt"),
             "computedAt": SERVER_TIMESTAMP,
         })
+
+    # A layer that produced no signal at all gets its weight redistributed
+    # rather than left to dilute the rest. Scores are recomputed below with the
+    # corrected weights — cheap, since the layer values are already in `out`.
+    dead_layers = [
+        name for name, live in (("geo", geo_layer_live), ("visual", visual_layer_live))
+        if not live and w.get(name)
+    ]
+    for name in dead_layers:
+        w = redistribute_weight(w, name)
+        log.info(f"[{brand_id}] {name} layer has no signal for any candidate; weight redistributed -> {w}")
+    if dead_layers:
+        for s_row in out:
+            s_row["srs"] = round((
+                s_row["graph"] * w["graph"] + s_row["hashtag"] * w["hashtag"]
+                + s_row["comment"] * w["comment"] + s_row["geo"] * w["geo"]
+                + s_row["visual"] * w["visual"]
+                + (s_row["subculture"] or 0) * w["subculture"]
+            ) / 100.0, 2)
+            s_row["weights"] = dict(w)
+            s_row["geoLayerLive"] = geo_layer_live
+            s_row["visualLayerLive"] = visual_layer_live
+    else:
+        for s_row in out:
+            s_row["geoLayerLive"] = geo_layer_live
+            s_row["visualLayerLive"] = visual_layer_live
 
     # 7) Batched write. Firestore batch max = 500 ops.
     col = fs.resonance_col(brand_id)

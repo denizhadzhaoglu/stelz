@@ -13,8 +13,12 @@ Architecture:
     api_step_hashtags            manual hashtag discovery
     api_step_creators            manual creator scrape (fans out detect-image/video)
     api_step_srs                 recompute resonance scores
+    api_step_sentiment           score post sentiment on unscored hits
+    api_step_subcultures         seed scene definitions + file creators into them
+    api_step_profiles            refresh creator follower counts / bios / avatars
     api_rate_detection           moderator approve / reject
     api_brand_settings_update    edit brand profile (hashtags, identity, threshold)
+    api_brand_members            list / add / remove brand members (access control)
 
 Auth: HTTP functions require Firebase Auth ID token (verified inline).
 """
@@ -42,7 +46,10 @@ if not firebase_admin._apps:
     )
 
 from handlers import (
+    analyze_sentiment,
     bootstrap_brand,
+    refresh_profiles,
+    seed_subcultures,
     scan_hashtags,
     scan_creators,
     detect_image,
@@ -114,32 +121,65 @@ def on_detect_video(event: pubsub_fn.CloudEvent[pubsub_fn.MessagePublishedData])
 
 # ─────────────────── HTTP (UI) ───────────────────
 
+class NotAuthenticated(Exception):
+    """No usable Firebase ID token on the request.
+
+    Raised instead of https_fn.HttpsError because str(HttpsError) is empty:
+    every auth failure used to reach the client as `400 {"error": ""}`, which
+    tells whoever is debugging it precisely nothing.
+    """
+
+
+class NotABrandMember(Exception):
+    """Caller is authenticated but not a member of the brand they addressed.
+
+    Distinct from a generic failure so the handlers can answer 403 rather than
+    400/500 — the UI keys its read-only banner off that status code.
+    """
+
+
 def _require_auth(req: https_fn.Request) -> str:
     """Return uid, or raise 401."""
     auth_header = req.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        raise https_fn.HttpsError(https_fn.FunctionsErrorCode.UNAUTHENTICATED, "Missing token")
+        raise NotAuthenticated("Not signed in: request carried no Bearer token.")
     token = auth_header.split(" ", 1)[1]
     try:
         decoded = fb_auth.verify_id_token(token)
-    except Exception:
-        raise https_fn.HttpsError(https_fn.FunctionsErrorCode.UNAUTHENTICATED, "Invalid token")
+    except Exception as e:
+        raise NotAuthenticated(f"Sign-in token rejected ({type(e).__name__}). Sign out and back in.")
     return decoded["uid"]
 
 
 def _require_brand_member(uid: str, brand_id: str) -> None:
-    # MVP: any signed-in user can act on any brand. Restore membership gate
-    # (below) before onboarding real customers.
-    return
-    # member = fs.brand_doc(brand_id).collection("members").document(uid).get()
-    # if not member.exists:
-    #     raise https_fn.HttpsError(https_fn.FunctionsErrorCode.PERMISSION_DENIED, "Not a brand member")
+    """Every write path goes through here. Non-members get PERMISSION_DENIED.
+
+    This was stubbed out with a bare `return` during the MVP, which meant any
+    signed-in Google account could reject detections, edit brand settings and
+    start a paid scan on any brand. Testers were being handed the app with a
+    doc warning as the only protection. The gate is live again; a tester who is
+    not in /brands/{id}/members is read-only by construction, so no separate
+    test mode is needed.
+
+    Read access is deliberately NOT gated here — testers must still see
+    everything. Reads are governed by firestore.rules.
+    """
+    member = fs.brand_doc(brand_id).collection("members").document(uid).get()
+    if not member.exists:
+        raise NotABrandMember(
+            "Read-only: your account is not a member of this brand."
+        )
 
 
 @https_fn.on_request(cors=options.CorsOptions(cors_origins=["*"], cors_methods=["POST", "OPTIONS"]))
 def api_bootstrap_brand(req: https_fn.Request) -> https_fn.Response:
-    """First-run brand creation. Any authenticated user can create a brand
-    and become its owner. Idempotent."""
+    """First-run brand creation. Idempotent.
+
+    Any authenticated user can create a brand and become the owner of a brand
+    that has no members yet. Calling it against an already-claimed brand still
+    succeeds — the UI calls it on the way to a scan — but grants nothing. See
+    bootstrap_brand.run step 2.
+    """
     if req.method == "OPTIONS":
         return https_fn.Response("", status=204)
     if req.method != "POST":
@@ -179,6 +219,10 @@ def _run_step(req: https_fn.Request, runner_factory) -> https_fn.Response:
         _require_brand_member(uid, brand_id)
         result = runner_factory(brand_id, body)
         return https_fn.Response(json.dumps(result), status=200, mimetype="application/json")
+    except NotAuthenticated as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=401, mimetype="application/json")
+    except NotABrandMember as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=403, mimetype="application/json")
     except https_fn.HttpsError as e:
         return https_fn.Response(json.dumps({"error": str(e)}), status=400, mimetype="application/json")
     except Exception as e:
@@ -246,6 +290,45 @@ def api_step_srs(req: https_fn.Request) -> https_fn.Response:
     return _run_step(req, lambda brand_id, body: compute_resonance.run(brand_id))
 
 
+@https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.MB_512, timeout_sec=540)
+def api_step_profiles(req: https_fn.Request) -> https_fn.Response:
+    """Refresh Instagram creator profiles (followers, bio, avatar).
+
+    Instagram post rows carry no follower count — verified against the live
+    actor — so this separate profile scrape is the only source. Costs about
+    $1.15 per 500 creators. See handlers/refresh_profiles.py.
+    """
+    return _run_step(req, lambda brand_id, body: refresh_profiles.run(
+        brand_id,
+        limit=int(body.get("limit") or refresh_profiles.DEFAULT_LIMIT),
+    ))
+
+
+@https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.MB_512, timeout_sec=300)
+def api_step_subcultures(req: https_fn.Request) -> https_fn.Response:
+    """Seed the brand's subcultures and classify creators into them.
+
+    Must run BEFORE api_step_srs for the subculture layer to contribute — SRS
+    reads the links this writes. Pure compute over data already in Firestore:
+    no Gemini, no Apify, so it is free to re-run.
+    """
+    return _run_step(req, lambda brand_id, body: seed_subcultures.run(brand_id))
+
+
+@https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.MB_512, timeout_sec=540)
+def api_step_sentiment(req: https_fn.Request) -> https_fn.Response:
+    """Score post sentiment on hits that don't have it yet (batched, resumable).
+
+    Runs after the scan steps rather than inside detection — see the docstring
+    of lib/sentiment.py for why the caption must stay out of the detect call.
+    One run is capped; call again to continue through a back catalogue.
+    """
+    return _run_step(req, lambda brand_id, body: analyze_sentiment.run(
+        brand_id,
+        limit=int(body.get("limit") or analyze_sentiment.DEFAULT_LIMIT),
+    ))
+
+
 @https_fn.on_request(cors=options.CorsOptions(cors_origins=["*"], cors_methods=["POST", "OPTIONS"]))
 def api_rate_detection(req: https_fn.Request) -> https_fn.Response:
     if req.method == "OPTIONS":
@@ -270,6 +353,10 @@ def api_rate_detection(req: https_fn.Request) -> https_fn.Response:
             "verifiedAt": SERVER_TIMESTAMP,
         }, merge=True)
         return https_fn.Response(json.dumps({"ok": True}), status=200, mimetype="application/json")
+    except NotAuthenticated as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=401, mimetype="application/json")
+    except NotABrandMember as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=403, mimetype="application/json")
     except https_fn.HttpsError as e:
         return https_fn.Response(json.dumps({"error": str(e)}), status=400, mimetype="application/json")
     except Exception as e:
@@ -342,10 +429,129 @@ def api_brand_settings_update(req: https_fn.Request) -> https_fn.Response:
                         doc.reference.delete()
 
         return https_fn.Response(json.dumps({"ok": True, "patched": list(safe.keys())}), status=200, mimetype="application/json")
+    except NotAuthenticated as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=401, mimetype="application/json")
+    except NotABrandMember as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=403, mimetype="application/json")
     except https_fn.HttpsError as e:
         return https_fn.Response(json.dumps({"error": str(e)}), status=400, mimetype="application/json")
     except Exception as e:
         log.exception("brand_settings_update failed")
+        return https_fn.Response(json.dumps({"error": str(e)}), status=500, mimetype="application/json")
+
+
+@https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.MB_512, timeout_sec=60)
+def api_brand_members(req: https_fn.Request) -> https_fn.Response:
+    """List / add / remove brand members. Members only.
+
+    Membership is the entire access model — it decides who can reject
+    detections, edit the reference images the detector is trained on, and spend
+    money on a scan. Before this endpoint the only ways to grant it were the
+    self-enrolment bug (any caller became an owner) and a hand-written Firestore
+    document. Neither is something to run a team on.
+
+    Deliberate limits, because this hands out the keys:
+      * members only — no self-service. A tester cannot add themselves.
+      * an owner cannot be removed by a non-owner, and the LAST owner cannot be
+        removed at all. A brand with no owners is unadministrable: nobody can
+        add anyone, since adding requires membership.
+      * removing yourself is allowed (leaving), subject to the same last-owner
+        rule.
+    """
+    if req.method == "OPTIONS":
+        return https_fn.Response("", status=204)
+    if req.method != "POST":
+        return https_fn.Response("Method not allowed", status=405)
+    try:
+        uid = _require_auth(req)
+        body = req.get_json(silent=True) or {}
+        brand_id = body.get("brandId")
+        action = (body.get("action") or "list").lower()
+        if not brand_id:
+            return https_fn.Response(json.dumps({"error": "brandId required"}), status=400, mimetype="application/json")
+        _require_brand_member(uid, brand_id)
+
+        members_col = fs.brand_doc(brand_id).collection("members")
+
+        def _list() -> list[dict]:
+            out = []
+            for d in members_col.stream():
+                x = d.to_dict() or {}
+                added = x.get("addedAt")
+                out.append({
+                    "uid": d.id,
+                    "email": x.get("email"),
+                    "role": x.get("role") or "member",
+                    "addedAt": added.isoformat() if hasattr(added, "isoformat") else None,
+                    "isYou": d.id == uid,
+                })
+            out.sort(key=lambda m: (m["role"] != "owner", (m["email"] or "").lower()))
+            return out
+
+        if action == "list":
+            return https_fn.Response(json.dumps({"members": _list()}), status=200, mimetype="application/json")
+
+        caller = members_col.document(uid).get().to_dict() or {}
+        caller_is_owner = caller.get("role") == "owner"
+
+        if action == "add":
+            email = (body.get("email") or "").strip().lower()
+            role = (body.get("role") or "member").lower()
+            if role not in ("member", "owner"):
+                return https_fn.Response(json.dumps({"error": "role must be member or owner"}), status=400, mimetype="application/json")
+            if role == "owner" and not caller_is_owner:
+                return https_fn.Response(json.dumps({"error": "Only an owner can grant owner"}), status=403, mimetype="application/json")
+            if not email:
+                return https_fn.Response(json.dumps({"error": "email required"}), status=400, mimetype="application/json")
+            # The person has to have signed in at least once: membership keys on
+            # the Firebase uid, and there is no uid until an account exists.
+            # Inviting an address that has never signed in would silently do
+            # nothing, so say so instead.
+            try:
+                user = fb_auth.get_user_by_email(email)
+            except Exception:
+                return https_fn.Response(
+                    json.dumps({"error": f"No account for {email}. Ask them to sign in once first, then add them."}),
+                    status=404, mimetype="application/json",
+                )
+            from google.cloud.firestore import SERVER_TIMESTAMP
+            members_col.document(user.uid).set({
+                "role": role,
+                "email": email,
+                "addedAt": SERVER_TIMESTAMP,
+                "addedBy": uid,
+            }, merge=True)
+            return https_fn.Response(json.dumps({"ok": True, "members": _list()}), status=200, mimetype="application/json")
+
+        if action == "remove":
+            target = body.get("uid")
+            if not target:
+                return https_fn.Response(json.dumps({"error": "uid required"}), status=400, mimetype="application/json")
+            target_snap = members_col.document(target).get()
+            if not target_snap.exists:
+                return https_fn.Response(json.dumps({"error": "Not a member"}), status=404, mimetype="application/json")
+            target_role = (target_snap.to_dict() or {}).get("role")
+            if target_role == "owner":
+                if not caller_is_owner:
+                    return https_fn.Response(json.dumps({"error": "Only an owner can remove an owner"}), status=403, mimetype="application/json")
+                owners = [m for m in _list() if m["role"] == "owner"]
+                if len(owners) <= 1:
+                    return https_fn.Response(
+                        json.dumps({"error": "Can't remove the last owner — the brand would have nobody who can administer it."}),
+                        status=409, mimetype="application/json",
+                    )
+            members_col.document(target).delete()
+            return https_fn.Response(json.dumps({"ok": True, "members": _list()}), status=200, mimetype="application/json")
+
+        return https_fn.Response(json.dumps({"error": f"unknown action {action}"}), status=400, mimetype="application/json")
+    except NotAuthenticated as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=401, mimetype="application/json")
+    except NotABrandMember as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=403, mimetype="application/json")
+    except https_fn.HttpsError as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=400, mimetype="application/json")
+    except Exception as e:
+        log.exception("brand_members failed")
         return https_fn.Response(json.dumps({"error": str(e)}), status=500, mimetype="application/json")
 
 
@@ -378,6 +584,10 @@ def api_recompute_centroid(req: https_fn.Request) -> https_fn.Response:
             }),
             status=200, mimetype="application/json",
         )
+    except NotAuthenticated as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=401, mimetype="application/json")
+    except NotABrandMember as e:
+        return https_fn.Response(json.dumps({"error": str(e)}), status=403, mimetype="application/json")
     except https_fn.HttpsError as e:
         return https_fn.Response(json.dumps({"error": str(e)}), status=400, mimetype="application/json")
     except Exception as e:

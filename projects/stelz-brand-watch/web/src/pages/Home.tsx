@@ -4,22 +4,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  PageShell, Card, Badge, Button, Img, Input, Tabs, PRODUCT_LINE_LABEL,
+  PageShell, Card, Badge, Button, Img, Avatar, Input, Tabs, formatFollowers, PRODUCT_LINE_LABEL,
 } from '../components/ui'
 import { Sparkline, LineChart, BarChart, Donut, StackedDayBars, bucketByDay, type Series } from '../components/Chart'
 import { DetectionDrawer } from '../components/DetectionDrawer'
-import { fetchDetections, fetchTopResonance, loadState, markSeen, rateDetection, type DetectionRow, type ResonanceRow } from '../lib/data'
+import {
+  fetchDetections, fetchTopResonance, fetchCreatorSubcultures, fetchSubcultures,
+  fetchCreatorProfiles,
+  loadState, markSeen, rateDetection, type DetectionRow, type ResonanceRow,
+} from '../lib/data'
 import { imageUrlFor, parentPostKey, dedupeByPost } from '../lib/types'
 import { withSignal, signalCounts, untaggedShare, isBrandTag } from '../lib/signal'
 import { detectionQuality, splitByQuality } from '../lib/quality'
+import { sceneBreakdown, subcultureBreakdown, type CreatorSceneMap } from '../lib/scenes'
+import { communityProfiles, oneLineSummary, DAY_NAMES, type CommunityProfile } from '../lib/communities'
+import { detectionsCsv, communitiesCsv, downloadCsv, datedFilename } from '../lib/csv'
 import { verifyDetection, sortByEvidence } from '../lib/verify'
 import {
-  fbBootstrapBrand, fbStepHashtags, fbStepCreators, fbStepSrs,
+  fbBootstrapBrand, fbStepHashtags, fbStepCreators, fbStepSrs, fbStepSentiment,
+  fbStepSubcultures, fbStepProfiles,
   fbFetchPipelineCounts, fbSubscribeScanState, type ScanState,
 } from '../lib/firestore'
 import {
   pickWorthALook, biggestFanToday, detectSpike, countNewSince,
 } from '../lib/score'
+import { useMembership, ReadOnlyNotice } from '../lib/membership'
 
 type Tab = 'briefing' | 'feed' | 'review' | 'creators'
 type PipelineCounts = { creators: number; posts: number; detections: number; detectionsHit: number; discoveryQueue: number }
@@ -73,6 +82,15 @@ export default function Home() {
   const hasCache = detections.length > 0 || !!counts
   const loading = !hasCache && refreshing
 
+  // Creator → subcultures, plus the scene labels. Loaded separately from the
+  // main refresh: both collections are small, and a brand that has never run
+  // the seeding step simply gets empty maps and the per-photo fallback.
+  const [creatorScenes, setCreatorScenes] = useState<CreatorSceneMap>({})
+  const [sceneLabels, setSceneLabels] = useState<Record<string, string>>({})
+  // Creator records — the only place Instagram follower counts, bios and
+  // avatars live. Detections never gain them retroactively.
+  const [creatorProfiles, setCreatorProfiles] = useState<Record<string, { followerCount: number | null; bio: string | null; avatarUrl: string | null }>>({})
+
   const [lastSeenAt] = useState<string | null>(() => loadState().lastSeenAt)
   useEffect(() => { markSeen() }, [])
 
@@ -96,6 +114,21 @@ export default function Home() {
   }, [])
 
   useEffect(() => { void refreshData() }, [refreshData])
+
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all([
+      fetchCreatorSubcultures().catch(() => ({} as CreatorSceneMap)),
+      fetchSubcultures().catch(() => []),
+      fetchCreatorProfiles().catch(() => ({})),
+    ]).then(([links, defs, profiles]) => {
+      if (cancelled) return
+      setCreatorScenes(links)
+      setSceneLabels(Object.fromEntries(defs.map((d) => [d.slug, d.emoji ? `${d.emoji} ${d.name}` : d.name])))
+      setCreatorProfiles(profiles)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   // Detection workers keep writing after the scrape publisher finishes.
   // Poll refreshData every 25s only when the backend is actively working:
@@ -161,10 +194,22 @@ export default function Home() {
       actions={
         <div className="flex items-center gap-3">
           {refreshing && hasCache && <RefreshingTag />}
+          {/* Export is a READ. Deliberately available to read-only testers and
+              to anyone in a demo — it takes what is already on screen. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={uniqueDetections.length === 0}
+            onClick={() => downloadCsv(datedFilename('stelz-hits'), detectionsCsv(uniqueDetections))}
+          >
+            Export CSV
+          </Button>
           <RunScanButton onComplete={refreshData} liveHits={activeRows.filter((d) => d.detected === true).length} />
         </div>
       }
     >
+      <ReadOnlyNotice />
+
       {loading && <SkeletonHome />}
       {error && <Card className="p-10 text-center text-[13px] text-[var(--color-bad)]">{error}</Card>}
 
@@ -181,6 +226,9 @@ export default function Home() {
                 counts={counts}
                 lastSeenAt={lastSeenAt}
                 days={days}
+                creatorScenes={creatorScenes}
+                sceneLabels={sceneLabels}
+                creatorProfiles={creatorProfiles}
                 onOpen={setActiveDetection}
                 onGotoTab={setTab}
               />
@@ -198,7 +246,7 @@ export default function Home() {
               <ReviewTab detections={activeRows} allDetections={detections} />
             )}
             {tab === 'creators' && (
-              <CreatorsTab detections={activeRows} />
+              <CreatorsTab detections={activeRows} resonance={resonance} creatorProfiles={creatorProfiles} />
             )}
           </div>
         </>
@@ -219,7 +267,7 @@ export default function Home() {
 // ─────────────────────── BRIEFING ───────────────────────
 
 function BriefingTab({
-  detections, rangeRows, counts, days, onOpen, onGotoTab,
+  detections, rangeRows, counts, days, creatorScenes, sceneLabels, creatorProfiles, onOpen, onGotoTab,
 }: {
   detections: DetectionRow[]
   rangeRows: DetectionRow[]
@@ -227,6 +275,9 @@ function BriefingTab({
   counts: PipelineCounts | null
   lastSeenAt: string | null
   days: number
+  creatorScenes: CreatorSceneMap
+  sceneLabels: Record<string, string>
+  creatorProfiles: Record<string, { followerCount: number | null; bio: string | null; avatarUrl: string | null }>
   onOpen: (d: DetectionRow) => void
   onGotoTab: (t: Tab) => void
 }) {
@@ -240,7 +291,15 @@ function BriefingTab({
 
   return (
     <div className="space-y-8">
-      <DashboardSection detections={detections} rangeRows={rangeRows} days={days} onGotoTab={onGotoTab} />
+      <DashboardSection
+        detections={detections}
+        rangeRows={rangeRows}
+        days={days}
+        creatorScenes={creatorScenes}
+        sceneLabels={sceneLabels}
+        creatorProfiles={creatorProfiles}
+        onGotoTab={onGotoTab}
+      />
 
       <section>
         <header className="flex items-end justify-between mb-4">
@@ -450,6 +509,10 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
   // restored if the call fails.
   const [rejected, setRejected] = useState<Set<string>>(new Set())
   const [rejectError, setRejectError] = useState<string | null>(null)
+  // Non-members never get the ✕ at all. The server refuses their write anyway
+  // (main.py._require_brand_member); showing a control that always 403s reads
+  // as a broken tool rather than as a permission boundary.
+  const { canWrite } = useMembership()
 
   const reject = useCallback(async (d: DetectionRow) => {
     const key = parentPostKey(d)
@@ -666,7 +729,7 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
                   d={d}
                   isNew={!!(lastSeenAt && d.posted_at && d.posted_at > lastSeenAt)}
                   onOpen={() => onOpen(d)}
-                  onReject={() => void reject(d)}
+                  onReject={canWrite ? () => void reject(d) : undefined}
                 />
               ))}
             </div>
@@ -694,7 +757,9 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
                   of the mistakes. Best-evidenced first: rows tagged{' '}
                   <span className="text-[var(--color-warn)]">name only</span> had nothing but the
                   word STËLZ read off them, no label text.{' '}
-                  <span className="text-[var(--color-ink-subtle)]">Hit ✕ on anything that isn't Stëlz — it won't come back.</span>
+                  {canWrite && (
+                    <span className="text-[var(--color-ink-subtle)]">Hit ✕ on anything that isn't Stëlz — it won't come back.</span>
+                  )}
                 </p>
                 {bands.rivals > 0 && (
                   <button
@@ -713,7 +778,7 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
                     d={d}
                     isNew={!!(lastSeenAt && d.posted_at && d.posted_at > lastSeenAt)}
                     onOpen={() => onOpen(d)}
-                    onReject={() => void reject(d)}
+                    onReject={canWrite ? () => void reject(d) : undefined}
                   />
                 ))}
               </div>
@@ -748,7 +813,15 @@ function SignalBadge({ d }: { d: DetectionRow }) {
   if (s.signal === 'visual_only') {
     return (
       <>
-        <Badge tone="accent">no tag</Badge>
+        {/* A misspelled brand tag is still a discovery — searching #stelz will
+            not surface #steltz — but "no tag" beside a visible #steltz chip
+            reads as a broken tool. Naming the misspelling says the same thing
+            and survives being looked at. */}
+        {s.misspelledTag
+          ? <span title={`Tagged #${s.misspelledTag} — a misspelling. Searching the correct spelling would not find this post.`}>
+              <Badge tone="warn">typo</Badge>
+            </span>
+          : <Badge tone="accent">no tag</Badge>}
         {/* The brand IS named in the caption, but Instagram has no caption
             search — so the post stays a genuine discovery. Surfaced so a
             reviewer who reads "STËLZ!" in the text doesn't think we missed it. */}
@@ -769,6 +842,27 @@ function VerifiedBadge({ d }: { d: DetectionRow }) {
   return (
     <span title={d.verify_reason ?? 'Re-read at higher resolution and identified as Stëlz.'}>
       <Badge tone="good">double-checked</Badge>
+    </span>
+  )
+}
+
+// How the caption talks about the brand. Rendered only when scored — an
+// unscored hit shows nothing rather than defaulting to neutral, because the
+// backfill runs in batches and "no badge" must not read as "no opinion".
+// Neutral itself stays unbadged too: it is the majority case and a badge on
+// every second card would drown the two labels worth noticing.
+const SENTIMENT_BADGE: Record<string, { label: string; tone: 'good' | 'bad' | 'muted' }> = {
+  positive: { label: 'positive', tone: 'good' },
+  negative: { label: 'negative', tone: 'bad' },
+  promotional: { label: 'promo', tone: 'muted' },
+}
+
+function SentimentBadge({ d }: { d: DetectionRow }) {
+  const spec = d.sentiment ? SENTIMENT_BADGE[d.sentiment] : null
+  if (!spec) return null
+  return (
+    <span title={d.sentiment_rationale ?? `Caption reads as ${d.sentiment}.`}>
+      <Badge tone={spec.tone}>{spec.label}</Badge>
     </span>
   )
 }
@@ -826,10 +920,11 @@ function FeedCard({ d, isNew, onOpen, onReject }: { d: DetectionRow; isNew: bool
 
       {/* Body */}
       <div className="p-3.5 flex flex-col gap-2.5 flex-1">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[13px] font-medium truncate">@{d.creator_handle}</span>
+        <div className="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0">
+          <span className="text-[13px] font-medium truncate max-w-full">@{d.creator_handle}</span>
           <SignalBadge d={d} />
           <VerifiedBadge d={d} />
+          <SentimentBadge d={d} />
           {d.creator_tier === 'tier_1' && <Badge tone="accent">T1</Badge>}
           {d.verified === true && <Badge tone="good">✓</Badge>}
           {d.is_false_positive === true && <Badge tone="bad">FP</Badge>}
@@ -906,6 +1001,7 @@ function ReviewTab({ detections, allDetections }: { detections: DetectionRow[]; 
   const [handled, setHandled] = useState<Record<string, 'confirmed' | 'rejected'>>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { canWrite } = useMembership()
 
   const queue = useMemo(
     () => detections.filter(
@@ -917,7 +1013,9 @@ function ReviewTab({ detections, allDetections }: { detections: DetectionRow[]; 
   const doneCount = Object.keys(handled).length
 
   const rate = useCallback(async (verdict: 'confirmed' | 'rejected') => {
-    if (!current || busy) return
+    // Guards the keyboard path too (← / →), not just the buttons — otherwise a
+    // read-only visitor can still fire a write by pressing an arrow key.
+    if (!current || busy || !canWrite) return
     setBusy(true); setError(null)
     const key = parentPostKey(current)
     // A post can have many detection docs (video frames, carousel slots).
@@ -937,7 +1035,7 @@ function ReviewTab({ detections, allDetections }: { detections: DetectionRow[]; 
     } finally {
       setBusy(false)
     }
-  }, [current, busy, allDetections])
+  }, [current, busy, allDetections, canWrite])
 
   // Keyboard: ← reject, → approve
   useEffect(() => {
@@ -967,7 +1065,7 @@ function ReviewTab({ detections, allDetections }: { detections: DetectionRow[]; 
     <div className="max-w-2xl mx-auto space-y-4">
       <div className="flex items-center justify-between text-[12px] text-[var(--color-ink-muted)]">
         <span className="tabular-nums">{queue.length} waiting · {doneCount} done this session</span>
-        <span className="hidden sm:inline text-[var(--color-ink-subtle)]">← reject · approve →</span>
+        {canWrite && <span className="hidden sm:inline text-[var(--color-ink-subtle)]">← reject · approve →</span>}
       </div>
 
       {error && (
@@ -1024,23 +1122,30 @@ function ReviewTab({ detections, allDetections }: { detections: DetectionRow[]; 
           )}
         </div>
 
-        {/* Verdict buttons */}
-        <div className="grid grid-cols-2 border-t border-[var(--color-border)]">
-          <button
-            onClick={() => void rate('rejected')}
-            disabled={busy}
-            className="py-4 text-[13px] font-medium uppercase tracking-wide text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-white transition-colors border-r border-[var(--color-border)] disabled:opacity-50"
-          >
-            ✗ Not Stëlz
-          </button>
-          <button
-            onClick={() => void rate('confirmed')}
-            disabled={busy}
-            className="py-4 text-[13px] font-medium uppercase tracking-wide text-[var(--color-good)] hover:bg-[var(--color-good)] hover:text-white transition-colors disabled:opacity-50"
-          >
-            ✓ Confirm
-          </button>
-        </div>
+        {/* Verdict buttons — hidden entirely for read-only visitors. The queue
+            itself stays browsable: seeing what's pending is a read. */}
+        {canWrite ? (
+          <div className="grid grid-cols-2 border-t border-[var(--color-border)]">
+            <button
+              onClick={() => void rate('rejected')}
+              disabled={busy}
+              className="py-4 text-[13px] font-medium uppercase tracking-wide text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-white transition-colors border-r border-[var(--color-border)] disabled:opacity-50"
+            >
+              ✗ Not Stëlz
+            </button>
+            <button
+              onClick={() => void rate('confirmed')}
+              disabled={busy}
+              className="py-4 text-[13px] font-medium uppercase tracking-wide text-[var(--color-good)] hover:bg-[var(--color-good)] hover:text-white transition-colors disabled:opacity-50"
+            >
+              ✓ Confirm
+            </button>
+          </div>
+        ) : (
+          <div className="border-t border-[var(--color-border)] py-4 text-center text-[12px] text-[var(--color-ink-subtle)]">
+            Read-only — note what's wrong instead of voting on it.
+          </div>
+        )}
       </Card>
 
       {/* Next up preview strip */}
@@ -1064,7 +1169,36 @@ function ReviewTab({ detections, allDetections }: { detections: DetectionRow[]; 
 
 // ─────────────────────── CREATORS ───────────────────────
 
-function CreatorsTab({ detections }: { detections: DetectionRow[] }) {
+function CreatorsTab({ detections, resonance, creatorProfiles }: {
+  detections: DetectionRow[]
+  resonance: ResonanceRow[]
+  creatorProfiles: Record<string, { followerCount: number | null; bio: string | null; avatarUrl: string | null }>
+}) {
+  // Three possible sources, in order of freshness:
+  //   1. the creator record  — updated by the profile refresh, current
+  //   2. the resonance doc   — a copy of the creator record as of the last SRS
+  //   3. the detection       — a copy as of when the post was analysed
+  //
+  // Preferring the record is what makes a profile refresh visible immediately.
+  // Reading resonance first meant a refresh only showed up after the NEXT SRS
+  // run, which looked exactly like the refresh having done nothing.
+  const followersByHandle = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of resonance) {
+      if (r.follower_count && r.follower_count > 0) m.set(r.creator_handle.toLowerCase(), r.follower_count)
+    }
+    for (const [handle, p] of Object.entries(creatorProfiles)) {
+      if (p.followerCount && p.followerCount > 0) m.set(handle, p.followerCount)
+    }
+    return m
+  }, [resonance, creatorProfiles])
+  const avatarByHandle = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const [handle, p] of Object.entries(creatorProfiles)) {
+      if (p.avatarUrl) m.set(handle, p.avatarUrl)
+    }
+    return m
+  }, [creatorProfiles])
   const [search, setSearch] = useState('')
   const [platformFilter, setPlatformFilter] = useState<string | null>(null)
   const [sort, setSort] = useState<'hits' | 'followers' | 'recent'>('hits')
@@ -1104,6 +1238,7 @@ function CreatorsTab({ detections }: { detections: DetectionRow[] }) {
       cur.totalLikes += d.likes_count ?? 0
       cur.totalViews += d.views_count ?? 0
       if ((d.follower_count ?? 0) > (cur.followers ?? 0)) cur.followers = d.follower_count
+      if (!cur.followers) cur.followers = followersByHandle.get(d.creator_handle.toLowerCase()) ?? null
       if (!cur.avatar && d.extras?.author?.avatar) cur.avatar = d.extras.author.avatar
       if (!cur.lastSeen || (d.posted_at ?? '') > cur.lastSeen) cur.lastSeen = d.posted_at
       if (cur.recent.length < 4) cur.recent.push(d)
@@ -1162,7 +1297,7 @@ function CreatorsTab({ detections }: { detections: DetectionRow[] }) {
               {/* Identity row */}
               <div className="flex items-center gap-3">
                 <div className="w-11 h-11 rounded-full overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg)] shrink-0">
-                  <Img src={r.avatar || (r.recent[0] ? imageUrlFor(r.recent[0]) : null)} />
+                  <Avatar src={avatarByHandle.get(r.handle.toLowerCase()) ?? r.avatar} handle={r.handle} className="w-full h-full text-[14px]" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-[14px] font-medium truncate">@{r.handle}</div>
@@ -1218,7 +1353,15 @@ function CreatorsTab({ detections }: { detections: DetectionRow[] }) {
 
 // ─────────────────────── Dashboard ───────────────────────
 
-function DashboardSection({ detections, rangeRows, days, onGotoTab }: { detections: DetectionRow[]; rangeRows: DetectionRow[]; days: number; onGotoTab?: (t: Tab) => void }) {
+function DashboardSection({ detections, rangeRows, days, creatorScenes, sceneLabels, creatorProfiles, onGotoTab }: {
+  detections: DetectionRow[]
+  rangeRows: DetectionRow[]
+  days: number
+  creatorScenes: CreatorSceneMap
+  sceneLabels: Record<string, string>
+  creatorProfiles: Record<string, { followerCount: number | null; bio: string | null; avatarUrl: string | null }>
+  onGotoTab?: (t: Tab) => void
+}) {
   // ── Top-row KPIs ────────────────────────────────────────────────
   const totalHits = rangeRows.filter((d) => d.detected === true).length
   const week = new Date(); week.setDate(week.getDate() - 7)
@@ -1343,7 +1486,20 @@ function DashboardSection({ detections, rangeRows, days, onGotoTab }: { detectio
       avatar: e.avatar,
       firstImage: e.firstImage,
       platform: e.platform,
-      growth: e.prior === 0 ? (e.recent > 0 ? 100 : 0) : ((e.recent - e.prior) / Math.max(1, e.prior)) * 100,
+      // Growth compares the two halves of the window, and is only meaningful
+      // when BOTH halves have something in them.
+      //
+      // The old formula returned -100% whenever a creator had no hits in the
+      // recent half — which, with scans running on demand rather than daily, is
+      // almost everyone almost always. A leaderboard where every row is a red
+      // -100% describes our scan schedule, not the creators, and reads as a
+      // brand in freefall. `null` means "no comparison to draw" and renders as
+      // nothing at all.
+      growth: e.recent === 0
+        ? null                                   // quiet in the recent half — say nothing
+        : e.prior === 0
+          ? 'new' as const                       // first hits ever: a change, not a percentage
+          : ((e.recent - e.prior) / e.prior) * 100,
     }))
     .sort((a, b) => b.hits - a.hits)
     .slice(0, 8)
@@ -1364,10 +1520,17 @@ function DashboardSection({ detections, rangeRows, days, onGotoTab }: { detectio
   const soundCounts = new Map<string, { label: string; url: string | null; count: number; original: boolean; artist: string | null }>()
   for (const d of rangeRows.filter((x) => x.detected && x.music)) {
     const m = d.music!
+    // Skip tracks we cannot identify AT ALL. The old key for those was the
+    // literal string "|" (empty title + empty artist), which is not blank, so
+    // the guard below never fired and every unidentifiable track in the data
+    // set collapsed into ONE row labelled "(untitled)" — reported from the
+    // dashboard as "Top sound is (untitled) with 306 hits". It was not a top
+    // sound; it was every sound we failed to read, added together.
+    if (!m.musicId && !(m.title || '').trim()) continue
     const key = m.musicId || `${m.title || ''}|${m.artist || ''}`
     if (!key.trim()) continue
     const cur = soundCounts.get(key) ?? {
-      label: m.title || '(untitled)',
+      label: m.title || 'Original sound',
       url: m.url || null,
       count: 0,
       original: !!m.original,
@@ -1405,6 +1568,48 @@ function DashboardSection({ detections, rangeRows, days, onGotoTab }: { detectio
     .map(([label, value]) => ({ label: label.startsWith('@') ? label : `@${label}`, value, tone: 'ink' as const }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 6)
+
+  // ── Scenes — where the brand lives, and where it lives untagged ──
+  //
+  // Prefer the real subcultures (creators filed into named scenes by
+  // handlers/seed_subcultures.py). Fall back to grouping each PHOTO by what the
+  // detector saw in it when that data hasn't been seeded — see lib/scenes.ts.
+  // The two are counted differently, so the copy below has to switch with them.
+  const hitRows = rangeRows.filter((d) => d.detected === true)
+  const bySubculture = Object.values(creatorScenes).some((v) => v.length > 0)
+  const scenes = bySubculture
+    ? subcultureBreakdown(hitRows, creatorScenes, sceneLabels)
+    : sceneBreakdown(hitRows)
+  const scenesPlaced = scenes.filter((s) => s.key !== 'other')
+  const scenesUntaggedTotal = scenes.reduce((n, s) => n + s.untagged, 0)
+  const unplacedScene = scenes.find((s) => s.key === 'other') ?? null
+
+  // Full portraits per scene — see lib/communities.ts. Same grouping as the
+  // block above, but carrying everything we can honestly say about the people
+  // in it rather than just a count.
+  const communities = communityProfiles(hitRows, creatorScenes, sceneLabels, { creators: creatorProfiles })
+
+  // ── Sentiment — how the captions talk about the brand ───────────
+  // Only over SCORED rows. Unscored hits are excluded from the denominator
+  // rather than counted as neutral: on rollout most of the back catalogue is
+  // unscored, and folding it into neutral would report a flat, false calm.
+  const sentimentRows = rangeRows.filter((d) => d.detected === true && d.sentiment)
+  const sentimentMix = new Map<string, number>()
+  for (const d of sentimentRows) sentimentMix.set(d.sentiment!, (sentimentMix.get(d.sentiment!) ?? 0) + 1)
+  const SENTIMENT_COLOR: Record<string, string> = {
+    positive: '#6f9f3c',
+    neutral: 'var(--color-border-strong)',
+    negative: '#e8402f',
+    promotional: '#e0a92c',
+  }
+  const sentimentSlices = ['positive', 'neutral', 'promotional', 'negative']
+    .map((k) => ({ label: k[0].toUpperCase() + k.slice(1), value: sentimentMix.get(k) ?? 0, color: SENTIMENT_COLOR[k] }))
+    .filter((s) => s.value > 0)
+  const sentimentScored = sentimentRows.length
+  const sentimentUnscored = rangeRows.filter((d) => d.detected === true && !d.sentiment).length
+  const positivePct = sentimentScored
+    ? Math.round(((sentimentMix.get('positive') ?? 0) / sentimentScored) * 100)
+    : 0
 
   return (
     <section className="space-y-14">
@@ -1493,22 +1698,33 @@ function DashboardSection({ detections, rangeRows, days, onGotoTab }: { detectio
                         {i + 1}
                       </span>
                       <span className="w-10 h-10 rounded-full overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg)] shrink-0">
-                        <Img src={g.avatar || g.firstImage} />
+                        <Avatar
+                          src={creatorProfiles[g.handle.toLowerCase()]?.avatarUrl ?? g.avatar}
+                          handle={g.handle}
+                          className="w-full h-full text-[13px]"
+                        />
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block text-[13px] font-medium truncate group-hover:underline">@{g.handle}</span>
                         <span className="block text-[11px] text-[var(--color-ink-subtle)]">
                           {g.platform === 'tiktok' ? 'TikTok' : 'Instagram'}
+                          {creatorProfiles[g.handle.toLowerCase()]?.followerCount
+                            ? ` · ${compactNum(creatorProfiles[g.handle.toLowerCase()]!.followerCount!)} followers`
+                            : ''}
                         </span>
                       </span>
-                      {g.growth !== 0 && (
+                      {g.growth === 'new' ? (
+                        <span className="rounded-full px-2 py-0.5 text-[10px] font-medium text-white shrink-0 bg-[var(--color-accent)]">
+                          new
+                        </span>
+                      ) : typeof g.growth === 'number' && g.growth !== 0 ? (
                         <span
                           className="rounded-full px-2 py-0.5 text-[10px] font-medium text-white shrink-0"
                           style={{ background: g.growth > 0 ? '#6f9f3c' : '#e8402f' }}
                         >
                           {g.growth > 0 ? '+' : ''}{g.growth.toFixed(0)}%
                         </span>
-                      )}
+                      ) : null}
                       <span className="w-28 shrink-0 hidden sm:block">
                         <span className="block h-1.5 bg-[var(--color-border)] relative overflow-hidden">
                           <span
@@ -1532,6 +1748,155 @@ function DashboardSection({ detections, rangeRows, days, onGotoTab }: { detectio
             {topTags.length === 0 ? <EmptyBlock label="No context tags yet." /> : <BarChart rows={topTags} />}
           </DashCard>
         </div>
+      </DashSection>
+
+      {/* ─── Scenes ──────────────────────────────────────────────────── */}
+      <DashSection
+        eyebrow="Audience"
+        title="Which scenes the brand lives in"
+        hint={bySubculture
+          ? 'Creators are filed into scenes by their own hashtag history, then their hits are counted here. Somebody can belong to more than one scene, so these rows add up to more than the total number of hits — each row answers "how much of our content comes out of this scene", not "how do the hits split".'
+          : 'Grouped from what the detector saw in each photo — the activity and the setting, not the hashtags. The number that counts is how many of each scene carry no brand tag at all.'}
+      >
+        {scenesPlaced.length === 0 ? (
+          <EmptyBlock label="No scenes to group yet." />
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <DashCard
+              title="Untagged hits per scene"
+              sub={`${scenesUntaggedTotal.toLocaleString()} posts with no #stelz and no @drinkstelz`}
+              span={2}
+            >
+              <ul className="divide-y divide-[var(--color-border)]">
+                {scenesPlaced.map((s) => (
+                  <li key={s.key} className="flex items-center gap-4 py-3">
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13px] font-medium truncate">{s.label}</span>
+                      <span className="block text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
+                        {s.untaggedPct}% of {s.total.toLocaleString()} hits here are untagged
+                        {s.outdoorPct != null ? ` · ${s.outdoorPct}% outdoors` : ''}
+                        {'creators' in s && (s as { creators: number }).creators > 0
+                          ? ` · ${(s as { creators: number }).creators} creator${(s as { creators: number }).creators === 1 ? '' : 's'}`
+                          : ''}
+                      </span>
+                    </span>
+                    <span className="w-28 shrink-0 hidden sm:block">
+                      <span className="block h-1.5 bg-[var(--color-border)] relative overflow-hidden">
+                        <span
+                          className="absolute inset-y-0 left-0 bg-[var(--color-accent)]"
+                          style={{
+                            width: `${Math.round((s.untagged / Math.max(1, scenesPlaced[0].untagged)) * 100)}%`,
+                          }}
+                        />
+                      </span>
+                    </span>
+                    <span className="text-right shrink-0 w-14">
+                      <span className="block text-[16px] font-medium tabular-nums leading-none">
+                        {s.untagged.toLocaleString()}
+                      </span>
+                      <span className="block text-[9px] uppercase tracking-wider text-[var(--color-ink-subtle)] mt-0.5">
+                        untagged
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {unplacedScene && unplacedScene.total > 0 && (
+                /* Stated, not hidden. A big Unplaced share means the scene
+                   grouping is thin, and the reader should know that before
+                   reading anything into the bars above. */
+                <p className="mt-4 pt-3 border-t border-[var(--color-border)] text-[11px] text-[var(--color-ink-subtle)] leading-relaxed">
+                  {unplacedScene.total.toLocaleString()} further hits couldn't be placed in a
+                  scene — {bySubculture
+                    ? 'their creator matched none of the scene definitions, usually because we have too few of their posts to judge.'
+                    : 'the detector returned no activity or setting for them.'}
+                </p>
+              )}
+            </DashCard>
+
+            <DashCard title="Scene mix" sub={bySubculture ? 'Hits per scene — creators can appear in several' : 'Share of all hits by scene'}>
+              <Donut
+                slices={scenesPlaced.slice(0, 6).map((s, i) => ({
+                  label: s.label,
+                  value: s.total,
+                  color: ['#e8402f', '#f59023', '#6f9f3c', '#222c51', '#e0a92c', '#6b8fd6'][i % 6],
+                }))}
+                centreLabel={scenesPlaced.length.toString()}
+                centreSub="scenes"
+              />
+            </DashCard>
+          </div>
+        )}
+      </DashSection>
+
+      {/* ─── Communities ─────────────────────────────────────────────── */}
+      {communities.length > 0 && (
+        <DashSection
+          eyebrow="Audience"
+          title="Who these people are"
+          hint="A portrait of each scene, built only from what the posts themselves carry. Where a signal is missing — and Instagram gives us far less of it than TikTok — the line is left out rather than filled in."
+        >
+          <div className="flex justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => downloadCsv(datedFilename('stelz-communities'), communitiesCsv(communities))}
+            >
+              Export communities CSV
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {communities.map((c) => <CommunityCard key={c.key} p={c} />)}
+          </div>
+          <p className="text-[11px] text-[var(--color-ink-subtle)] leading-relaxed max-w-3xl">
+            Age and gender are deliberately absent: nothing in the pipeline collects either,
+            and inferring them from photos or handles would put invented attributes on real
+            people. Where someone states their age in their own bio it is shown as
+            self-reported, with the sample size next to it.
+          </p>
+        </DashSection>
+      )}
+
+      {/* ─── Sentiment ───────────────────────────────────────────────── */}
+      <DashSection
+        eyebrow="Audience"
+        title="How people talk about it"
+        hint="Read from each post's caption after detection — never from the photo. Posts the sentiment pass hasn't reached yet are left out of these numbers rather than counted as neutral."
+      >
+        {sentimentScored === 0 ? (
+          <EmptyBlock
+            label={
+              sentimentUnscored > 0
+                ? `No captions scored yet — ${sentimentUnscored.toLocaleString()} hits are queued for the next pass.`
+                : 'No captions scored yet.'
+            }
+          />
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <DashCard title="Sentiment mix" sub={`Across ${sentimentScored.toLocaleString()} scored posts`}>
+              <Donut slices={sentimentSlices} centreLabel={`${positivePct}%`} centreSub="positive" />
+            </DashCard>
+
+            <DashCard title="What the labels mean" sub="Four buckets, one per post" span={2}>
+              <dl className="grid grid-cols-[110px_1fr] gap-y-3 gap-x-4 text-[12px] leading-relaxed">
+                <dt className="font-medium">Positive</dt>
+                <dd className="text-[var(--color-ink-muted)]">The caption is warm about the drink itself — not just about the night out.</dd>
+                <dt className="font-medium">Neutral</dt>
+                <dd className="text-[var(--color-ink-muted)]">The can is simply there. Most organic posts land here, and that is not a bad sign.</dd>
+                <dt className="font-medium">Promotional</dt>
+                <dd className="text-[var(--color-ink-muted)]">A bar, retailer or paid partnership. Commercial reach, not word of mouth.</dd>
+                <dt className="font-medium">Negative</dt>
+                <dd className="text-[var(--color-ink-muted)]">A complaint or criticism. Worth reading individually — the count is usually small enough to.</dd>
+              </dl>
+              {sentimentUnscored > 0 && (
+                <p className="mt-4 pt-3 border-t border-[var(--color-border)] text-[11px] text-[var(--color-ink-subtle)] leading-relaxed">
+                  {sentimentUnscored.toLocaleString()} further hits are not scored yet. Scoring runs
+                  in batches after each scan, so this number falls over successive runs.
+                </p>
+              )}
+            </DashCard>
+          </div>
+        )}
       </DashSection>
 
       {/* ─── What ────────────────────────────────────────────────────── */}
@@ -1622,6 +1987,166 @@ function DashboardSection({ detections, rangeRows, days, onGotoTab }: { detectio
   )
 }
 
+/**
+ * One scene, as a portrait rather than a bar.
+ *
+ * Every block below is conditional. A community where we know nothing but the
+ * hit count renders as a hit count — which is honest, and visibly thinner than
+ * one where we know the music, the cities and the days. That contrast is
+ * useful information in itself: it shows where the data is thin.
+ */
+function CommunityCard({ p }: { p: CommunityProfile }) {
+  const summary = oneLineSummary(p)
+  const ages = p.selfReportedAges
+  const ageRange = ages.length >= 3
+    ? { lo: Math.min(...ages), hi: Math.max(...ages), n: ages.length }
+    : null
+  const sentimentTotal = p.sentiment.scored
+
+  return (
+    <Card className="p-6 flex flex-col gap-4">
+      <div>
+        <div className="flex items-baseline justify-between gap-3">
+          <h3 className="text-[15px] font-medium">{p.label}</h3>
+          <span className="text-[11px] tabular-nums text-[var(--color-ink-subtle)] shrink-0">
+            {p.creators} {p.creators === 1 ? 'creator' : 'creators'}
+          </span>
+        </div>
+        {summary && (
+          <p className="mt-1 text-[12px] text-[var(--color-ink-muted)] leading-relaxed">{summary}</p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-3 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
+        <MiniStat label="Posts" value={p.hits.toLocaleString()} />
+        <MiniStat label="Untagged" value={`${p.untaggedPct}%`} sub={`${p.untagged.toLocaleString()} posts`} />
+        <MiniStat
+          label="Median followers"
+          value={p.medianFollowers ? compactNum(p.medianFollowers) : '—'}
+          sub={p.medianFollowers ? `known for ${p.followersKnownFor} of ${p.creators}` : 'not reported'}
+        />
+      </div>
+
+      {p.topHashtags.length > 0 && (
+        <Facet title="What else they post about">
+          <div className="flex flex-wrap gap-1">
+            {p.topHashtags.map((h) => (
+              <span key={h.label} className="text-[10px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-ink-muted)] bg-[var(--color-bg)]">
+                #{h.label}
+              </span>
+            ))}
+          </div>
+        </Facet>
+      )}
+
+      {p.topActivities.length > 0 && (
+        <Facet title="What they're doing">
+          <span className="text-[12px] text-[var(--color-ink-muted)]">
+            {p.topActivities.map((a) => a.label).join(' · ')}
+          </span>
+        </Facet>
+      )}
+
+      {p.topSounds.length > 0 && (
+        <Facet title="Sounds they use">
+          <span className="text-[12px] text-[var(--color-ink-muted)]">
+            {p.topSounds.map((sd) => `${sd.label} (${sd.count})`).join(' · ')}
+          </span>
+        </Facet>
+      )}
+
+      {p.topCities.length > 0 && (
+        <Facet title="Where">
+          <span className="text-[12px] text-[var(--color-ink-muted)]">
+            {p.topCities.map((c) => c.label).join(' · ')}
+          </span>
+        </Facet>
+      )}
+
+      {(p.peakDay || p.medianLikes) && (
+        <Facet title="Rhythm">
+          <span className="text-[12px] text-[var(--color-ink-muted)]">
+            {p.peakDay ? `Busiest on ${DAY_NAMES[p.peakDay.day]}s (${p.peakDay.pct}%)` : ''}
+            {p.peakDay && p.medianLikes ? ' · ' : ''}
+            {p.medianLikes ? `${compactNum(p.medianLikes)} likes on a typical post` : ''}
+          </span>
+        </Facet>
+      )}
+
+      {sentimentTotal > 0 && (
+        <Facet title={`How they talk about it (${sentimentTotal} scored)`}>
+          <div className="flex h-1.5 overflow-hidden">
+            {([
+              ['positive', '#6f9f3c'],
+              ['neutral', 'var(--color-border-strong)'],
+              ['promotional', '#e0a92c'],
+              ['negative', '#e8402f'],
+            ] as const).map(([k, color]) => {
+              const v = p.sentiment[k]
+              if (!v) return null
+              return <span key={k} style={{ width: `${(v / sentimentTotal) * 100}%`, background: color }} />
+            })}
+          </div>
+          <div className="mt-1.5 text-[11px] text-[var(--color-ink-subtle)]">
+            {p.sentiment.positive} positive · {p.sentiment.neutral} neutral
+            {p.sentiment.promotional ? ` · ${p.sentiment.promotional} promo` : ''}
+            {p.sentiment.negative ? ` · ${p.sentiment.negative} negative` : ''}
+          </div>
+        </Facet>
+      )}
+
+      {ageRange && (
+        <Facet title="Age">
+          <span className="text-[12px] text-[var(--color-ink-muted)]">
+            {ageRange.lo}–{ageRange.hi}
+            <span className="text-[var(--color-ink-subtle)]">
+              {' '}· self-reported in {ageRange.n} {ageRange.n === 1 ? 'bio' : 'bios'}
+            </span>
+          </span>
+        </Facet>
+      )}
+
+      {p.sampleCreators.length > 0 && (
+        <Facet title="Faces">
+          <div className="flex items-center gap-2 flex-wrap">
+            {p.sampleCreators.map((c) => (
+              <Link
+                key={c.handle}
+                to={`/creators/${c.handle}`}
+                className="flex items-center gap-1.5 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              >
+                <span className="w-6 h-6 rounded-full overflow-hidden border border-[var(--color-border)] shrink-0">
+                  <Avatar src={c.avatar} handle={c.handle} className="w-full h-full text-[9px]" />
+                </span>
+                <span className="hover:underline">@{c.handle}</span>
+              </Link>
+            ))}
+          </div>
+        </Facet>
+      )}
+    </Card>
+  )
+}
+
+function Facet({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-subtle)] mb-1.5">{title}</div>
+      {children}
+    </div>
+  )
+}
+
+function MiniStat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="bg-[var(--color-surface)] px-3 py-2.5">
+      <div className="text-[9px] uppercase tracking-[0.12em] text-[var(--color-ink-subtle)]">{label}</div>
+      <div className="text-[16px] font-medium tabular-nums leading-tight mt-0.5">{value}</div>
+      {sub && <div className="text-[10px] text-[var(--color-ink-subtle)] mt-0.5">{sub}</div>}
+    </div>
+  )
+}
+
 function DashSection({
   eyebrow, title, hint, children,
 }: { eyebrow: string; title: string; hint?: string; children: React.ReactNode }) {
@@ -1687,12 +2212,16 @@ function PickCard({ d, onOpen }: { d: DetectionRow; onOpen: () => void }) {
           <Link to={`/creators/${d.creator_handle}`} className="text-[13px] font-medium hover:underline truncate min-w-0">@{d.creator_handle}</Link>
           <SignalBadge d={d} />
           <VerifiedBadge d={d} />
+          <SentimentBadge d={d} />
           {d.creator_tier === 'tier_1' && <Badge tone="accent">T1</Badge>}
           {d.product_line && <Badge tone="muted">{PRODUCT_LINE_LABEL[d.product_line] ?? d.product_line}</Badge>}
         </div>
         {d.post_caption && <p className="text-[12px] text-[var(--color-ink-muted)] leading-relaxed line-clamp-2">"{d.post_caption}"</p>}
         <div className="flex items-center justify-between text-[11px] text-[var(--color-ink-subtle)] tabular-nums mt-auto">
-          <span>{((d.confidence ?? 0) * 100).toFixed(0)}% · {(d.follower_count ?? 0).toLocaleString()} followers</span>
+          <span>
+            {((d.confidence ?? 0) * 100).toFixed(0)}%
+            {formatFollowers(d.follower_count) ? ` · ${formatFollowers(d.follower_count)} followers` : ''}
+          </span>
           <span>{d.posted_at ? timeAgo(d.posted_at) : '—'}</span>
         </div>
       </div>
@@ -1705,6 +2234,10 @@ function RunScanButton({ onComplete, liveHits }: { onComplete: () => void; liveH
   const [clicking, setClicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const prevRunning = useRef(false)
+  // An unclaimed brand shows the button to anyone: pressing it calls bootstrap,
+  // which makes the caller its owner. That is the only route into membership
+  // for a brand nobody owns yet, and it runs through this button.
+  const { canWrite, brandUnclaimed } = useMembership()
 
   // Subscribe once to brand.scan — persists across refresh, updates live.
   useEffect(() => {
@@ -1741,8 +2274,22 @@ function RunScanButton({ onComplete, liveHits }: { onComplete: () => void; liveH
       await fbStepHashtags(500, 50)
       // creators + SRS still run in the background — fire-and-forget without
       // blocking the pill. Failures surface as `error` on brand.scan later.
-      void fbStepCreators(80, 8).catch(() => {})
-      void fbStepSrs().catch(() => {})
+      // Subcultures must land before SRS — the subculture layer reads the
+      // creator classification this writes. Chained rather than fired in
+      // parallel for that reason; both are free, local compute.
+      // Order is load-bearing: profiles must land before SRS (it reads the
+      // creator record's follower count) and subcultures before SRS too (it
+      // reads the scene links). Chained, not parallel, for that reason.
+      void fbStepCreators(80, 8)
+        .catch(() => {})
+        .then(() => fbStepProfiles().catch(() => {}))
+        .then(() => fbStepSubcultures().catch(() => {}))
+        .then(() => fbStepSrs().catch(() => {}))
+      // Sentiment scores whatever is unscored, this scan's hits included on the
+      // next run. Batched and capped, so a large backlog drains over several
+      // scans rather than in one long call — and a failure here must never
+      // surface as a failed scan, since the detections themselves are fine.
+      void fbStepSentiment().catch(() => {})
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -1760,6 +2307,11 @@ function RunScanButton({ onComplete, liveHits }: { onComplete: () => void; liveH
   const displayHits = liveHits ?? state?.detectionsHit ?? 0
 
   const busy = clicking || running
+  // A scan spends real money at Apify (lib/usage.py puts a default run in the
+  // tens of dollars). The server refuses non-members; the button goes with it,
+  // so nobody triggers spend by exploring — except on a brand nobody owns,
+  // where this button is the claim mechanism.
+  if (!canWrite && !brandUnclaimed) return null
   return (
     <div className="flex items-center gap-3">
       <Button

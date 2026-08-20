@@ -80,6 +80,9 @@ function mapDetection(d: QueryDocumentSnapshot<DocumentData>, brandId: string): 
     verify_verdict: (x.verifyVerdict as string | null) ?? null,
     verify_brand: (x.verifyBrand as string | null) ?? null,
     verify_reason: (x.verifyReason as string | null) ?? null,
+    sentiment: (x.sentiment as DetectionRow['sentiment']) ?? null,
+    sentiment_score: (x.sentimentScore as number | null) ?? null,
+    sentiment_rationale: (x.sentimentRationale as string | null) ?? null,
     frame_idx: (x.frameIdx as number | null) ?? null,
     post_id: (x.postId as string | null) ?? null,
     brand_id: brandId,
@@ -102,6 +105,8 @@ function mapResonance(d: QueryDocumentSnapshot<DocumentData>, brandId: string): 
     geo: x.geo ?? null,
     visual: x.visual ?? null,
     bootstrap_mode: x.bootstrapMode ?? null,
+    subculture_layer_live: x.subcultureLayerLive as boolean | undefined,
+    primary_subculture: (x.primarySubculture as string | null) ?? null,
     computed_at: tsToIso(x.computedAt) ?? new Date().toISOString(),
     creator_id: null,
     full_name: x.fullName ?? null,
@@ -164,6 +169,154 @@ export async function fbFetchTopResonance(limit = 50, brandId = BRAND_ID): Promi
   const col = collection(fbDb, 'brands', brandId, 'resonance')
   const snap = await getDocs(query(col, orderBy('srs', 'desc'), fsLimit(limit)))
   return snap.docs.map((d) => mapResonance(d, brandId))
+}
+
+/** Is this uid a member of the brand?
+ *
+ * Membership is what separates a moderator from a tester: every write path
+ * (api_rate_detection, the scan steps, reference-image writes) is gated on it
+ * server-side, in main.py._require_brand_member and in firestore.rules. This
+ * read exists purely so the UI can say so up front instead of letting someone
+ * click a button that will 403. Never treat a `true` here as authorisation —
+ * it is a hint for rendering, and the server checks again regardless.
+ */
+export async function fbIsBrandMember(uid: string, brandId = BRAND_ID): Promise<boolean> {
+  try {
+    const snap = await getDoc(doc(fbDb, 'brands', brandId, 'members', uid))
+    return snap.exists()
+  } catch {
+    // Rules deny the read, offline, etc. Assume the safer of the two answers:
+    // read-only. A member who sees the banner by mistake loses a button; a
+    // tester who doesn't see it gets a confusing 403 instead.
+    return false
+  }
+}
+
+// ────────────── Subcultures (audience scenes) ──────────────
+
+export type SubcultureDef = {
+  slug: string
+  name: string
+  description: string | null
+  color: string | null
+  emoji: string | null
+}
+
+/** Which scenes each creator belongs to. Keyed by handle.
+ *
+ * A creator with an EMPTY array has been classified and matched nothing —
+ * distinct from a creator missing from the map entirely, who has never been
+ * classified at all. The dashboard reports those two differently, so the
+ * distinction has to survive the read.
+ */
+export type CreatorSubcultures = Record<string, { slug: string; confidence: number }[]>
+
+export async function fbListSubcultures(brandId = BRAND_ID): Promise<SubcultureDef[]> {
+  const snap = await getDocs(collection(fbDb, 'brands', brandId, 'subcultures'))
+  return snap.docs.map((d) => {
+    const x = d.data()
+    return {
+      slug: x.slug ?? d.id,
+      name: x.name ?? d.id,
+      description: x.description ?? null,
+      color: x.color ?? null,
+      emoji: x.emoji ?? null,
+    }
+  })
+}
+
+export async function fbFetchCreatorSubcultures(brandId = BRAND_ID): Promise<CreatorSubcultures> {
+  const snap = await getDocs(collection(fbDb, 'brands', brandId, 'creatorSubcultures'))
+  const out: CreatorSubcultures = {}
+  for (const d of snap.docs) {
+    const x = d.data()
+    const handle = ((x.handle as string) ?? d.id ?? '').toLowerCase()
+    if (!handle) continue
+    out[handle] = ((x.links ?? []) as { slug: string; confidence: number }[])
+      .map((l) => ({ slug: l.slug, confidence: l.confidence ?? 0 }))
+  }
+  return out
+}
+
+/** Does this brand have any members at all?
+ *
+ * An unclaimed brand — no members — is the one case where a non-member must
+ * still see the write controls: bootstrap grants ownership to the first caller,
+ * and the UI calls bootstrap from the Run scan button. Hiding that button from
+ * everyone because nobody is a member yet deadlocks a fresh brand permanently,
+ * since the only path to membership runs through the button being clickable.
+ *
+ * Errors resolve to `true` (claimed), the conservative answer: a spurious
+ * "unclaimed" would show a paid action to someone who cannot use it.
+ */
+export async function fbBrandHasMembers(brandId = BRAND_ID): Promise<boolean> {
+  try {
+    const snap = await getDocs(query(collection(fbDb, 'brands', brandId, 'members'), fsLimit(1)))
+    return !snap.empty
+  } catch {
+    return true
+  }
+}
+
+export type CreatorProfile = {
+  handle: string
+  platform: string
+  followerCount: number | null
+  bio: string | null
+  avatarUrl: string | null
+  fullName: string | null
+  category: string | null
+  tier: string | null
+}
+
+/** Creator records, keyed by lowercase handle.
+ *
+ * Detections carry a snapshot of the creator taken when the post was detected,
+ * so they never gain a follower count that arrived afterwards. The creator
+ * record does. Anywhere the UI wants "who is this person", this is the source
+ * that stays current.
+ */
+export async function fbFetchCreatorProfiles(brandId = BRAND_ID, limit = 1000): Promise<Record<string, CreatorProfile>> {
+  const snap = await getDocs(query(collection(fbDb, 'brands', brandId, 'creators'), fsLimit(limit)))
+  const out: Record<string, CreatorProfile> = {}
+  for (const d of snap.docs) {
+    const x = d.data()
+    const handle = ((x.handle as string) ?? '').toLowerCase()
+    if (!handle) continue
+    out[handle] = {
+      handle,
+      platform: x.platform ?? 'instagram',
+      followerCount: (x.followerCount as number | null) ?? null,
+      bio: (x.bio as string | null) ?? null,
+      avatarUrl: (x.avatarUrl as string | null) ?? null,
+      fullName: (x.fullName as string | null) ?? null,
+      category: (x.category as string | null) ?? null,
+      tier: (x.tier as string | null) ?? null,
+    }
+  }
+  return out
+}
+
+/** One creator record by handle. Cheap targeted read for the Creator page —
+ *  fetching the whole collection to render one profile would be absurd. */
+export async function fbFetchCreatorProfile(handle: string, brandId = BRAND_ID): Promise<CreatorProfile | null> {
+  const snap = await getDocs(query(
+    collection(fbDb, 'brands', brandId, 'creators'),
+    where('handle', '==', handle.toLowerCase()),
+    fsLimit(1),
+  ))
+  if (snap.empty) return null
+  const x = snap.docs[0].data()
+  return {
+    handle: (x.handle as string) ?? handle,
+    platform: x.platform ?? 'instagram',
+    followerCount: (x.followerCount as number | null) ?? null,
+    bio: (x.bio as string | null) ?? null,
+    avatarUrl: (x.avatarUrl as string | null) ?? null,
+    fullName: (x.fullName as string | null) ?? null,
+    category: (x.category as string | null) ?? null,
+    tier: (x.tier as string | null) ?? null,
+  }
 }
 
 export async function fbFetchBrand(brandId = BRAND_ID) {
@@ -322,6 +475,26 @@ export async function fbStepCreators(maxCreators = 80, postsPer = 8) {
 export async function fbStepSrs() {
   return authedFetch('api_step_srs', { brandId: BRAND_ID })
 }
+// Post sentiment over hits that don't have it yet. Batched and resumable, so
+// the first pass over a back catalogue takes several calls — the UI fires one
+// per scan and lets the backlog drain over subsequent runs.
+// Scene definitions + creator classification. Must run BEFORE fbStepSrs: the
+// subculture layer reads the links this writes, and a scan that scores before
+// classifying leaves the layer redistributed for another cycle. Free — pure
+// compute over Firestore, no Gemini, no Apify.
+// Refresh Instagram creator profiles: follower counts, bios, avatars. This is
+// the ONLY source of Instagram follower counts — post rows carry none — so
+// nothing in the UI can show a follower number until this has run.
+export async function fbStepProfiles(limit = 500) {
+  return authedFetch('api_step_profiles', { brandId: BRAND_ID, limit })
+}
+
+export async function fbStepSubcultures() {
+  return authedFetch('api_step_subcultures', { brandId: BRAND_ID })
+}
+export async function fbStepSentiment(limit = 400) {
+  return authedFetch('api_step_sentiment', { brandId: BRAND_ID, limit })
+}
 
 // ────────────── Brand settings (write via Cloud Function) ──────────────
 
@@ -375,6 +548,34 @@ export async function fbUpdateBrandSettings(
     hashtagPool: opts?.hashtagPool,
     replaceHashtags: opts?.replaceHashtags,
   })
+}
+
+// ────────────── Brand members (access control) ──────────────
+
+export type BrandMember = {
+  uid: string
+  email: string | null
+  role: 'owner' | 'member' | string
+  addedAt: string | null
+  isYou: boolean
+}
+
+export async function fbListMembers(): Promise<BrandMember[]> {
+  const r = await authedFetch('api_brand_members', { brandId: BRAND_ID, action: 'list' })
+  return (r.members ?? []) as BrandMember[]
+}
+
+/** Grant access. The person must have signed in at least once — membership
+ *  keys on the Firebase uid, which doesn't exist until then. The server says
+ *  so explicitly rather than silently doing nothing. */
+export async function fbAddMember(email: string, role: 'member' | 'owner' = 'member'): Promise<BrandMember[]> {
+  const r = await authedFetch('api_brand_members', { brandId: BRAND_ID, action: 'add', email, role })
+  return (r.members ?? []) as BrandMember[]
+}
+
+export async function fbRemoveMember(uid: string): Promise<BrandMember[]> {
+  const r = await authedFetch('api_brand_members', { brandId: BRAND_ID, action: 'remove', uid })
+  return (r.members ?? []) as BrandMember[]
 }
 
 export async function fbRecomputeCentroid() {

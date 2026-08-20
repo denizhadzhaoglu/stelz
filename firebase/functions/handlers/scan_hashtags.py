@@ -399,21 +399,27 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
         if not ph or ph in existing_handles or len(srcs) < needed:
             continue
         creator_id = fs.composite_id(pp, ph)
-        creators_col.document(creator_id).set(
-            {
-                "handle": ph,
-                "platform": pp,
-                "fullName": q_data.get("fullName"),
-                "followerCount": q_data.get("followerCount"),
-                "status": "discovered",
-                "tier": "tier_3",
-                "discoveredAt": SERVER_TIMESTAMP,
-                "discoverySources": q_data.get("sources", []),
-                "lastScannedAt": None,
-                "nextScanAt": SERVER_TIMESTAMP,
-            },
-            merge=True,
-        )
+        # followerCount and fullName are written ONLY when this scrape actually
+        # carried them. Instagram's hashtag endpoint returns neither, so the
+        # values here are usually None — and with merge=True, writing None is
+        # not a no-op, it OVERWRITES. That silently wiped the follower counts
+        # fetched by refresh_profiles on the very next scan, which reads as
+        # "the refresh didn't work" long after the refresh worked fine.
+        creator_patch = {
+            "handle": ph,
+            "platform": pp,
+            "status": "discovered",
+            "tier": "tier_3",
+            "discoveredAt": SERVER_TIMESTAMP,
+            "discoverySources": q_data.get("sources", []),
+            "lastScannedAt": None,
+            "nextScanAt": SERVER_TIMESTAMP,
+        }
+        if q_data.get("followerCount"):
+            creator_patch["followerCount"] = q_data["followerCount"]
+        if q_data.get("fullName"):
+            creator_patch["fullName"] = q_data["fullName"]
+        creators_col.document(creator_id).set(creator_patch, merge=True)
         q.reference.update({"status": "auto_added", "reviewedAt": SERVER_TIMESTAMP, "reviewedBy": "scrape_tag"})
         existing_handles.add(ph)
         promoted += 1
@@ -660,21 +666,27 @@ def run(
         if not handle or handle in existing_handles or len(srcs) < needed:
             continue
         creator_id = fs.composite_id(platform, handle)
-        creators_col.document(creator_id).set(
-            {
-                "handle": handle,
-                "platform": platform,
-                "fullName": q_data.get("fullName"),
-                "followerCount": q_data.get("followerCount"),
-                "status": "discovered",
-                "tier": "tier_3",
-                "discoveredAt": SERVER_TIMESTAMP,
-                "discoverySources": q_data.get("sources", []),
-                "lastScannedAt": None,
-                "nextScanAt": SERVER_TIMESTAMP,
-            },
-            merge=True,
-        )
+        # followerCount and fullName are written ONLY when this scrape actually
+        # carried them. Instagram's hashtag endpoint returns neither, so the
+        # values here are usually None — and with merge=True, writing None is
+        # not a no-op, it OVERWRITES. That silently wiped the follower counts
+        # fetched by refresh_profiles on the very next scan, which reads as
+        # "the refresh didn't work" long after the refresh worked fine.
+        creator_patch = {
+            "handle": handle,
+            "platform": platform,
+            "status": "discovered",
+            "tier": "tier_3",
+            "discoveredAt": SERVER_TIMESTAMP,
+            "discoverySources": q_data.get("sources", []),
+            "lastScannedAt": None,
+            "nextScanAt": SERVER_TIMESTAMP,
+        }
+        if q_data.get("followerCount"):
+            creator_patch["followerCount"] = q_data["followerCount"]
+        if q_data.get("fullName"):
+            creator_patch["fullName"] = q_data["fullName"]
+        creators_col.document(creator_id).set(creator_patch, merge=True)
         q.reference.update({"status": "auto_added", "reviewedAt": SERVER_TIMESTAMP, "reviewedBy": "scan_hashtags"})
         existing_handles.add(handle)
         promoted += 1

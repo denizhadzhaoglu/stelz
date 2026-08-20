@@ -168,6 +168,49 @@ export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   )
 }
 
+/**
+ * Avatar with a monogram fallback.
+ *
+ * `Img` falls back to a "NO IMAGE" box, which is right for a missing post
+ * photo and wrong for a person: a leaderboard of faces with NO IMAGE stamped
+ * across half of them reads as a broken tool, when all that happened is that
+ * Instagram's CDN expired the avatar URL (they are short-lived, and we do not
+ * mirror them the way we mirror post images).
+ *
+ * A monogram is not a workaround for missing data — there is no data to be
+ * missing. The handle IS the identity; the picture was only ever decoration.
+ */
+export function Avatar({ src, handle, className = '' }: { src?: string | null; handle: string; className?: string }) {
+  const [errored, setErrored] = useState(false)
+  const letter = (handle || '?').replace(/^@/, '').charAt(0).toUpperCase() || '?'
+  if (!src || errored) {
+    return (
+      <div
+        className={`${className} bg-[var(--color-ink)] text-white flex items-center justify-center font-medium select-none`}
+        aria-label={`@${handle}`}
+      >
+        {letter}
+      </div>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt={`@${handle}`}
+      loading="lazy"
+      onError={() => setErrored(true)}
+      className={`${className} object-cover w-full h-full bg-[var(--color-bg)]`}
+    />
+  )
+}
+
+/** Follower counts are frequently absent — Instagram's hashtag scrape simply
+ *  does not return them. Rendering the absence as "0 followers" states
+ *  something false about the creator; omitting the line states nothing. */
+export function formatFollowers(n: number | null | undefined): string | null {
+  return n && n > 0 ? n.toLocaleString() : null
+}
+
 export function ImagePlaceholder({ label, aspect = 'aspect-square' }: { label?: string; aspect?: string }) {
   return (
     <div className={`${aspect} bg-[var(--color-bg)] border border-[var(--color-border)] flex items-center justify-center text-[10px] uppercase tracking-widest text-[var(--color-ink-subtle)]`}>

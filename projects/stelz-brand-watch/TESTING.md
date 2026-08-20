@@ -24,11 +24,18 @@ Waar je vooral op let bij het testen:
 
 ## 2. Opstarten (± 5 minuten)
 
-Je hebt **Node.js 20.19+ of 22.12+** nodig ([nodejs.org](https://nodejs.org),
-neem gewoon de LTS-versie). Controleer met `node -v`.
+Je hebt twee dingen nodig:
+
+- **Git** ([git-scm.com](https://git-scm.com)) — op macOS zit het er meestal al
+  op; controleer met `git --version`.
+- **Node.js 20.19+ of 22.12+** ([nodejs.org](https://nodejs.org), neem gewoon de
+  LTS-versie). Controleer met `node -v`.
+
+Open een terminal en plak dit blok in zijn geheel:
 
 ```bash
-cd "<pad-naar-de-map>/projects/stelz-brand-watch/web"
+git clone https://github.com/denizhadzhaoglu/stelz.git stelz
+cd stelz/projects/stelz-brand-watch/web
 npm install          # eenmalig, duurt ~1 minuut
 npm run dev
 ```
@@ -41,22 +48,32 @@ Elk Google-account werkt — er hoeft niemand toegang voor je te regelen.
 
 ---
 
-## 3. ⚠️ Lees dit vóór je klikt
+## 3. Je zit in read-only modus (en dat is expres)
 
-**De tool staat op de echte productiedatabase.** Wat je ziet is live data, en
-twee acties schrijven daar ook echt naartoe:
+**De tool staat op de echte productiedatabase.** Wat je ziet is live data.
 
-| Actie | Gevolg |
+Je account is geen lid van het merk, en dat betekent dat alles wat de data zou
+veranderen voor jou uit staat. Je ziet bovenin een balkje **Read-only** dat dit
+bevestigt. Concreet ontbreken bij jou:
+
+| Wat je niet ziet | Wat het zou doen |
 |---|---|
-| **✕** op een kaart (verschijnt bij hover) | Markeert die post permanent als fout-positief, voor iedereen |
-| **✕** op een foto in Settings → Reference images | **Verwijdert die referentiefoto definitief.** Dit verandert hoe de AI Stëlz herkent |
+| De **✕** op een kaart | Die post permanent als fout-positief markeren, voor iedereen |
+| De **✕** en de upload bij Settings → Reference images | Een referentiefoto definitief verwijderen — dat verandert hoe de AI Stëlz herkent |
+| De knoppen in de **Review**-wachtrij | Goedkeuren/afkeuren van twijfelgevallen |
+| De knop **Run scan** | Een nieuwe scan starten. Die kost geld bij de scraping-leverancier |
 
-Wil je de ✕ op een kaart uitproberen: doe dat één of twee keer op iets dat
-overduidelijk géén Stëlz is, en noteer welke. Blijf van de referentiefoto's in
-Settings af tenzij je expliciet met Lukas hebt afgestemd dat je daar mag opruimen.
+Dit wordt op de server afgedwongen, niet alleen in het scherm verstopt — je
+kunt dus niets stukmaken door ergens op te klikken. **Klik gerust overal.**
 
-Alle andere knoppen (filters, tabs, zoeken, kaarten openen) zijn veilig — die
-lezen alleen.
+Kom je toch een knop tegen die iets lijkt te wijzigen, of krijg je een melding
+`Read-only: your account is not a member of this brand` — dan is dát een
+bevinding; geef hem door.
+
+> Zie je géén Read-only-balkje en heb je wél een ✕ op de kaarten? Dan staat je
+> account als lid geregistreerd. Meld dat even, en behandel de ✕ met beleid:
+> gebruik hem hooguit één of twee keer op iets dat overduidelijk géén Stëlz is,
+> en blijf van de referentiefoto's in Settings af.
 
 ---
 
@@ -99,53 +116,131 @@ De feed is in tweeën gedeeld. Bovenaan de duidelijke treffers. Daaronder een ko
 | `small in frame` (oranje) | Blikje klein of ver weg | "Worth a check" |
 | `name only` (oranje) | Alleen het woord STËLZ gelezen, geen labeltekst eromheen | "Worth a check" |
 | `reads "heineken"` (rood) | Het label noemt een ander merk | Achter de link uit 4b |
-| `double-checked` (groen) | Door een tweede AI-controle bevestigd | **Nog niet zichtbaar** — zie §5 |
+| `double-checked` (groen) | Door een tweede AI-controle bevestigd | In de "Worth a check"-band |
 
 - [ ] Kloppen de labels met wat je op de foto ziet?
 - [ ] Zie je een kaart met `name only` waar wél een duidelijk leesbaar Stëlz-blik op staat? Noteer die — dat is precies het soort fout dat we willen weten.
 
-### 4d. De filters
+### 4d. De sentiment-labels (nieuw)
+
+Naast het merk zelf schat de tool nu ook in **hoe** een post over Stëlz praat.
+Dat gebeurt op basis van het **bijschrift**, niet op basis van de foto.
+
+| Label | Betekenis |
+|---|---|
+| `positive` (groen) | Het bijschrift is enthousiast over het drankje zelf |
+| `negative` (rood) | Klacht of kritiek |
+| `promo` (grijs) | Een bar, winkel of betaalde samenwerking |
+| *(geen label)* | Neutraal — óf nog niet gescoord |
+
+- [ ] Klik een kaart met `positive` open. Staat er in het bijschrift echt iets
+      positiefs over het **drankje**? Enthousiasme over het festival of het
+      weekend telt niet — dat is precies de fout die we willen vangen.
+- [ ] Zie je `promo` op een gewone consument, of juist géén `promo` op een
+      duidelijke bar/winkel-post? Beide zijn interessant.
+- [ ] In het paneel rechts staat onder **How it's talked about** een zin met de
+      onderbouwing. Slaat die ergens op?
+
+> Veel kaarten hebben nog helemaal geen label. Dat is geen bug: het scoren
+> gebeurt in batches ná een scan, dus de oude posts komen er geleidelijk bij.
+> Belangrijk: een ontbrekend label betekent *nog niet beoordeeld*, niet
+> *neutraal*.
+
+### 4e. De filters
 
 - [ ] **Can size**: zet op *Large in frame only*. Worden het er veel minder en duidelijker?
 - [ ] **Review**: zet op *Rejected*. Zie je hier eerder afgekeurde items?
 - [ ] **Reset** (rechts van de filters): keert alles terug naar Untagged?
 
-### 4e. Het dashboard
+### 4f. Het dashboard
 
 - [ ] Bovenaan staat een percentage *"van je hits draagt geen #stelz…"*. Voelt dat getal geloofwaardig?
 - [ ] De grafiek **Context tags** — staan daar niet-merk-hashtags in (#vrijmibo, #festival, …)?
       Staat er per ongeluk tóch een #stelz-achtige tag tussen? Dat is een bug.
 - [ ] De donut **How we found it** — telt die op tot het totaal?
 
-### 4f. Settings → Reference images
+#### Which scenes the brand lives in (nieuw)
 
-Dit zijn de foto's waarmee de AI leert hoe Stëlz eruitziet.
+Een blok dat de treffers groepeert naar de **scene** waar ze uit komen:
+Vrijdagmiddagborrel, Student life, Festivals & events, Horeca & nightlife…
+Makers worden op basis van hun eigen hashtag-geschiedenis in zo'n scene
+ingedeeld. Het getal rechts is het aantal posts uit die scene **zonder
+merk-hashtag** — dat is het punt: in welke werelden leeft het merk zonder dat
+iemand het tagt.
+
+- [ ] Klopt de indeling? Open een paar kaarten uit "Vrijdagmiddagborrel" —
+      zijn dat inderdaad borrel-achtige posts, en niet bijvoorbeeld festivals?
+- [ ] Iemand kan in meer dan één scene zitten, dus de rijen tellen op tot méér
+      dan het totale aantal treffers. Dat staat er ook bij. Klopt die uitleg
+      met wat je ziet?
+- [ ] Onderaan staat soms *"N further hits couldn't be placed in a scene"*.
+      Is dat aantal klein genoeg om de rest geloofwaardig te maken? Als het
+      grootste deel daar zit, is het blok nog niet bruikbaar — meld dat.
+
+> Zie je in plaats van namen als "Vrijdagmiddagborrel" alleen algemene groepen
+> ("Parties & gatherings", "Nightlife & clubs")? Dan draait het blok op de
+> terugvaloptie omdat de scene-indeling nog niet gedraaid is. Meld dat even.
+
+#### How people talk about it (nieuw)
+
+De optelling van de sentiment-labels uit 4d, plus een uitleg van de vier
+categorieën.
+
+- [ ] Zegt het percentage bovenin de donut hetzelfde als wat je in de feed ziet?
+- [ ] Er staat expliciet hoeveel posts nog **niet** gescoord zijn. Klopt dat met
+      hoeveel kaarten zonder label je in de feed tegenkwam?
+
+### 4g. De creator-pagina
+
+Klik in de feed op een `@handle`. Onder het profiel staat een blok
+**Why this creator matters** (nieuw).
+
+- [ ] Links staat een **Resonance**-score met de opbouw eronder: Network, Scene
+      fit, Engagement, Local, On-brand look, Scene depth. Elke regel heeft een
+      uitleg — snap je zonder toelichting waarom deze persoon hoog of laag
+      scoort?
+- [ ] Rechts staat het publieksprofiel plus **Scenes they post in**. Kloppen die
+      scenes met de posts die eronder in de galerij staan?
+- [ ] Staat er *"No resonance score … yet"*? Dat mag: scoren is een aparte stap
+      na een scan. Meld het alleen als je het bij vrijwel iedereen ziet.
+
+### 4h. Settings → Reference images
+
+Dit zijn de foto's waarmee de AI leert hoe Stëlz eruitziet. Je kunt er niets
+aan veranderen (zie §3) — het gaat puur om beoordelen.
 
 - [ ] Staat er bij maximaal 8 foto's het label **"in use"**, en zijn de overige vager weergegeven?
 - [ ] **Kijk elke "in use"-foto goed na:** is het onmiskenbaar een Stëlz-product?
       Een sfeerfoto waar toevallig een blikje van een ander merk op staat, leert
-      de AI dat dát ook Stëlz is. Noteer alles wat twijfelachtig is — **maar
-      verwijder niets.**
+      de AI dat dát ook Stëlz is. Noteer alles wat twijfelachtig is.
 
 ---
 
-## 5. Wat nog níet werkt (dus geen bug)
+## 5. Wat wel en niet werkt
 
-Een deel van het werk zit in de backend en is **nog niet uitgerold**. Je ziet het
-dus nog niet, ook al staat de code er:
+### Wat sinds kort wél werkt
 
-| Nog niet live | Wat je daardoor niet ziet |
+Deze dingen stonden in een eerdere versie van dit document als "nog niet
+uitgerold". Dat klopt niet meer — ze draaien nu mee:
+
+| Werkt nu | Waar je het ziet |
 |---|---|
-| Tweede AI-controle op twijfelgevallen | Het groene `double-checked`-label, en de "Worth a check"-band is nog even rommelig als nu |
-| Terugkoppeling van afwijzingen naar de AI | Een ✕ verbetert nog geen toekomstige scans |
-| Ruimere hashtag-selectie | Nog geen extra content uit lifestyle-hashtags |
-| Meer videoframes | Nog geen extra treffers uit video's |
+| **Tweede AI-controle** op twijfelgevallen | Het groene `double-checked`-label. De foto wordt opnieuw bekeken op 1024px in plaats van 512px, en zo nodig uitgesneden rond het blikje |
+| **Terugkoppeling van afwijzingen** | Elke ✕ wordt als tegenvoorbeeld meegestuurd bij die tweede controle. De knop verbetert dus daadwerkelijk toekomstige scans |
+| **Ruimere hashtag-selectie** | Lifestyle-tags (#vrijmibo, #huisfeest, #studentenleven, #festivalseizoen…) zitten in de scanlijst, te zien in Settings → Hashtags |
+| **Meer videoframes** | Het aantal frames schaalt nu mee met de lengte van de video in plaats van een vaste 6 |
+| **Sentiment** | De labels uit §4d |
 
-Ook goed om te weten: er draait **geen automatische scan**. Nieuwe data komt er
-alleen als iemand op **Run scan** drukt. Doe dat niet zonder overleg — één scan
-kost geld bij de scraping-leverancier.
+Als je hier iets van *niet* terugziet, is dat een bevinding — dan is de
+uitrol niet compleet.
 
----
+### Wat nog steeds niet werkt
+
+| Nog niet | Gevolg |
+|---|---|
+| Automatische scans | Er draait geen dagelijkse scan. Nieuwe data komt er alleen als iemand met beheerrechten op **Run scan** drukt |
+| Sentiment op de hele historie | Het scoren loopt in porties van 400 posts. De oudere treffers krijgen hun label pas na een aantal runs — een kaart zonder label is dus "nog niet beoordeeld", niet "neutraal" |
+| Uitnodigingen per e-mail | Toegang geven gaat via Settings → Access, en alleen voor iemand die al een keer heeft ingelogd. Er wordt geen mail verstuurd |
 
 ## 6. Wat we graag terugkrijgen
 
@@ -155,8 +250,10 @@ Het meest waardevol, in deze volgorde:
    Stëlz, en klopt het label.
 2. **Elke foto waar geen Stëlz op staat maar de tool zegt van wel.** Graag met de
    link naar de originele post erbij (via *Open original ↗*).
-3. **Elke twijfelachtige referentiefoto** uit 4f.
-4. Alles wat je zonder uitleg niet begreep. Als een label of een scherm niet
+3. **Elke twijfelachtige referentiefoto** uit 4h.
+4. **Sentiment-labels die er naast zitten** (4d) — vooral `positive` op een post
+   die alleen over het uitje enthousiast is, en gemiste `promo` op bars.
+5. Alles wat je zonder uitleg niet begreep. Als een label of een scherm niet
    vanzelf spreekt, is dat een bevinding — geen gebrek aan kennis.
 
 Een screenshot met een zin erbij is genoeg. Geen formulier nodig.

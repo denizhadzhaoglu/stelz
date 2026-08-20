@@ -49,3 +49,8 @@ tools/eval/.verify-cache/
 venv/
 projects/stelz-brand-watch/web/dist/
 firebase/.firebase/
+
+# Local Cloud Functions venv (created for deploys; ~200MB)
+firebase/functions/venv/
+# Staged hosting build — generated from projects/stelz-brand-watch/web/dist
+firebase/web-dist/

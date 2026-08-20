@@ -2,10 +2,13 @@
 
 Called by an authenticated user from the UI. Creates:
   - /brands/{brandId}            (if missing)
-  - /brands/{brandId}/members/{uid}   (caller becomes owner)
+  - /brands/{brandId}/members/{uid}   (caller becomes owner — FIRST CLAIM ONLY)
   - /brands/{brandId}/hashtagPool/{tag}   (default seed)
 
 Idempotent — safe to call multiple times.
+
+Membership is granted only when the brand has no members yet. See the comment
+at step 2: enrolling every caller turned the membership gate into a no-op.
 """
 from __future__ import annotations
 from typing import Any
@@ -80,18 +83,32 @@ def run(brand_id: str, brand_name: str, uid: str, user_email: str | None = None)
         if topup:
             brand_ref.set(topup, merge=True)
 
-    # 2. Membership for caller
+    # 2. Membership for caller — FIRST CLAIM ONLY.
+    #
+    # This used to enrol every caller as an owner unconditionally, which made
+    # the membership gate in main.py meaningless: "Run scan" calls bootstrap
+    # first (Home.tsx), so anyone who signed in with any Google account and
+    # pressed the button promoted themselves to owner of an existing brand,
+    # and with it the right to reject detections and delete reference images.
+    #
+    # A brand with no members yet is unclaimed — the first caller owns it, which
+    # is what makes self-serve onboarding work. Once it has one, membership is
+    # an invite-only decision and this function must not grant it.
     member_ref = brand_ref.collection("members").document(uid)
-    member_snap = member_ref.get()
-    if not member_snap.exists:
+    if member_ref.get().exists:
+        added_member = False
+    elif any(True for _ in brand_ref.collection("members").limit(1).stream()):
+        # Brand already claimed by someone else. Not an error — the caller may
+        # legitimately be a read-only tester whose UI called bootstrap on the
+        # way to a scan. They simply don't become a member.
+        added_member = False
+    else:
         member_ref.set({
             "role": "owner",
             "email": user_email,
             "addedAt": SERVER_TIMESTAMP,
         })
         added_member = True
-    else:
-        added_member = False
 
     # 3. Hashtag pool — idempotent at the doc level. Missing ones get created;
     # existing ones get priority/active refreshed (safe). Count active afterwards.

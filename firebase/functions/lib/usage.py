@@ -11,6 +11,7 @@ Counters tracked:
   gemini_flash_calls   — full Gemini Flash detection calls
   gemini_video_calls   — batched multi-frame video detection calls
   gemini_embed_calls   — Vertex multimodal embedding calls
+  gemini_sentiment_calls — text-only post-sentiment classifications
   detections_written   — detection docs persisted
   detections_hit       — detection docs with detected=true
 
@@ -54,6 +55,10 @@ COST_PER_UNIT = {
     # estimated_spend_today, which silently under-reports the degrade level and
     # lets a scan keep running past the budget it thinks it is under.
     "gemini_verify_calls": 0.00330,
+    # Post sentiment (handlers/analyze_sentiment.py). Text-only — no reference
+    # images, no target image — so it costs a fraction of a detect call: a
+    # ~400-token prompt plus a short caption in, ~60 tokens out.
+    "gemini_sentiment_calls": 0.00020,
 }
 
 DEFAULT_DAILY_BUDGET_USD = 5.0

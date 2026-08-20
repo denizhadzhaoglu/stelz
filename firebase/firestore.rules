@@ -28,10 +28,20 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // Reference images: any signed-in user can upload/delete during MVP.
+      // Reference images: brand members only.
+      //
+      // These are what the detector is shown as "this is the product" on every
+      // Gemini call, so deleting one silently changes what the AI recognises
+      // for everyone. This previously allowed any signed-in account to create
+      // and delete them, which is not a permission an outside tester should
+      // hold — and it disagreed with storage.rules, which already required
+      // membership for the blob. That mismatch meant a non-member's delete
+      // removed the Firestore doc (the thing that actually selects refs) while
+      // the blob survived: the ref was gone from the AI, and the app reported
+      // success. Matching the two rulesets closes both halves.
       match /referenceImages/{docId} {
         allow read: if isSignedIn();
-        allow create, delete: if isSignedIn();
+        allow create, delete: if belongsToBrand(brandId);
         allow update: if false;
       }
 

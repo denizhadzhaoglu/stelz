@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
 import { AuthProvider } from './lib/auth'
+import { MembershipProvider } from './lib/membership'
 import { signalReport } from './lib/signal'
 import type { DetectionRow } from './lib/types'
 
@@ -22,7 +23,9 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <AuthProvider>
-        <App />
+        <MembershipProvider>
+          <App />
+        </MembershipProvider>
       </AuthProvider>
     </BrowserRouter>
   </StrictMode>,
