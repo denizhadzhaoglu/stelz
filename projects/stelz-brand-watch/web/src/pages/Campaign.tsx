@@ -32,6 +32,17 @@ import { fmtNum, compactNum, timeAgo } from '../lib/format'
 import { useCampaignPreview, useCampaignDetectionsPreview } from '../lib/devPreview'
 
 type Filter = 'all' | 'stelz' | 'near' | 'none' | 'pending'
+type Sort = 'recent' | 'stelz'
+
+// Newest first is the default because this is a LIVE campaign: the thing worth
+// seeing on opening the page is what went up in the last few hours, not the
+// best hit from three weeks ago. The order used to be newest-first too, but
+// implicitly and with no date anywhere on a tile — so there was no way to tell
+// whether the page was sorted at all.
+const SORTS: { id: Sort; label: string }[] = [
+  { id: 'recent', label: 'Nieuwste eerst' },
+  { id: 'stelz', label: 'Stëlz eerst' },
+]
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'Alles' },
@@ -55,6 +66,7 @@ export default function Campaign() {
   const filter = (params.get('f') as Filter) || 'all'
   const creator = params.get('c')
   const surface = params.get('s') as Surface | null
+  const sort = (params.get('sort') as Sort) || 'recent'
 
   const [profiles, setProfiles] = useState<Record<string, CreatorProfile>>({})
   const [projects, setProjects] = useState<Project[]>([])
@@ -117,8 +129,15 @@ export default function Campaign() {
     if (filter === 'near') out = out.filter((r) => r.verdict === 'near')
     if (filter === 'none') out = out.filter((r) => r.verdict === 'absent')
     if (filter === 'pending') out = out.filter((r) => r.verdict === 'unanalysed')
-    return [...out].sort((a, b) => (b.postedAt ?? '').localeCompare(a.postedAt ?? ''))
-  }, [rows, filter, creator, surface])
+    const byRecent = (a: CampaignRow, b: CampaignRow) =>
+      (b.postedAt ?? '').localeCompare(a.postedAt ?? '')
+    // Confirmed first, then the ones the detector argued about, then the rest —
+    // and inside each band still newest first, so "Stëlz eerst" never hides
+    // today's hit behind last year's.
+    const rank = (r: CampaignRow) => (isStelzStory(r.verdict) ? 0 : r.verdict === 'near' ? 1 : 2)
+    return [...out].sort((a, b) =>
+      sort === 'stelz' ? (rank(a) - rank(b)) || byRecent(a, b) : byRecent(a, b))
+  }, [rows, filter, creator, surface, sort])
 
   const setParam = (k: string, v: string | null) => {
     const next = new URLSearchParams(params)
@@ -199,18 +218,6 @@ export default function Campaign() {
             afspeelteller. Eén opgeteld "bereik" zou geen van deze dingen betekenen.
           </Card>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            {SURFACES.map((s) => (
-              <SurfaceCard
-                key={s}
-                surface={s}
-                stats={rollup.bySurface[s]}
-                active={surface === s}
-                onPick={() => setParam('s', surface === s ? null : s)}
-              />
-            ))}
-          </div>
-
           <div className="flex flex-wrap items-center gap-2 mb-4">
             {FILTERS.map((f) => (
               <button
@@ -240,8 +247,21 @@ export default function Campaign() {
                 className="text-[12px] px-3 py-1.5 border border-[var(--color-accent)] text-[var(--color-accent)]"
               >{SURFACE_LABEL[surface]} ✕</button>
             )}
-            <span className="ml-auto text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
-              {fmtNum(shown.length)} van {fmtNum(rollup.items)}
+            <span className="ml-auto flex items-center gap-2">
+              {SORTS.map((o) => (
+                <button
+                  key={o.id}
+                  onClick={() => setParam('sort', o.id === 'recent' ? null : o.id)}
+                  className={`text-[11px] px-2.5 py-1 border transition-colors ${
+                    sort === o.id
+                      ? 'border-[var(--color-ink)] text-[var(--color-ink)]'
+                      : 'border-[var(--color-border)] text-[var(--color-ink-subtle)] hover:border-[var(--color-border-strong)]'
+                  }`}
+                >{o.label}</button>
+              ))}
+              <span className="text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
+                {fmtNum(shown.length)} van {fmtNum(rollup.items)}
+              </span>
             </span>
           </div>
 
@@ -262,6 +282,18 @@ export default function Campaign() {
               oppervlak om de rest te zien — niets is weggegooid, alleen niet getekend.
             </Card>
           )}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            {SURFACES.map((s) => (
+              <SurfaceCard
+                key={s}
+                surface={s}
+                stats={rollup.bySurface[s]}
+                active={surface === s}
+                onPick={() => setParam('s', surface === s ? null : s)}
+              />
+            ))}
+          </div>
 
           <CreatorTable rollup={rollup} onPick={(h) => setParam('c', h === creator ? null : h)} />
         </>
@@ -352,6 +384,9 @@ function ContentCard({ row, onOpen }: { row: CampaignRow; onOpen: () => void }) 
       <span className="block px-1.5 pt-1 text-[10px] truncate text-[var(--color-ink)]">
         @{row.creatorHandle}
       </span>
+      <span className="block px-1.5 text-[9px] text-[var(--color-ink)] truncate tabular-nums">
+        {row.postedAt ? timeAgo(row.postedAt) : 'datum onbekend'}
+      </span>
       <span className="block px-1.5 pb-1 text-[9px] text-[var(--color-ink-subtle)] truncate">
         {metric != null ? `${compactNum(metric)} ${row.surface === 'tiktok' ? 'views' : row.surface === 'post' ? 'likes' : 'stemmen'}` : '—'}
       </span>
@@ -429,9 +464,21 @@ function EmptyState() {
       <p className="text-[12px] text-[var(--color-ink-subtle)] max-w-[520px] mx-auto leading-relaxed">
         Deze pagina toont Instagram-stories, Instagram-posts en TikToks naast elkaar. Zolang de
         scans niet zijn uitgerold, wordt hij gevuld met{' '}
-        <code className="text-[11px]">72_campaign_fixture.py</code> en{' '}
-        <code className="text-[11px]">?preview=campaign</code>.
+        <code className="text-[11px]">72_campaign_fixture.py</code>.
       </p>
+      {/* Dev server only — folded out of a production build along with the URL
+          it names. Typing a query parameter you have to be told about is not a
+          way to find a page; on localhost the empty state IS the signpost. */}
+      {import.meta.env.DEV && (
+        <p className="mt-4">
+          <a
+            href="/campagne?preview=campaign"
+            className="text-[12px] underline hover:text-[var(--color-ink)]"
+          >
+            Lokale preview openen →
+          </a>
+        </p>
+      )}
     </Card>
   )
 }

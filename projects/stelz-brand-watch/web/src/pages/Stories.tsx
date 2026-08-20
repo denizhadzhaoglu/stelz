@@ -252,26 +252,6 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
             )}
           </Card>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-            <Card className="p-5 lg:col-span-2">
-              <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">
-                Stories per dag
-              </h3>
-              <StackedDayBars series={[trend]} height={150} days={30} />
-            </Card>
-            <Card className="p-5">
-              <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">
-                Wat er in zat
-              </h3>
-              <dl className="space-y-2 text-[12px]">
-                <Row label="Video's" value={`${fmtNum(videoCount)} · ${Math.round(rollup.videoSeconds)}s`} />
-                <Row label="@-vermeldingen" value={fmtNum(rollup.mentions)} />
-                <Row label="Link-stickers" value={fmtNum(rollup.links)} />
-                <Row label="Polls" value={fmtNum(scoped.filter((r) => r.pollCount > 0).length)} />
-              </dl>
-            </Card>
-          </div>
-
           {/* Filters */}
           <div className="flex flex-wrap items-center gap-2 mb-4">
             {FILTERS.map((f) => (
@@ -319,6 +299,26 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
               {shown.map((r) => <StoryCard key={r.postId} row={r} onOpen={() => setOpen(r)} />)}
             </div>
           )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+            <Card className="p-5 lg:col-span-2">
+              <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">
+                Stories per dag
+              </h3>
+              <StackedDayBars series={[trend]} height={150} days={30} />
+            </Card>
+            <Card className="p-5">
+              <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">
+                Wat er in zat
+              </h3>
+              <dl className="space-y-2 text-[12px]">
+                <Row label="Video's" value={`${fmtNum(videoCount)} · ${Math.round(rollup.videoSeconds)}s`} />
+                <Row label="@-vermeldingen" value={fmtNum(rollup.mentions)} />
+                <Row label="Link-stickers" value={fmtNum(rollup.links)} />
+                <Row label="Polls" value={fmtNum(scoped.filter((r) => r.pollCount > 0).length)} />
+              </dl>
+            </Card>
+          </div>
 
           <CreatorTable rollup={rollup} onPick={(h) => setParam('c', h === creator ? null : h)} />
         </>
@@ -378,6 +378,9 @@ function StoryCard({ row, onOpen }: { row: StoryRow; onOpen: () => void }) {
       </MediaTile>
       <span className="block px-1.5 pt-1 text-[10px] truncate text-[var(--color-ink)]">
         @{row.creatorHandle}
+      </span>
+      <span className="block px-1.5 text-[9px] text-[var(--color-ink)] truncate tabular-nums">
+        {row.postedAt ? timeAgo(row.postedAt) : 'datum onbekend'}
       </span>
       <span className="block px-1.5 pb-1 text-[9px] text-[var(--color-ink-subtle)] truncate">
         {exp ? storyChip(exp) : '—'}
@@ -479,6 +482,14 @@ function EmptyState({ project }: { project: Project | null }) {
         <Link to="/settings" className="underline hover:text-[var(--color-ink)]">Instellingen</Link>,
         of haal ze handmatig op met de knop bovenaan het overzicht.
       </p>
+      {/* Dev server only; folded out of a production build with its URL. */}
+      {import.meta.env.DEV && (
+        <p className="mt-4">
+          <a href="/stories?preview=stories" className="text-[12px] underline hover:text-[var(--color-ink)]">
+            Lokale preview openen →
+          </a>
+        </p>
+      )}
     </Card>
   )
 }
