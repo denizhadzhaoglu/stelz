@@ -95,7 +95,9 @@ def publish_tags(brand_id: str, per_tag: int = 500, max_tags: int = 50) -> dict[
     level = usage.degrade_level(brand_id)
     if level >= usage.DEGRADE_NO_SCRAPE:
         log.warning(f"[{brand_id}] scrape refused — budget degrade level {level}")
-        return {"queued": 0, "tags": [], "skipped": "budget", "degradeLevel": level}
+        out = {"queued": 0, "tags": [], "skipped": "budget", "degradeLevel": level}
+        scan_state.step_finished(brand_id, "hashtags", out)
+        return out
     if level >= usage.DEGRADE_TRIM:
         per_tag = max(30, per_tag // 2)
         max_tags = max(5, max_tags // 2)
@@ -103,6 +105,8 @@ def publish_tags(brand_id: str, per_tag: int = 500, max_tags: int = 50) -> dict[
 
     pool_raw = list(fs.hashtag_pool_col(brand_id).where("active", "==", True).stream())
     if not pool_raw:
+        # Nothing to fan out, so no worker exists to close the step later.
+        scan_state.step_finished(brand_id, "hashtags", {"queued": 0})
         return {"queued": 0, "tags": []}
 
     # Stratified selection, NOT a plain priority sort. A plain sort cut EVERY
@@ -198,8 +202,16 @@ def _mark_tag_done(brand_id: str, posts_written: int = 0, detect_tasks: int = 0)
         queued = scan.get("hashtagQueued", 0)
         if queued > 0 and done >= queued and not scan.get("finishedAt"):
             fs.brand_doc(brand_id).set({
-                "scan": {"finishedAt": SERVER_TIMESTAMP}
+                "scan": {"finishedAt": SERVER_TIMESTAMP, "endReason": "tags_complete"}
             }, merge=True)
+            # The step closes here rather than in the endpoint: publish_tags
+            # returns as soon as the fan-out is queued, so the HTTP request is
+            # long gone by the time the work is actually finished.
+            scan_state.step_finished(brand_id, "hashtags", {
+                "hashtagDone": done,
+                "postsWritten": scan.get("postsWritten", 0),
+                "detectTasksEnqueued": scan.get("detectTasksEnqueued", 0),
+            })
     except Exception as e:
         log.error(f"_mark_tag_done failed: {e}")
 

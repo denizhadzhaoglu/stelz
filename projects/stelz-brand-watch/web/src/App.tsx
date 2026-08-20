@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, Outlet, Route, Routes, Navigate, useLocation } from 'react-router-dom'
 import { InboxBell } from './components/InboxBell'
+import { ScanProgressLine } from './components/ScanPanel'
+import { fbSubscribeScanState, type ScanState } from './lib/firestore'
 import { useAuth } from './lib/auth'
 
 import Home from './pages/Home'
@@ -95,10 +97,16 @@ function AppLayout() {
   const [navOpen, setNavOpen] = useState(false)
   useEffect(() => { setNavOpen(false) }, [pathname])
 
+  // Scan state at layout level so the mobile bar can show progress from any
+  // page — below the sm breakpoint there was previously no scan signal at all.
+  const [scan, setScan] = useState<ScanState | null>(null)
+  useEffect(() => fbSubscribeScanState(setScan), [])
+
   return (
     <div className="min-h-screen flex relative">
       {/* Mobile top bar — navy, like the Stelz announcement bar */}
       <div className="lg:hidden fixed top-0 inset-x-0 h-12 z-30 bg-[var(--color-ink)] flex items-center px-4 justify-between">
+        <ScanProgressLine scan={scan} />
         <button onClick={() => setNavOpen((v) => !v)} className="w-8 h-8 flex items-center justify-center -ml-2">
           <span className="block w-4 h-px bg-white relative before:content-[''] before:absolute before:w-4 before:h-px before:bg-white before:-top-1.5 after:content-[''] after:absolute after:w-4 after:h-px after:bg-white after:top-1.5"></span>
         </button>

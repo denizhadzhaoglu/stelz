@@ -83,6 +83,8 @@ function mapDetection(d: QueryDocumentSnapshot<DocumentData>, brandId: string): 
     sentiment: (x.sentiment as DetectionRow['sentiment']) ?? null,
     sentiment_score: (x.sentimentScore as number | null) ?? null,
     sentiment_rationale: (x.sentimentRationale as string | null) ?? null,
+    content_type: (x.contentType as 'image' | 'video' | 'story' | 'unknown' | null) ?? null,
+    expires_at: tsToIso(x.expiresAt),
     frame_idx: (x.frameIdx as number | null) ?? null,
     post_id: (x.postId as string | null) ?? null,
     brand_id: brandId,
@@ -471,6 +473,12 @@ export async function fbStepHashtags(perTag = 500, maxTags = 50) {
 export async function fbStepCreators(maxCreators = 80, postsPer = 8) {
   return authedFetch('api_step_creators', { brandId: BRAND_ID, maxCreators, postsPer })
 }
+// Instagram stories for tracked creators. Independent of the other steps —
+// nothing downstream reads it — so the UI fires it in parallel. Stories expire
+// after 24h, which is why a scheduled version of this runs every 6 hours.
+export async function fbStepStories(maxHandles = 60) {
+  return authedFetch('api_step_stories', { brandId: BRAND_ID, maxHandles })
+}
 // fbStepScore removed in productization cleanup — SRS already covers the signal.
 export async function fbStepSrs() {
   return authedFetch('api_step_srs', { brandId: BRAND_ID })
@@ -509,6 +517,7 @@ export type BrandDoc = {
   confidenceMin?: number
   embeddingThreshold?: number
   dailyBudgetUsd?: number
+  storiesAutoScan?: boolean
   hashtagYield?: Record<string, number>
   visualCentroidComputedAt?: string | null
   visualCentroidRefCount?: number
@@ -529,6 +538,7 @@ export async function fbGetBrand(brandId = BRAND_ID): Promise<BrandDoc | null> {
     confidenceMin: x.confidenceMin,
     embeddingThreshold: x.embeddingThreshold,
     dailyBudgetUsd: x.dailyBudgetUsd,
+    storiesAutoScan: x.storiesAutoScan === true,
     hashtagYield: x.hashtagYield,
     visualCentroidComputedAt:
       x.visualCentroidComputedAt instanceof Timestamp
@@ -744,9 +754,23 @@ export function fbSubscribeInbox(
   })
 }
 
+export type ScanStepKey =
+  | 'hashtags' | 'creators' | 'stories' | 'profiles' | 'subcultures' | 'srs' | 'sentiment'
+
+export type ScanStep = {
+  state: 'running' | 'done' | 'error'
+  startedAt: string | null
+  finishedAt: string | null
+  error: string | null
+  counts: Record<string, number>
+}
+
 export type ScanState = {
   startedAt: string | null
   finishedAt: string | null
+  // Per-step progress. Absent on a backend that predates it — every consumer
+  // must degrade to the flat counters below rather than render a blank panel.
+  steps: Partial<Record<ScanStepKey, ScanStep>>
   hashtagQueued: number
   hashtagDone: number
   postsWritten: number
@@ -757,6 +781,24 @@ export type ScanState = {
   lastActivityAt: string | null
   skippedCount: number
   endReason: string | null
+}
+
+function mapScanSteps(raw: unknown): Partial<Record<ScanStepKey, ScanStep>> {
+  if (!raw || typeof raw !== 'object') return {}
+  const out: Partial<Record<ScanStepKey, ScanStep>> = {}
+  for (const [key, v] of Object.entries(raw as Record<string, Record<string, unknown>>)) {
+    if (!v || typeof v !== 'object') continue
+    const state = v.state
+    if (state !== 'running' && state !== 'done' && state !== 'error') continue
+    out[key as ScanStepKey] = {
+      state,
+      startedAt: v.startedAt instanceof Timestamp ? v.startedAt.toDate().toISOString() : null,
+      finishedAt: v.finishedAt instanceof Timestamp ? v.finishedAt.toDate().toISOString() : null,
+      error: typeof v.error === 'string' ? v.error : null,
+      counts: (v.counts && typeof v.counts === 'object' ? v.counts : {}) as Record<string, number>,
+    }
+  }
+  return out
 }
 
 export function fbSubscribeScanState(
@@ -771,6 +813,7 @@ export function fbSubscribeScanState(
     onChange({
       startedAt: s.startedAt instanceof Timestamp ? s.startedAt.toDate().toISOString() : null,
       finishedAt: s.finishedAt instanceof Timestamp ? s.finishedAt.toDate().toISOString() : null,
+      steps: mapScanSteps(s.steps),
       hashtagQueued: (s.hashtagQueued as number) ?? 0,
       hashtagDone: (s.hashtagDone as number) ?? 0,
       postsWritten: (s.postsWritten as number) ?? 0,

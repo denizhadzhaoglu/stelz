@@ -10,6 +10,7 @@ import {
 import { MediaTile } from '../components/MediaTile'
 import { Sparkline, LineChart, BarChart, Donut, StackedDayBars, bucketByDay, type Series } from '../components/Chart'
 import { DetectionDrawer } from '../components/DetectionDrawer'
+import { ScanPanel } from '../components/ScanPanel'
 import {
   fetchDetections, fetchTopResonance, fetchCreatorSubcultures, fetchSubcultures,
   fetchCreatorProfiles, fetchProjects,
@@ -17,6 +18,7 @@ import {
   type DetectionRow, type ResonanceRow, type Project,
 } from '../lib/data'
 import { imageUrlFor, parentPostKey, dedupeByPost } from '../lib/types'
+import { storyExpiry } from '../lib/stories'
 import { withSignal, signalCounts, untaggedShare, isBrandTag } from '../lib/signal'
 import { detectionQuality, splitByQuality, isPrimaryAngle } from '../lib/quality'
 import { sceneBreakdown, subcultureBreakdown, type CreatorSceneMap } from '../lib/scenes'
@@ -27,7 +29,7 @@ import { tallySounds, soundHref } from '../lib/sounds'
 import {
   fbBootstrapBrand, fbStepHashtags, fbStepCreators, fbStepSrs, fbStepSentiment,
   fbStepSubcultures, fbStepProfiles,
-  fbFetchPipelineCounts, fbSubscribeScanState, type ScanState,
+  fbFetchPipelineCounts, fbSubscribeScanState, fbStepStories, type ScanState, type ScanStepKey,
 } from '../lib/firestore'
 import {
   pickWorthALook, biggestFanToday, detectSpike, countNewSince,
@@ -147,8 +149,11 @@ export default function Home() {
   // Poll refreshData every 25s only when the backend is actively working:
   // scan running OR finished within the last 3 minutes.
   const [scanActive, setScanActive] = useState(false)
+  const [scanState, setScanState] = useState<ScanState | null>(null)
+  const [stepErrors, setStepErrors] = useState<Partial<Record<ScanStepKey, string>>>({})
   useEffect(() => {
     const unsub = fbSubscribeScanState((s) => {
+      setScanState(s)
       const started = s?.startedAt ? new Date(s.startedAt).getTime() : 0
       const finished = s?.finishedAt ? new Date(s.finishedAt).getTime() : 0
       const running = !!started && !finished
@@ -217,7 +222,11 @@ export default function Home() {
           >
             Export CSV
           </Button>
-          <RunScanButton onComplete={refreshData} liveHits={activeRows.filter((d) => d.detected === true).length} />
+          <RunScanButton
+            onComplete={refreshData}
+            liveHits={activeRows.filter((d) => d.detected === true).length}
+            onStepErrors={setStepErrors}
+          />
         </div>
       }
     >
@@ -228,6 +237,7 @@ export default function Home() {
 
       {!loading && !error && (
         <>
+          <ScanPanel scan={scanState} clientErrors={stepErrors} />
           <Tabs items={tabItems} active={tab} onChange={(id) => setTab(id as Tab)} />
 
           <div className="mt-8">
@@ -898,6 +908,7 @@ function FeedCard({ d, isNew, onOpen, onReject }: { d: DetectionRow; isNew: bool
   const conf = (d.confidence ?? 0) * 100
   const q = detectionQuality(d)
   const v = verifyDetection(d)
+  const story = storyExpiry(d)
   return (
     // A div, not a button: the reject control below is itself a button, and
     // nesting buttons is invalid HTML (React will warn, and the inner click
@@ -911,14 +922,21 @@ function FeedCard({ d, isNew, onOpen, onReject }: { d: DetectionRow; isNew: bool
     >
       {/* Media */}
       <MediaTile src={imageUrlFor(d)} size="card">
-        {isNew && (
+        {isNew && !story && (
           <span className="absolute top-2 left-2 text-[10px] uppercase tracking-widest bg-[var(--color-accent)] text-white px-2 py-0.5">
-            New
+            Nieuw
           </span>
         )}
         <span className="absolute top-2 right-2 text-[10px] uppercase tracking-widest bg-[var(--color-ink)]/80 text-white px-2 py-0.5">
           {d.platform === 'tiktok' ? 'TikTok' : 'Instagram'}
         </span>
+        {/* A story we caught is worth MORE once it has expired: it no longer
+            exists anywhere else. Hence the label, not a hidden row. */}
+        {story && (
+          <span className={`absolute top-2 left-2 text-[10px] uppercase tracking-widest px-2 py-0.5 text-white ${story.expired ? 'bg-[var(--color-ink-muted)]' : 'bg-[var(--color-accent)]'}`}>
+            {story.label}
+          </span>
+        )}
         {d.frame_idx != null && (
           <span className="absolute bottom-2 right-2 text-[10px] bg-[var(--color-ink)]/80 text-white px-2 py-0.5">
             ▶ video{(d.frame_hits ?? 0) > 1 ? ` · ${d.frame_hits} frames` : ''}
@@ -2315,10 +2333,24 @@ function PickCard({ d, onOpen }: { d: DetectionRow; onOpen: () => void }) {
   )
 }
 
-function RunScanButton({ onComplete, liveHits }: { onComplete: () => void; liveHits?: number }) {
+function RunScanButton({ onComplete, liveHits, onStepErrors }: {
+  onComplete: () => void
+  liveHits?: number
+  onStepErrors?: (e: Partial<Record<ScanStepKey, string>>) => void
+}) {
   const [state, setState] = useState<ScanState | null>(null)
   const [clicking, setClicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Client-side step failures. The chain used to .catch(() => {}) every link,
+  // so a failed enrichment step left no trace anywhere — not in the UI, not on
+  // brand.scan, nowhere.
+  // Accumulated in a ref, not state: this component does not render them —
+  // the panel does, one level up.
+  const stepErrorsRef = useRef<Partial<Record<ScanStepKey, string>>>({})
+  const onStepError = useCallback((step: ScanStepKey, e: unknown) => {
+    stepErrorsRef.current = { ...stepErrorsRef.current, [step]: (e as Error)?.message ?? String(e) }
+    onStepErrors?.(stepErrorsRef.current)
+  }, [onStepErrors])
   const prevRunning = useRef(false)
   // An unclaimed brand shows the button to anyone: pressing it calls bootstrap,
   // which makes the caller its owner. That is the only route into membership
@@ -2366,16 +2398,19 @@ function RunScanButton({ onComplete, liveHits }: { onComplete: () => void; liveH
       // Order is load-bearing: profiles must land before SRS (it reads the
       // creator record's follower count) and subcultures before SRS too (it
       // reads the scene links). Chained, not parallel, for that reason.
+      // Stories run in parallel: nothing downstream reads them, and they are
+      // the one surface that expires, so they must not queue behind SRS.
+      void fbStepStories().catch((e) => onStepError('stories', e))
       void fbStepCreators(80, 8)
-        .catch(() => {})
-        .then(() => fbStepProfiles().catch(() => {}))
-        .then(() => fbStepSubcultures().catch(() => {}))
-        .then(() => fbStepSrs().catch(() => {}))
+        .catch((e) => onStepError('creators', e))
+        .then(() => fbStepProfiles().catch((e) => onStepError('profiles', e)))
+        .then(() => fbStepSubcultures().catch((e) => onStepError('subcultures', e)))
+        .then(() => fbStepSrs().catch((e) => onStepError('srs', e)))
       // Sentiment scores whatever is unscored, this scan's hits included on the
       // next run. Batched and capped, so a large backlog drains over several
       // scans rather than in one long call — and a failure here must never
       // surface as a failed scan, since the detections themselves are fine.
-      void fbStepSentiment().catch(() => {})
+      void fbStepSentiment().catch((e) => onStepError('sentiment', e))
     } catch (e) {
       setError((e as Error).message)
     } finally {

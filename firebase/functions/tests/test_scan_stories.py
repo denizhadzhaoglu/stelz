@@ -1,0 +1,286 @@
+"""Stories capture — the filter, the TTL, and the money.
+
+Three things here are load-bearing:
+
+1. THE LEAK FILTER. Stories endpoints return reels and feed posts mixed into
+   their output. A reel filed as a story would make the product's central claim
+   ("we caught it before it disappeared") false, so anything shaped like a feed
+   item is rejected.
+
+2. expiresAt IS COMPUTED. Two prototypes promised this field in their header
+   and neither wrote it; without it nothing can say how long a story has left.
+
+3. THE RUN FEE IS REAL. This actor charges per run AND per username, breaking
+   the "runs are free" assumption baked into the rest of the cost table. If the
+   run fee is not recorded, story scraping is invisible to the budget ladder —
+   the exact bug that already shipped once in scan_creators.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import os
+import sys
+import types
+import unittest
+from unittest import mock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _stub(name: str) -> types.ModuleType:
+    mod = sys.modules.get(name)
+    if mod is None:
+        mod = types.ModuleType(name)
+        sys.modules[name] = mod
+    if "." in name:
+        parent, _, child = name.rpartition(".")
+        setattr(_stub(parent), child, mod)
+    return mod
+
+
+for _n in (
+    "firebase_admin", "firebase_admin.firestore", "firebase_admin.storage",
+    "google.cloud", "google.cloud.firestore", "google.cloud.pubsub_v1",
+):
+    _stub(_n)
+_stub("firebase_admin").initialize_app = lambda *a, **k: None
+_stub("firebase_admin").get_app = lambda *a, **k: None
+_stub("firebase_admin").credentials = types.SimpleNamespace(ApplicationDefault=lambda: None)
+_fsmod = _stub("google.cloud.firestore")
+if not hasattr(_fsmod, "SERVER_TIMESTAMP"):
+    _fsmod.SERVER_TIMESTAMP = "TS"
+for _attr, _val in (("Increment", lambda *a, **k: None), ("ArrayUnion", lambda v: v), ("ArrayRemove", lambda v: v)):
+    if not hasattr(_fsmod, _attr):
+        setattr(_fsmod, _attr, _val)
+
+from handlers import scan_stories  # noqa: E402
+
+
+# ── In-memory doubles ───────────────────────────────────────────────────
+
+class FakeSnap:
+    def __init__(self, doc_id, data, exists=True):
+        self.id = doc_id
+        self._d = dict(data or {})
+        self.exists = exists
+        self.reference = types.SimpleNamespace(path=f"creators/{doc_id}")
+
+    def to_dict(self):
+        return dict(self._d)
+
+
+class FakeDoc:
+    def __init__(self, store, key):
+        self._store, self._key = store, key
+        self.subs: dict[str, dict] = {}
+
+    def get(self):
+        return FakeSnap(self._key, self._store.get(self._key), self._key in self._store)
+
+    def set(self, data, merge=False):
+        cur = dict(self._store.get(self._key) or {}) if merge else {}
+        cur.update(data)
+        self._store[self._key] = cur
+
+    def collection(self, name):
+        return FakeCol(self.subs.setdefault(name, {}))
+
+
+class FakeCol:
+    def __init__(self, store):
+        self.store = store
+        self.docs: dict[str, FakeDoc] = {}
+        self.added: list[dict] = []
+
+    def document(self, doc_id):
+        return self.docs.setdefault(doc_id, FakeDoc(self.store, doc_id))
+
+    def add(self, data):
+        self.added.append(data)
+
+    def where(self, *a, **k):
+        return self
+
+    def limit(self, n):
+        return self
+
+    def stream(self):
+        return [FakeSnap(k, v) for k, v in self.store.items()]
+
+
+class StoriesBase(unittest.TestCase):
+    def setUp(self):
+        self.creators = {
+            "instagram_anna": {"handle": "anna", "platform": "instagram", "tier": "tier_2"},
+        }
+        self.posts: dict = {}
+        self.recorded: list[dict] = []
+        self.runs_col = FakeCol({})
+
+        self.posts_col = FakeCol(self.posts)
+        fake_fs = types.SimpleNamespace(
+            brand_doc=lambda bid: mock.Mock(get=lambda: mock.Mock(exists=True)),
+            creators_col=lambda bid: FakeCol(self.creators),
+            posts_col=lambda bid: self.posts_col,
+            scan_runs_col=lambda bid: self.runs_col,
+            composite_id=lambda *parts: "_".join(p.lower() for p in parts if p),
+        )
+        self.usage = types.SimpleNamespace(
+            budget_exhausted=lambda bid: False,
+            scraping_allowed=lambda bid: True,
+            record=lambda bid, **kw: self.recorded.append(kw),
+        )
+        self.apify = mock.Mock()
+        self.apify.run_sync = mock.Mock(return_value=[])
+        for p in (
+            mock.patch.object(scan_stories, "fs", fake_fs),
+            mock.patch.object(scan_stories, "usage", self.usage),
+            mock.patch.object(scan_stories, "apify", self.apify),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_stories(self, **kw):
+        return scan_stories.run("stelz", dry_run=True, **kw)
+
+
+STORY = {"id": "31415926535", "ownerUsername": "anna", "takenAt": 1755680000,
+         "displayUrl": "https://cdn/story.jpg"}
+
+
+class TestLeakFilter(StoriesBase):
+    def test_rejects_items_shaped_like_feed_posts(self):
+        # Real observed failure: the stories output leaks reels and posts.
+        for leak in (
+            {**STORY, "shortCode": "Cabc123"},
+            {**STORY, "type": "Sidecar"},
+            {**STORY, "productType": "clips"},
+            {**STORY, "productType": "feed"},
+        ):
+            self.assertIsNone(scan_stories._normalize_item(leak))
+
+    def test_rejects_non_numeric_ids(self):
+        self.assertIsNone(scan_stories._normalize_item({**STORY, "id": "abc"}))
+        self.assertIsNone(scan_stories._normalize_item({**STORY, "id": None}))
+
+    def test_accepts_a_real_story(self):
+        out = scan_stories._normalize_item(STORY)
+        self.assertEqual(out["story_id"], "31415926535")
+        self.assertEqual(out["handle"], "anna")
+
+    def test_leaked_items_are_counted_not_silently_dropped(self):
+        self.apify.run_sync.return_value = [STORY, {**STORY, "id": "999", "shortCode": "X"}]
+        out = self.run_stories()
+        self.assertEqual(out["storiesFound"], 1)
+        self.assertEqual(out["skippedNonStory"], 1)
+
+    def test_foreign_handle_is_skipped(self):
+        # An account we never asked about must not enter the corpus.
+        self.apify.run_sync.return_value = [{**STORY, "ownerUsername": "vreemde"}]
+        out = self.run_stories()
+        self.assertEqual(out["storiesFound"], 0)
+        self.assertEqual(out["skippedNonStory"], 1)
+
+
+class TestPersistence(StoriesBase):
+    def test_expires_at_is_posted_at_plus_24h(self):
+        self.apify.run_sync.return_value = [STORY]
+        self.run_stories()
+        doc = self.posts["instagram_story_31415926535"]
+        self.assertEqual(doc["expiresAt"] - doc["postedAt"], dt.timedelta(hours=24))
+
+    def test_doc_id_and_permalink_shape(self):
+        self.apify.run_sync.return_value = [STORY]
+        self.run_stories()
+        self.assertIn("instagram_story_31415926535", self.posts)
+        doc = self.posts["instagram_story_31415926535"]
+        # A story permalink, not the raw CDN jpeg — "open original" must look
+        # like a story rather than a stray image.
+        self.assertEqual(doc["url"], "https://www.instagram.com/stories/anna/31415926535/")
+        self.assertEqual(doc["contentType"], "story")
+        self.assertEqual(doc["caption"], "")
+        self.assertEqual(doc["hashtags"], [])
+        self.assertEqual(doc["creatorTier"], "tier_2")
+
+    def test_missing_timestamp_is_flagged_as_estimated(self):
+        self.apify.run_sync.return_value = [{k: v for k, v in STORY.items() if k != "takenAt"}]
+        self.run_stories()
+        doc = self.posts["instagram_story_31415926535"]
+        self.assertTrue(doc["postedAtEstimated"])
+        self.assertIsNotNone(doc["expiresAt"])
+
+    def test_video_story_enqueues_video_and_its_cover(self):
+        # Story video URLs are short-lived signed links that routinely expire in
+        # the queue; the cover is the pass that reliably succeeds.
+        self.apify.run_sync.return_value = [{**STORY, "videoUrl": "https://cdn/s.mp4"}]
+        out = self.run_stories()
+        self.assertEqual(out["videosEnqueued"], 1)
+        self.assertEqual(out["imagesEnqueued"], 1)
+
+    def test_image_story_enqueues_one_image(self):
+        self.apify.run_sync.return_value = [STORY]
+        out = self.run_stories()
+        self.assertEqual(out["imagesEnqueued"], 1)
+        self.assertEqual(out["videosEnqueued"], 0)
+
+
+class TestCostAndGates(StoriesBase):
+    def test_one_run_for_all_handles(self):
+        self.creators.update({
+            f"instagram_c{i}": {"handle": f"c{i}", "platform": "instagram", "tier": "tier_2"}
+            for i in range(20)
+        })
+        self.run_stories()
+        # The run fee dwarfs the per-username price: 21 separate runs would cost
+        # roughly sixteen times one batched run.
+        self.assertEqual(self.apify.run_sync.call_count, 1)
+        actor, payload = self.apify.run_sync.call_args[0][:2]
+        self.assertEqual(actor, scan_stories.STORIES_ACTOR)
+        self.assertEqual(len(payload["usernames"]), 21)
+
+    def test_records_both_billed_units(self):
+        self.run_stories()
+        self.assertEqual(self.recorded[0]["apify_story_runs"], 1)
+        self.assertEqual(self.recorded[0]["apify_story_usernames"], 1)
+
+    def test_spend_is_recorded_even_when_the_actor_throws(self):
+        # The actor start is billed whether or not items come back.
+        self.apify.run_sync.side_effect = RuntimeError("actor exploded")
+        out = self.run_stories()
+        self.assertEqual(out["storiesFound"], 0)
+        self.assertEqual(self.recorded[0]["apify_story_runs"], 1)
+
+    def test_budget_gates_refuse_before_spending(self):
+        for gate in ("budget_exhausted", "scraping_allowed"):
+            with self.subTest(gate=gate):
+                self.apify.run_sync.reset_mock()
+                self.recorded.clear()
+                setattr(self.usage, gate, (lambda bid: True) if gate == "budget_exhausted" else (lambda bid: False))
+                out = self.run_stories()
+                self.assertIn("skipped", out)
+                self.apify.run_sync.assert_not_called()
+                self.assertEqual(self.recorded, [])
+                # restore
+                self.usage.budget_exhausted = lambda bid: False
+                self.usage.scraping_allowed = lambda bid: True
+
+    def test_no_tracked_creators_skips_without_spending(self):
+        self.creators.clear()
+        out = self.run_stories()
+        self.assertEqual(out["skipped"], "no_creators")
+        self.apify.run_sync.assert_not_called()
+
+
+class TestEmptyIsNormal(StoriesBase):
+    def test_zero_stories_is_a_success_not_an_error(self):
+        # Most creators have no active story at any given moment. If this ever
+        # reads as a failure, the UI will cry wolf four times a day.
+        self.apify.run_sync.return_value = []
+        out = self.run_stories()
+        self.assertEqual(out["storiesFound"], 0)
+        self.assertNotIn("skipped", out)
+        self.assertEqual(self.runs_col.added[0]["status"], "ok")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

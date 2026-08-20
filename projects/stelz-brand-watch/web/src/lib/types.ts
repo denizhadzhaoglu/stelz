@@ -67,6 +67,10 @@ export type DetectionRow = {
   music: DetectionMusic | null
   extras: DetectionExtras | null
   bbox?: unknown  // legacy — no longer rendered; kept for backward compat
+  // 'story' rides in from scan_stories via the post doc. Anything unknown is
+  // treated as post-like, so a new content type can never blank a card.
+  content_type?: 'image' | 'video' | 'story' | 'unknown' | null
+  expires_at?: string | null   // stories only: postedAt + 24h
   frame_idx?: number | null  // present when the detection came from a video frame
   post_id?: string | null    // groups multiple frame-hits of the same post
   frame_hits?: number        // UI-only: how many detections were collapsed into this row
