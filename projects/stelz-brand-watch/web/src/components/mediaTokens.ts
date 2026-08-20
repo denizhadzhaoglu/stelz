@@ -20,24 +20,31 @@ export const PAGE_WIDTH = {
 
 export type PageWidth = keyof typeof PAGE_WIDTH
 
-/** The media scale. `max-h` is what stops the 1440–1536 band, where the page
- *  cap has not engaged yet and the grid still has four columns. */
+/** The media scale.
+ *
+ *  Capping page width was necessary but not sufficient: at 1440 with four
+ *  columns a card still rendered ~330x340, and "bizar groot" was still the
+ *  verdict. A monitoring grid is read by scanning it, so the number that
+ *  matters is how many posts fit above the fold, not how big each one is.
+ *  These caps plus the extra column below put roughly twice as much on screen
+ *  at a typical laptop width, at ~60% of the previous tile area. */
 export const TILE = {
-  card: 'aspect-[4/5] max-h-[340px]',   // grid cards: feed, highlights, creator gallery
-  wide: 'aspect-[4/3] max-h-[420px]',   // drawer hero
-  hero: 'aspect-[4/3] max-h-[460px]',   // review hero — a judgement surface earns more room
-  square: 'aspect-square max-h-[320px]', // 4-up strips, "other hits"
+  card: 'aspect-[4/5] max-h-[260px]',   // grid cards: feed, highlights, creator gallery
+  wide: 'aspect-[4/3] max-h-[340px]',   // drawer hero
+  hero: 'aspect-[4/3] max-h-[400px]',   // review hero — a judgement surface earns more room
+  square: 'aspect-square max-h-[220px]', // 4-up strips, "other hits"
+  story: 'aspect-[9/16] max-h-[200px]',  // stories strip — parent sets the width
   thumb: 'aspect-square',                // parent sets a fixed px size (48/56px)
 } as const
 
 export type TileSize = keyof typeof TILE
 
-// Card grids. The 2xl step is the point: past 1440 the container is capped, so
-// extra width becomes an extra column rather than fatter cards.
+// Card grids. The steps are the point: extra width becomes an extra column
+// rather than fatter cards, all the way up past the 1440 container cap.
 export const CARD_GRID =
-  'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4'
+  'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3'
 
 /** Same steps, hairline-separated (gap-px over a border-coloured background) —
  *  the house style for dense blocks, since box-shadow is globally disabled. */
 export const HAIRLINE_GRID =
-  'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-px bg-[var(--color-border)] border border-[var(--color-border)]'
+  'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-px bg-[var(--color-border)] border border-[var(--color-border)]'

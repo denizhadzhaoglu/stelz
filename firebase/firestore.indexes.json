@@ -64,6 +64,14 @@
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "signalCount", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "detections",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "contentType", "order": "ASCENDING" },
+        { "fieldPath": "postedAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

@@ -118,8 +118,9 @@ class StoriesBase(unittest.TestCase):
         self.runs_col = FakeCol({})
 
         self.posts_col = FakeCol(self.posts)
+        self.brand = mock.Mock(get=lambda: mock.Mock(exists=True))
         fake_fs = types.SimpleNamespace(
-            brand_doc=lambda bid: mock.Mock(get=lambda: mock.Mock(exists=True)),
+            brand_doc=lambda bid: self.brand,
             creators_col=lambda bid: FakeCol(self.creators),
             posts_col=lambda bid: self.posts_col,
             scan_runs_col=lambda bid: self.runs_col,
@@ -142,6 +143,14 @@ class StoriesBase(unittest.TestCase):
 
     def run_stories(self, **kw):
         return scan_stories.run("stelz", dry_run=True, **kw)
+
+    def stamp(self) -> dict:
+        """The `stories` map last written to the brand doc, or {}."""
+        for call in reversed(self.brand.set.call_args_list):
+            payload = call.args[0] if call.args else {}
+            if "stories" in payload:
+                return payload["stories"]
+        return {}
 
 
 STORY = {"id": "31415926535", "ownerUsername": "anna", "takenAt": 1755680000,
@@ -186,14 +195,14 @@ class TestPersistence(StoriesBase):
     def test_expires_at_is_posted_at_plus_24h(self):
         self.apify.run_sync.return_value = [STORY]
         self.run_stories()
-        doc = self.posts["instagram_story_31415926535"]
+        doc = self.posts["instagram_story31415926535"]
         self.assertEqual(doc["expiresAt"] - doc["postedAt"], dt.timedelta(hours=24))
 
     def test_doc_id_and_permalink_shape(self):
         self.apify.run_sync.return_value = [STORY]
         self.run_stories()
-        self.assertIn("instagram_story_31415926535", self.posts)
-        doc = self.posts["instagram_story_31415926535"]
+        self.assertIn("instagram_story31415926535", self.posts)
+        doc = self.posts["instagram_story31415926535"]
         # A story permalink, not the raw CDN jpeg — "open original" must look
         # like a story rather than a stray image.
         self.assertEqual(doc["url"], "https://www.instagram.com/stories/anna/31415926535/")
@@ -202,10 +211,24 @@ class TestPersistence(StoriesBase):
         self.assertEqual(doc["hashtags"], [])
         self.assertEqual(doc["creatorTier"], "tier_2")
 
+    def test_post_id_has_exactly_two_segments(self):
+        # The frontend groups frames and carousel slots by the first TWO
+        # underscore-separated parts of the post id (lib/types.parentPostKey).
+        # An id like "instagram_story_123" parses as post "story", so every
+        # story in the corpus would collapse into one feed row — the whole
+        # feature, invisible. Two stories from the same creator must stay two.
+        self.apify.run_sync.return_value = [STORY, {**STORY, "id": "27182818284"}]
+        self.run_stories()
+        ids = [k for k in self.posts if k.startswith("instagram_story")]
+        self.assertEqual(len(ids), 2, ids)
+        for post_id in ids:
+            head = "_".join(post_id.split("_")[:2])
+            self.assertEqual(head, post_id, f"{post_id} would dedupe into {head}")
+
     def test_missing_timestamp_is_flagged_as_estimated(self):
         self.apify.run_sync.return_value = [{k: v for k, v in STORY.items() if k != "takenAt"}]
         self.run_stories()
-        doc = self.posts["instagram_story_31415926535"]
+        doc = self.posts["instagram_story31415926535"]
         self.assertTrue(doc["postedAtEstimated"])
         self.assertIsNotNone(doc["expiresAt"])
 
@@ -280,6 +303,43 @@ class TestEmptyIsNormal(StoriesBase):
         self.assertEqual(out["storiesFound"], 0)
         self.assertNotIn("skipped", out)
         self.assertEqual(self.runs_col.added[0]["status"], "ok")
+
+
+class TestLastRunStamp(StoriesBase):
+    """`brands/{id}.stories` is how the panel answers "when did this last look?".
+
+    Three quarters of these sweeps come from the 6-hourly scheduler, which runs
+    outside any scan session and therefore writes no step state. Without this
+    stamp an empty strip looks identical whether the scheduler ran ten minutes
+    ago and found nothing, or stopped firing a week ago.
+    """
+
+    def test_success_records_when_and_how_many(self):
+        self.apify.run_sync.return_value = [STORY]
+        self.run_stories()
+        s = self.stamp()
+        self.assertEqual(s["lastFound"], 1)
+        self.assertEqual(s["lastChecked"], 1)
+        self.assertIsNone(s["lastSkipped"])
+        self.assertIsNotNone(s["lastRunAt"])
+
+    def test_empty_sweep_still_records(self):
+        # The distinction the UI depends on: looked and found nothing.
+        self.apify.run_sync.return_value = []
+        self.run_stories()
+        self.assertEqual(self.stamp()["lastFound"], 0)
+        self.assertIsNone(self.stamp()["lastSkipped"])
+
+    def test_skips_record_their_reason(self):
+        self.creators.clear()
+        self.run_stories()
+        self.assertEqual(self.stamp()["lastSkipped"], "no_creators")
+
+    def test_stamping_can_never_fail_the_sweep(self):
+        self.brand.set.side_effect = RuntimeError("firestore down")
+        self.apify.run_sync.return_value = [STORY]
+        out = self.run_stories()
+        self.assertEqual(out["storiesFound"], 1)
 
 
 if __name__ == "__main__":

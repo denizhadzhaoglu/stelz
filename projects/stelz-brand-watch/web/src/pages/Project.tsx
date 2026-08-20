@@ -16,10 +16,14 @@ import { MediaTile } from '../components/MediaTile'
 import { DetectionDrawer } from '../components/DetectionDrawer'
 import { StackedDayBars, bucketByDay, type Series } from '../components/Chart'
 import { PasteImport } from '../components/PasteImport'
+import { StoriesStrip } from '../components/StoriesStrip'
 import { fmtNum } from '../lib/format'
 import { dedupeByPost, imageUrlFor, parentPostKey, type DetectionRow } from '../lib/types'
 import { fetchDetections, fetchProjects, projectsAction, fetchCreatorProfiles, type Project } from '../lib/data'
-import { fbStepCreators, type CreatorProfile } from '../lib/firestore'
+import {
+  fbStepCreators, fbStepStories, fbSubscribeStoriesState, fbFetchStories,
+  type CreatorProfile, type StoriesState,
+} from '../lib/firestore'
 import { rollupProject, splitCreatorId } from '../lib/projects'
 import { useMembership } from '../lib/membership'
 
@@ -33,6 +37,9 @@ export default function ProjectPage() {
 
   const [project, setProject] = useState<Project | null>(null)
   const [rows, setRows] = useState<DetectionRow[]>([])
+  // Null = the stories query is unavailable (index not live); the strip then
+  // falls back to the detected-only rows above.
+  const [storyRows, setStoryRows] = useState<DetectionRow[] | null>(null)
   const [profiles, setProfiles] = useState<Record<string, CreatorProfile>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -63,8 +70,18 @@ export default function ProjectPage() {
         )
         // Moderator-rejected rows are excluded, matching every other surface.
         setRows(dedupeByPost(batches.flat()).filter((r) => r.is_false_positive !== true))
+        // Stories separately: the per-creator fetch above is detected-only, so
+        // it cannot say how many stories were captured — only how many had a
+        // can in them. For a paid roster those are different numbers and the
+        // second one is the one the client asks about.
+        const members = new Set(p.creatorIds.map((cid) => splitCreatorId(cid).handle.toLowerCase()))
+        const st = await fbFetchStories(200).catch(() => null)
+        setStoryRows(st && dedupeByPost(st)
+          .filter((x) => x.is_false_positive !== true)
+          .filter((x) => members.has((x.creator_handle ?? '').toLowerCase())))
       } else {
         setRows([])
+        setStoryRows([])
       }
     } catch (e) {
       setError((e as Error).message)
@@ -88,6 +105,26 @@ export default function ProjectPage() {
       .sort((a, b) => (b.posted_at ?? '').localeCompare(a.posted_at ?? '')),
     [rows],
   )
+
+  // Stories for this roster. A festival campaign is the case stories exist
+  // for: the roster posts all weekend and every one of those posts is gone
+  // 24 hours later, so this leads the page rather than sitting below the KPIs.
+  const [storiesState, setStoriesState] = useState<StoriesState | null>(null)
+  const [storiesFetching, setStoriesFetching] = useState(false)
+  useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
+  const fetchStories = useCallback(async () => {
+    setStoriesFetching(true)
+    try {
+      await fbStepStories()
+      await load()
+      // Detections trail the sweep by a fan-out; look again shortly.
+      window.setTimeout(() => { void load() }, 20_000)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setStoriesFetching(false)
+    }
+  }, [load])
 
   const act = async (
     action: 'addCreators' | 'removeCreators' | 'archive' | 'unarchive',
@@ -196,6 +233,15 @@ export default function ProjectPage() {
     >
       {error && <Card className="p-4 mb-4 text-[12px] text-[var(--color-bad)]">{error}</Card>}
       {scanMsg && <Card className="p-4 mb-4 text-[12px] text-[var(--color-ink-muted)]">{scanMsg}</Card>}
+
+      <StoriesStrip
+        rows={storyRows ?? rows}
+        state={storiesState}
+        onOpen={setActive}
+        onFetch={fetchStories}
+        fetching={storiesFetching}
+        canWrite={canWrite && !project.archived}
+      />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <Kpi label="Posts gevonden" value={fmtNum(r.hits)} />

@@ -96,6 +96,29 @@ def _normalize_item(item: dict) -> dict | None:
     }
 
 
+def _mark_run(brand_id: str, *, found: int, checked: int, skipped: str | None = None) -> None:
+    """Stamp the brand doc with the outcome of this sweep.
+
+    Separate from `scan.steps.stories` on purpose. That map belongs to a scan
+    SESSION and is cleared when the next one starts, while three quarters of
+    these runs come from the 6-hourly scheduler, which has no session at all.
+    Without this the stories panel could never answer the first question anyone
+    asks it — "when did this last look?" — and an empty strip would be
+    indistinguishable from a scheduler that silently stopped firing.
+
+    Never raises: reporting must not be able to fail a sweep that succeeded.
+    """
+    try:
+        fs.brand_doc(brand_id).set({"stories": {
+            "lastRunAt": SERVER_TIMESTAMP,
+            "lastFound": found,
+            "lastChecked": checked,
+            "lastSkipped": skipped,
+        }}, merge=True)
+    except Exception:
+        log.exception(f"[{brand_id}] could not stamp stories run")
+
+
 def run(brand_id: str, max_handles: int = DEFAULT_MAX_HANDLES, dry_run: bool = False) -> dict[str, Any]:
     brand = fs.brand_doc(brand_id).get()
     if not brand.exists:
@@ -104,8 +127,10 @@ def run(brand_id: str, max_handles: int = DEFAULT_MAX_HANDLES, dry_run: bool = F
     zero = {"accountsChecked": 0, "storiesFound": 0, "imagesEnqueued": 0,
             "videosEnqueued": 0, "skippedNonStory": 0}
     if usage.budget_exhausted(brand_id):
+        _mark_run(brand_id, found=0, checked=0, skipped="budget_exhausted")
         return {**zero, "skipped": "budget_exhausted"}
     if not usage.scraping_allowed(brand_id):
+        _mark_run(brand_id, found=0, checked=0, skipped="budget")
         return {**zero, "skipped": "budget"}
 
     # Tracked creators only. Stories cost more per call than feed posts, and a
@@ -126,6 +151,7 @@ def run(brand_id: str, max_handles: int = DEFAULT_MAX_HANDLES, dry_run: bool = F
             by_handle[h] = (c.reference, cd)
     handles = list(by_handle)
     if not handles:
+        _mark_run(brand_id, found=0, checked=0, skipped="no_creators")
         return {**zero, "skipped": "no_creators"}
 
     items: list[dict] = []
@@ -165,7 +191,12 @@ def run(brand_id: str, max_handles: int = DEFAULT_MAX_HANDLES, dry_run: bool = F
 
         posted_at = norm["posted_at"] or now
         story_id = norm["story_id"]
-        post_id = fs.composite_id("instagram", f"story_{story_id}")
+        # No separator inside the second segment. The frontend collapses frames
+        # and carousel slots into one row per post by taking the first two
+        # underscore-separated parts of the post id (lib/types.parentPostKey), so
+        # "instagram_story_123" reads as post "story" and EVERY story in the feed
+        # would dedupe down to a single row.
+        post_id = fs.composite_id("instagram", f"story{story_id}")
 
         doc: dict[str, Any] = {
             "creatorRef": creator_ref.path,
@@ -241,6 +272,7 @@ def run(brand_id: str, max_handles: int = DEFAULT_MAX_HANDLES, dry_run: bool = F
         "videosEnqueued": videos_enqueued,
         "skippedNonStory": skipped_non_story,
     }
+    _mark_run(brand_id, found=stories_found, checked=len(handles))
     fs.scan_runs_col(brand_id).add({
         "type": "scan_stories",
         "startedAt": SERVER_TIMESTAMP,

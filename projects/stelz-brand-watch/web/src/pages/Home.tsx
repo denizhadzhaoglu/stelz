@@ -11,6 +11,7 @@ import { MediaTile } from '../components/MediaTile'
 import { Sparkline, LineChart, BarChart, Donut, StackedDayBars, bucketByDay, type Series } from '../components/Chart'
 import { DetectionDrawer } from '../components/DetectionDrawer'
 import { ScanPanel } from '../components/ScanPanel'
+import { StoriesStrip } from '../components/StoriesStrip'
 import {
   fetchDetections, fetchTopResonance, fetchCreatorSubcultures, fetchSubcultures,
   fetchCreatorProfiles, fetchProjects,
@@ -29,7 +30,9 @@ import { tallySounds, soundHref } from '../lib/sounds'
 import {
   fbBootstrapBrand, fbStepHashtags, fbStepCreators, fbStepSrs, fbStepSentiment,
   fbStepSubcultures, fbStepProfiles,
-  fbFetchPipelineCounts, fbSubscribeScanState, fbStepStories, type ScanState, type ScanStepKey,
+  fbFetchPipelineCounts, fbSubscribeScanState, fbStepStories,
+  fbSubscribeStoriesState, fbFetchStories,
+  type ScanState, type ScanStepKey, type StoriesState,
 } from '../lib/firestore'
 import {
   pickWorthALook, biggestFanToday, detectSpike, countNewSince,
@@ -108,18 +111,27 @@ export default function Home() {
 
   const [lastSeenAt] = useState<string | null>(() => loadState().lastSeenAt)
   useEffect(() => { markSeen() }, [])
+  const { canWrite } = useMembership()
+
+  // Stories are fetched by their own query because the main one is
+  // detected-only. Null means "that query is unavailable" (index not live
+  // yet) and the strip falls back to the hits it already has — see
+  // fbFetchStories.
+  const [storyRows, setStoryRows] = useState<DetectionRow[] | null>(null)
 
   const refreshData = useCallback(async () => {
     setRefreshing(true)
     try {
-      const [d, r, c] = await Promise.all([
+      const [d, r, c, s] = await Promise.all([
         fetchDetections({ limit: DETECTION_FETCH_LIMIT }).catch(() => [] as DetectionRow[]),
         fetchTopResonance(100).catch(() => [] as ResonanceRow[]),
         fbFetchPipelineCounts().catch(() => null),
+        fbFetchStories(200).catch(() => null),
       ])
       setDetections(d)
       setResonance(r)
       setCounts(c)
+      setStoryRows(s && dedupeByPost(s).filter((x) => x.is_false_positive !== true))
       saveCache({ savedAt: Date.now(), detections: d, resonance: r, counts: c })
     } catch (e) {
       setError((e as Error).message)
@@ -167,6 +179,25 @@ export default function Home() {
     const id = window.setInterval(() => { void refreshData() }, 25_000)
     return () => window.clearInterval(id)
   }, [scanActive, refreshData])
+
+  // Stories run on their own 6-hourly schedule, outside any scan session, so
+  // their last-run stamp is a separate subscription rather than a scan step.
+  const [storiesState, setStoriesState] = useState<StoriesState | null>(null)
+  const [storiesFetching, setStoriesFetching] = useState(false)
+  useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
+  const fetchStories = useCallback(async () => {
+    setStoriesFetching(true)
+    try {
+      await fbStepStories()
+      // The sweep only writes posts; the detections the strip renders arrive
+      // via the detect fan-out a beat later, so refresh again after a pause
+      // rather than leaving an empty strip behind a finished button.
+      await refreshData()
+      window.setTimeout(() => { void refreshData() }, 20_000)
+    } finally {
+      setStoriesFetching(false)
+    }
+  }, [refreshData])
 
   const days = DAYS_WINDOW
   // Collapse frame-level AND carousel-slot detections into one row per real
@@ -238,6 +269,17 @@ export default function Home() {
       {!loading && !error && (
         <>
           <ScanPanel scan={scanState} clientErrors={stepErrors} />
+          {/* Above the tabs on purpose. Everything else here can be looked at
+              tomorrow; a story is gone in 24 hours, so it does not get filed
+              behind a tab someone has to remember to open. */}
+          <StoriesStrip
+            rows={storyRows ?? uniqueDetections}
+            state={storiesState}
+            onOpen={setActiveDetection}
+            onFetch={fetchStories}
+            fetching={storiesFetching}
+            canWrite={canWrite}
+          />
           <Tabs items={tabItems} active={tab} onChange={(id) => setTab(id as Tab)} />
 
           <div className="mt-8">

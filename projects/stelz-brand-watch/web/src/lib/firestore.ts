@@ -160,6 +160,30 @@ export async function fbFetchDetections({
   return snap.docs.map((d) => mapDetection(d, brandId))
 }
 
+/**
+ * Stories, hits and misses alike.
+ *
+ * Its own query on purpose. Every other detection fetch defaults to
+ * `detected == true`, which is right for the feed and wrong here: the question
+ * a stories panel answers first is "did we capture the roster's stories at
+ * all", and a strip that silently drops the ones without a can in them cannot
+ * distinguish "we scraped forty and six had Stëlz" from "we scraped six".
+ *
+ * Needs the contentType+postedAt composite index. Until that index is live the
+ * query throws; callers fall back to filtering rows they already hold rather
+ * than showing an error, so the panel degrades to hits-only instead of blank.
+ */
+export async function fbFetchStories(limit = 200, brandId = BRAND_ID): Promise<DetectionRow[]> {
+  const col = collection(fbDb, 'brands', brandId, 'detections')
+  const snap = await getDocs(query(
+    col,
+    where('contentType', '==', 'story'),
+    orderBy('postedAt', 'desc'),
+    fsLimit(limit),
+  ))
+  return snap.docs.map((d) => mapDetection(d, brandId))
+}
+
 export async function fbFetchResonanceForCreator(handle: string, brandId = BRAND_ID): Promise<ResonanceRow | null> {
   const col = collection(fbDb, 'brands', brandId, 'resonance')
   const snap = await getDocs(query(col, where('handle', '==', handle), fsLimit(1)))
@@ -824,6 +848,39 @@ export function fbSubscribeScanState(
       lastActivityAt: s.lastActivityAt instanceof Timestamp ? s.lastActivityAt.toDate().toISOString() : null,
       skippedCount: (s.skippedCount as number) ?? 0,
       endReason: (s.endReason as string) ?? null,
+    })
+  })
+}
+
+/**
+ * Outcome of the last stories sweep, wherever it came from.
+ *
+ * Deliberately NOT read out of `scan.steps.stories`: that map belongs to a scan
+ * session and is wiped when the next one starts, while most sweeps come from
+ * the 6-hourly scheduler and have no session at all. Without this, "no stories"
+ * and "nothing has looked in a week" render identically.
+ */
+export type StoriesState = {
+  lastRunAt: string | null
+  lastFound: number | null
+  lastChecked: number | null
+  /** Gate that stopped the sweep ("budget", "no_creators"), else null. */
+  lastSkipped: string | null
+}
+
+export function fbSubscribeStoriesState(
+  onChange: (state: StoriesState | null) => void,
+  brandId = BRAND_ID,
+): Unsubscribe {
+  const ref = doc(fbDb, 'brands', brandId)
+  return onSnapshot(ref, (snap) => {
+    const s = (snap.data()?.stories ?? null) as Record<string, unknown> | null
+    if (!s) { onChange(null); return }
+    onChange({
+      lastRunAt: s.lastRunAt instanceof Timestamp ? s.lastRunAt.toDate().toISOString() : null,
+      lastFound: typeof s.lastFound === 'number' ? s.lastFound : null,
+      lastChecked: typeof s.lastChecked === 'number' ? s.lastChecked : null,
+      lastSkipped: typeof s.lastSkipped === 'string' ? s.lastSkipped : null,
     })
   })
 }

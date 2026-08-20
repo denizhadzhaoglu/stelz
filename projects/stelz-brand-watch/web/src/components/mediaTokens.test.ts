@@ -23,19 +23,41 @@ describe('media tiles', () => {
     }
   })
 
+  it('grid cards stay under 300px — twice was not enough', () => {
+    // Capping the page at 1440 was necessary and not sufficient: four columns
+    // of 330x340 still read as "bizar groot". A monitoring grid is scanned, so
+    // what matters is how many posts clear the fold, not how big one is.
+    // hero/wide are judgement surfaces (review, drawer) and get more room.
+    const GRID_TILES = ['card', 'square', 'story'] as const
+    for (const name of GRID_TILES) {
+      const m = TILE[name].match(/max-h-\[(\d+)px\]/)
+      expect(m, `TILE.${name} must have a max-h`).not.toBeNull()
+      expect(Number(m![1]), `TILE.${name}`).toBeLessThanOrEqual(300)
+    }
+  })
+
   it('caps stay under 500px — a card taller than that stops being a card', () => {
     for (const [name, cls] of Object.entries(TILE)) {
       const m = cls.match(/max-h-\[(\d+)px\]/)
       if (m) expect(Number(m[1]), `TILE.${name}`).toBeLessThanOrEqual(500)
     }
   })
+
+  it('the story tile is portrait — a story cropped square is a different photo', () => {
+    expect(TILE.story).toContain('aspect-[9/16]')
+  })
 })
 
 describe('card grids', () => {
-  it('add a column past xl instead of widening the ones they have', () => {
+  it('keep adding columns instead of widening the ones they have', () => {
     for (const [name, grid] of [['CARD_GRID', CARD_GRID], ['HAIRLINE_GRID', HAIRLINE_GRID]] as const) {
       expect(grid, `${name} needs a 2xl step`).toMatch(/2xl:grid-cols-\d/)
       expect(grid, `${name} needs an xl step`).toMatch(/xl:grid-cols-\d/)
+      // Five across at a laptop width. Four was the shipped setting that drew
+      // the complaint, so the floor is written down rather than left to taste.
+      // (?:^|\s) so this reads the xl step, not the "xl" inside "2xl".
+      const xl = Number(grid.match(/(?:^|\s)xl:grid-cols-(\d)/)![1])
+      expect(xl, `${name} xl step`).toBeGreaterThanOrEqual(5)
     }
   })
 })
