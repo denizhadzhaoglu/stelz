@@ -200,6 +200,10 @@ class TestAddCreators(ProjectsBase):
         self.assertEqual(stub["platform"], "instagram")
         self.assertEqual(stub["status"], "discovered")  # scan_creators selects this
         self.assertEqual(stub["tier"], "tier_1")
+        # In the stub write ITSELF: a creator doc missing nextScanAt is
+        # invisible to the scanner's inequality filter forever, so it must not
+        # depend on the separate stamp that follows succeeding.
+        self.assertIn("nextScanAt", stub)
 
     def test_malformed_creator_id_is_still_rejected(self):
         # The stub-upsert must not turn a garbage id into a phantom doc.
@@ -221,6 +225,18 @@ class TestAddCreators(ProjectsBase):
         projects.run("stelz", "uid1", "addCreators", {"projectId": pid, "creatorIds": ["instagram_bob"]})
         self.assertEqual(self.creators_store["instagram_bob"]["tier"], "tier_2")
 
+    def test_a_whole_roster_fits_in_one_call_but_101_does_not(self):
+        # One call must fit a campaign list (Lowlands = 53 ids): the rollback
+        # makes a single call all-or-nothing, while chunking could strand a
+        # half-imported project.
+        pid = self.create(name="Lowlands", trackingTier="tier_2")["project"]["id"]
+        with self.assertRaises(projects.ProjectError):
+            projects.run("stelz", "uid1", "addCreators",
+                         {"projectId": pid, "creatorIds": [f"instagram_x{i}" for i in range(101)]})
+        out = projects.run("stelz", "uid1", "addCreators",
+                           {"projectId": pid, "creatorIds": [f"instagram_x{i}" for i in range(53)]})
+        self.assertEqual(len(out["project"]["creatorIds"]), 53)
+
 
 class TestTrackingCap(ProjectsBase):
     def _seed_many(self, n):
@@ -230,7 +246,7 @@ class TestTrackingCap(ProjectsBase):
     def test_cap_holds_within_one_project(self):
         self._seed_many(30)
         pid = self.create()["project"]["id"]
-        ids = [f"instagram_c{i}" for i in range(projects.TRACKED_CREATOR_CAP)]
+        ids = [f"instagram_c{i}" for i in range(projects.TIER1_TRACKED_CAP)]
         projects.run("stelz", "uid1", "addCreators", {"projectId": pid, "creatorIds": ids[:25]})
         with self.assertRaises(projects.ProjectError) as cm:
             projects.run("stelz", "uid1", "addCreators",
@@ -268,6 +284,41 @@ class TestTrackingCap(ProjectsBase):
         out = projects.run("stelz", "uid1", "addCreators",
                            {"projectId": p2, "creatorIds": ["instagram_c25"]})
         self.assertTrue(out["ok"])
+
+    def test_tier_2_roster_may_exceed_the_tier_1_cap(self):
+        # The Lowlands case: a 53-id campaign roster at tier_2 imports in one
+        # call without touching the expensive tier_1 cap.
+        pid = self.create(name="Lowlands", trackingTier="tier_2")["project"]["id"]
+        ids = [f"instagram_ll{i}" for i in range(53)]
+        out = projects.run("stelz", "uid1", "addCreators", {"projectId": pid, "creatorIds": ids})
+        self.assertEqual(len(out["project"]["creatorIds"]), 53)
+        self.assertEqual(self.creators_store["instagram_ll0"]["tier"], "tier_2")
+
+    def test_total_cap_holds_for_tier_2_projects(self):
+        pid = self.create(name="Breed", trackingTier="tier_2")["project"]["id"]
+        for start in (0, 75):
+            projects.run("stelz", "uid1", "addCreators",
+                         {"projectId": pid, "creatorIds": [f"instagram_t{i}" for i in range(start, start + 75)]})
+        with self.assertRaises(projects.ProjectError) as cm:
+            projects.run("stelz", "uid1", "addCreators",
+                         {"projectId": pid, "creatorIds": ["instagram_overflow"]})
+        self.assertEqual(cm.exception.status, 409)
+        self.assertIn("budget", str(cm.exception).lower())
+
+    def test_tier_1_cap_ignores_tier_2_members(self):
+        # 30 tier_2-tracked creators leave the tier_1 allowance untouched; the
+        # 26th distinct tier_1 creator still trips it.
+        p2 = self.create(name="Rustig", trackingTier="tier_2")["project"]["id"]
+        projects.run("stelz", "uid1", "addCreators",
+                     {"projectId": p2, "creatorIds": [f"instagram_t2c{i}" for i in range(30)]})
+        p1 = self.create(name="Snel", trackingTier="tier_1")["project"]["id"]
+        out = projects.run("stelz", "uid1", "addCreators",
+                           {"projectId": p1, "creatorIds": [f"instagram_t1c{i}" for i in range(25)]})
+        self.assertTrue(out["ok"])
+        with self.assertRaises(projects.ProjectError) as cm:
+            projects.run("stelz", "uid1", "addCreators",
+                         {"projectId": p1, "creatorIds": ["instagram_t1c25"]})
+        self.assertEqual(cm.exception.status, 409)
 
 
 class TestRemoveAndArchive(ProjectsBase):
@@ -419,3 +470,43 @@ class TestUnarchive(ProjectsBase):
         pid = self.create()["project"]["id"]
         with self.assertRaises(projects.ProjectError):
             projects.run("stelz", "uid1", "unarchive", {"projectId": pid})
+
+
+class TestNames(ProjectsBase):
+    """Display names ride along with list imports so a roster is readable
+    before the first profile refresh — but Apify-owned data always wins."""
+
+    def _add(self, ids, names, tier="tier_2"):
+        pid = self.create(name="Met namen", trackingTier=tier)["project"]["id"]
+        return projects.run("stelz", "uid1", "addCreators",
+                            {"projectId": pid, "creatorIds": ids, "names": names})
+
+    def test_stub_carries_full_name(self):
+        self._add(["instagram_pleunbierbooms"], {"instagram_pleunbierbooms": "Pleun Bierbooms"})
+        self.assertEqual(self.creators_store["instagram_pleunbierbooms"]["fullName"], "Pleun Bierbooms")
+
+    def test_existing_doc_without_name_is_backfilled(self):
+        self._add(["instagram_anna"], {"instagram_anna": "Anna A."})
+        self.assertEqual(self.creators_store["instagram_anna"]["fullName"], "Anna A.")
+
+    def test_existing_full_name_is_never_overwritten(self):
+        self.creators_store["instagram_anna"]["fullName"] = "Anna van Apify"
+        self._add(["instagram_anna"], {"instagram_anna": "Anders"})
+        self.assertEqual(self.creators_store["instagram_anna"]["fullName"], "Anna van Apify")
+
+    def test_name_is_truncated_not_rejected(self):
+        self._add(["instagram_lang"], {"instagram_lang": "x" * 500})
+        self.assertEqual(len(self.creators_store["instagram_lang"]["fullName"]),
+                         projects.MAX_FULLNAME_LEN)
+
+    def test_names_keys_are_normalized_to_match_ids(self):
+        # Ids get lowercased on the way in; a names map built from the same
+        # raw strings must still line up.
+        self._add(["Instagram_Anna"], {"Instagram_Anna": "Anna"})
+        self.assertEqual(self.creators_store["instagram_anna"]["fullName"], "Anna")
+
+    def test_non_dict_names_rejected(self):
+        pid = self.create()["project"]["id"]
+        with self.assertRaises(projects.ProjectError):
+            projects.run("stelz", "uid1", "addCreators",
+                         {"projectId": pid, "creatorIds": ["instagram_anna"], "names": ["Anna"]})

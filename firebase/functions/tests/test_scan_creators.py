@@ -1,0 +1,220 @@
+"""Creator scan — the selection filter and the budget accounting.
+
+Two behaviours here are load-bearing:
+
+1. THE BILLING LINE. scan_creators used to record only apify_runs, which costs
+   $0.00 in COST_PER_UNIT — every dollar of Instagram scraping it did was
+   invisible to the budget ladder, including to its own budget guard. The
+   billed unit is apify_ig_results and it must be recorded.
+
+2. THE INEQUALITY FILTER. Selection is `nextScanAt <= now`; Firestore excludes
+   docs that lack the field entirely. A creator stub written without nextScanAt
+   is therefore invisible to the scanner forever — which is why projects.py
+   puts the stamp in the stub write itself, and why the fake here reproduces
+   the real exclusion semantics instead of treating missing as due.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import os
+import sys
+import types
+import unittest
+from unittest import mock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _stub(name: str) -> types.ModuleType:
+    mod = sys.modules.get(name)
+    if mod is None:
+        mod = types.ModuleType(name)
+        sys.modules[name] = mod
+    if "." in name:
+        parent, _, child = name.rpartition(".")
+        setattr(_stub(parent), child, mod)
+    return mod
+
+
+for _n in (
+    "firebase_admin", "firebase_admin.firestore", "firebase_admin.storage",
+    "google.cloud", "google.cloud.firestore", "google.cloud.pubsub_v1",
+):
+    _stub(_n)
+_stub("firebase_admin").initialize_app = lambda *a, **k: None
+_stub("firebase_admin").get_app = lambda *a, **k: None
+_stub("firebase_admin").credentials = types.SimpleNamespace(ApplicationDefault=lambda: None)
+_fsmod = _stub("google.cloud.firestore")
+if not hasattr(_fsmod, "SERVER_TIMESTAMP"):
+    _fsmod.SERVER_TIMESTAMP = "TS"
+if not hasattr(_fsmod, "Increment"):
+    _fsmod.Increment = lambda *a, **k: None
+if not hasattr(_fsmod, "ArrayUnion"):
+    _fsmod.ArrayUnion = lambda v: v
+if not hasattr(_fsmod, "ArrayRemove"):
+    _fsmod.ArrayRemove = lambda v: v
+
+from handlers import scan_creators  # noqa: E402
+
+
+# ── In-memory creators query with REAL inequality semantics ─────────────
+
+class FakeCreatorSnap:
+    def __init__(self, doc_id, data):
+        self.id = doc_id
+        self._d = dict(data)
+        self.reference = mock.Mock()
+
+    def to_dict(self):
+        return dict(self._d)
+
+
+class FakeCreatorsQuery:
+    """Chained .where().where().limit().stream() over a dict store.
+
+    Mirrors what production relies on: `in` on status, `<=` on nextScanAt, and
+    Firestore's rule that an inequality EXCLUDES docs missing the field."""
+
+    def __init__(self, store, filters=None, cap=None):
+        self._store = store
+        self._filters = list(filters or [])
+        self._cap = cap
+
+    def where(self, field, op, value):
+        return FakeCreatorsQuery(self._store, self._filters + [(field, op, value)], self._cap)
+
+    def limit(self, n):
+        return FakeCreatorsQuery(self._store, self._filters, n)
+
+    def stream(self):
+        out = []
+        for doc_id, d in self._store.items():
+            ok = True
+            for field, op, value in self._filters:
+                if op == "in":
+                    ok = d.get(field) in value
+                elif op == "<=":
+                    ok = field in d and d[field] <= value
+                else:
+                    raise AssertionError(f"unexpected op {op}")
+                if not ok:
+                    break
+            if ok:
+                out.append(FakeCreatorSnap(doc_id, d))
+        return out[: self._cap] if self._cap else out
+
+
+PAST = dt.datetime(2026, 8, 19, tzinfo=dt.timezone.utc)
+
+
+class ScanCreatorsBase(unittest.TestCase):
+    def setUp(self):
+        self.creators: dict = {}
+        self.recorded: list[dict] = []
+
+        fake_fs = types.SimpleNamespace(
+            brand_doc=lambda bid: mock.Mock(get=lambda: mock.Mock(exists=True)),
+            creators_col=lambda bid: FakeCreatorsQuery(self.creators),
+            posts_col=lambda bid: mock.Mock(),
+            scan_runs_col=lambda bid: mock.Mock(add=lambda d: None),
+        )
+        self.usage = types.SimpleNamespace(
+            budget_exhausted=lambda bid: False,
+            scraping_allowed=lambda bid: True,
+            record=lambda bid, **kw: self.recorded.append(kw),
+        )
+        self.apify = mock.Mock()
+        self.apify.scrape_profile_ig = mock.Mock(return_value=[])
+        self.apify.run_sync = mock.Mock(return_value=[])
+
+        patches = [
+            mock.patch.object(scan_creators, "fs", fake_fs),
+            mock.patch.object(scan_creators, "usage", self.usage),
+            mock.patch.object(scan_creators, "apify", self.apify),
+            # Persistence is scan-pipeline plumbing, not what these tests pin.
+            mock.patch.object(scan_creators, "_persist_post", lambda *a, **k: None),
+            mock.patch.object(scan_creators, "_audit_creators_scrape", lambda *a, **k: None),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_scan(self, **kw):
+        return scan_creators.run("stelz", dry_run=True, **kw)
+
+
+class TestBillingIsRecorded(ScanCreatorsBase):
+    def test_ig_results_are_recorded_as_the_billed_unit(self):
+        # The bug this pins: only apify_runs (cost $0.00) was recorded, so IG
+        # creator-scan spend never reached the budget ladder.
+        self.creators["instagram_anna"] = {
+            "status": "discovered", "platform": "instagram", "handle": "anna", "nextScanAt": PAST,
+        }
+        self.apify.scrape_profile_ig.return_value = [{"id": str(i)} for i in range(5)]
+        self.run_scan()
+        self.assertEqual(len(self.recorded), 1)
+        self.assertEqual(self.recorded[0].get("apify_ig_results"), 5)
+        self.assertEqual(self.recorded[0].get("apify_runs"), 1)
+        self.assertEqual(self.recorded[0].get("apify_tt_results"), 0)
+
+    def test_tiktok_results_are_recorded_too(self):
+        self.creators["tiktok_carla"] = {
+            "status": "discovered", "platform": "tiktok", "handle": "carla", "nextScanAt": PAST,
+        }
+        self.apify.run_sync.return_value = [{"id": str(i)} for i in range(3)]
+        self.run_scan()
+        self.assertEqual(self.recorded[0].get("apify_tt_results"), 3)
+        self.assertEqual(self.recorded[0].get("apify_ig_results"), 0)
+
+
+class TestBudgetGates(ScanCreatorsBase):
+    def test_scraping_disallowed_skips_without_touching_apify(self):
+        # The 95% degrade rung: before this gate the creator scan kept scraping
+        # at full width until the budget was fully blown.
+        self.creators["instagram_anna"] = {
+            "status": "discovered", "platform": "instagram", "handle": "anna", "nextScanAt": PAST,
+        }
+        self.usage.scraping_allowed = lambda bid: False
+        out = self.run_scan()
+        self.assertEqual(out.get("skipped"), "budget")
+        self.apify.scrape_profile_ig.assert_not_called()
+        self.apify.run_sync.assert_not_called()
+
+    def test_budget_exhausted_skip_is_preserved(self):
+        self.usage.budget_exhausted = lambda bid: True
+        out = self.run_scan()
+        self.assertEqual(out.get("skipped"), "budget_exhausted")
+        self.apify.scrape_profile_ig.assert_not_called()
+
+
+class TestSelection(ScanCreatorsBase):
+    def test_discovered_status_is_selected(self):
+        # The projects import path creates stubs with exactly this status; the
+        # whole feature rests on the scanner picking them up.
+        self.creators["instagram_stub"] = {
+            "status": "discovered", "platform": "instagram", "handle": "stub", "nextScanAt": PAST,
+        }
+        out = self.run_scan()
+        self.assertEqual(out["creators_scanned"], 1)
+
+    def test_doc_without_next_scan_at_is_never_selected(self):
+        # Firestore inequality semantics: missing field = excluded. This is why
+        # the stub write carries nextScanAt itself.
+        self.creators["instagram_ghost"] = {
+            "status": "discovered", "platform": "instagram", "handle": "ghost",
+        }
+        out = self.run_scan()
+        self.assertEqual(out["creators_scanned"], 0)
+        self.apify.scrape_profile_ig.assert_not_called()
+
+    def test_future_next_scan_at_is_not_due(self):
+        self.creators["instagram_late"] = {
+            "status": "discovered", "platform": "instagram", "handle": "late",
+            "nextScanAt": dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=6),
+        }
+        out = self.run_scan()
+        self.assertEqual(out["creators_scanned"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

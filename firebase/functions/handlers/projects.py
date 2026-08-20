@@ -9,13 +9,14 @@ finally gives the tier system its first real writer — until now nothing ever
 set anything but tier_3, and the DetectionDrawer's "Promote to tier 1" button
 had no onClick.
 
-THE CAP IS NOT OPTIONAL. tier_1 means an 8x scrape cadence per creator
+THE CAPS ARE NOT OPTIONAL. tier_1 means an 8x scrape cadence per creator
 (48h -> 6h). One enthusiastic project with 200 members would silently multiply
 the brand's Apify spend and starve the hashtag scans out of the shared $5/day
-budget ladder. So the number of DISTINCT tracked creators across all live
-projects is capped, server-side, and the error says why. The plan named the cap
-for tier_1; it is enforced for every tracked tier because tier_2 is still a 4x
-cadence — cost is cost.
+budget ladder. So two caps hold, server-side, and the errors say why: a tight
+one on DISTINCT creators at effective tier_1 (the 8x cadence), and a wider one
+on distinct creators tracked by any live project at all. Campaign rosters (the
+Lowlands list is 53 platform-ids) fit comfortably under the wide cap at tier_2
+without ever touching the expensive one.
 
 Kept as a handler (main.py wraps it in the HTTP endpoint) so it is testable the
 same way bootstrap_brand is: against an in-memory Firestore double, no emulator.
@@ -31,8 +32,11 @@ from lib import fs
 
 log = logging.getLogger(__name__)
 
-# Distinct creators across all non-archived projects, any tracking tier.
-TRACKED_CREATOR_CAP = 25
+# Two caps. TIER1 guards the expensive 6h cadence (8x scrape cost per
+# creator); TOTAL guards the overall tracked width across all live projects,
+# any tier. Distinct creators in both cases.
+TIER1_TRACKED_CAP = 25
+TOTAL_TRACKED_CAP = 150
 
 # What a project may track. tier_3 deliberately absent: it is the default
 # cadence, so "tracking at tier_3" would be a no-op sold as a feature.
@@ -40,7 +44,11 @@ ALLOWED_TIERS = ("tier_1", "tier_2")
 
 MAX_NAME_LEN = 80
 MAX_NOTE_LEN = 500
-MAX_CREATORS_PER_CALL = 50
+MAX_FULLNAME_LEN = 120
+# One call must fit a whole campaign roster (the Lowlands list is 53 ids): the
+# post-write rollback makes a single call all-or-nothing, while client-side
+# chunking could strand a half-imported project when a later chunk trips a cap.
+MAX_CREATORS_PER_CALL = 100
 
 
 class ProjectError(Exception):
@@ -76,14 +84,46 @@ def _live_projects(brand_id: str) -> list[tuple[str, dict]]:
     return out
 
 
-def _tracked_union(projects: list[tuple[str, dict]], exclude_id: str | None = None) -> set[str]:
-    """Distinct creator ids across live projects (optionally excluding one)."""
+def _tracked_union(
+    projects: list[tuple[str, dict]],
+    exclude_id: str | None = None,
+    only_tier: str | None = None,
+) -> set[str]:
+    """Distinct creator ids across live projects (optionally excluding one).
+
+    only_tier narrows to projects of that tracking tier. The `or "tier_1"`
+    default MUST mirror _effective_tier: a creator is effective tier_1 exactly
+    when some live tier_1 project claims them, so the union of tier_1 projects'
+    members IS the tier_1-cap set.
+    """
     union: set[str] = set()
     for pid, d in projects:
         if pid == exclude_id:
             continue
+        if only_tier is not None and (d.get("trackingTier") or "tier_1") != only_tier:
+            continue
         union.update(d.get("creatorIds") or [])
     return union
+
+
+def _check_caps(total: set[str], tier1: set[str]) -> None:
+    """Raise 409 when either cap is exceeded. Both messages keep the word
+    "budget" — the UI shows them verbatim and the tests key on it."""
+    if len(tier1) > TIER1_TRACKED_CAP:
+        raise ProjectError(
+            f"Tier-1 tracking cap reached: {TIER1_TRACKED_CAP} creators at the 6h cadence. "
+            f"Tier-1 creators are scanned 8x as often, and this cap is what keeps that from "
+            f"consuming the daily scan budget. Track this group at tier_2 instead, or free "
+            f"tier-1 slots (remove creators or archive a tier-1 project).",
+            status=409,
+        )
+    if len(total) > TOTAL_TRACKED_CAP:
+        raise ProjectError(
+            f"Tracking cap reached: {TOTAL_TRACKED_CAP} creators across all projects. Every "
+            f"tracked creator is scanned on a faster cadence, and this cap protects the daily "
+            f"scan budget. Remove creators from a project (or archive one) to free slots.",
+            status=409,
+        )
 
 
 def _effective_tier(live: list[tuple[str, dict]], cid: str) -> str | None:
@@ -191,20 +231,29 @@ def run(brand_id: str, uid: str, action: str, body: dict[str, Any]) -> dict[str,
         if bad:
             raise ProjectError(f"creatorIds must be platform_handle composites, got: {', '.join(bad[:3])}")
 
-        # THE COST CAP, fast path. This check races (two concurrent adds can
+        # Optional display names ({compositeId: name}) from list imports, so a
+        # roster shows "Pleun Bierbooms" instead of a bare handle before the
+        # first profile refresh. Truncated, not rejected — same convention as
+        # note. Keys lowercased to line up with the normalized ids above.
+        names_raw = body.get("names") or {}
+        if not isinstance(names_raw, dict):
+            raise ProjectError("names must be an object of creatorId -> displayName")
+        names: dict[str, str] = {}
+        for k, v in names_raw.items():
+            key, val = str(k).strip().lower(), str(v).strip()[:MAX_FULLNAME_LEN]
+            if key and val:
+                names[key] = val
+
+        # THE COST CAPS, fast path. This check races (two concurrent adds can
         # both pass — no transactions here), so it is re-checked AFTER the write
         # below; this pre-check just avoids a pointless write in the common case.
+        this_tier = project.get("trackingTier") or "tier_1"
         live = _live_projects(brand_id)
-        union = _tracked_union(live)
-        union.update(ids)
-        cap_msg = (
-            f"Tracking cap reached: {TRACKED_CREATOR_CAP} creators across all projects. "
-            f"Tracked creators are scanned up to 8x as often, and this cap is what keeps "
-            f"that from consuming the daily scan budget. Remove creators from a project "
-            f"(or archive one) to free slots."
-        )
-        if len(union) > TRACKED_CREATOR_CAP:
-            raise ProjectError(cap_msg, status=409)
+        total = _tracked_union(live) | set(ids)
+        tier1 = _tracked_union(live, only_tier="tier_1")
+        if this_tier == "tier_1":
+            tier1 |= set(ids)
+        _check_caps(total, tier1)
 
         # Creators the pipeline has seen but never promoted get a tracking stub
         # HERE rather than a 404. This matters because the drawer's "Track in
@@ -214,16 +263,29 @@ def run(brand_id: str, uid: str, action: str, body: dict[str, Any]) -> dict[str,
         # moment the feature exists for. status "discovered" puts the stub on
         # the same path scan_creators already selects.
         for cid in ids:
-            if not fs.creators_col(brand_id).document(cid).get().exists:
+            snap_c = fs.creators_col(brand_id).document(cid).get()
+            if not snap_c.exists:
                 platform, _, handle = cid.partition("_")
-                fs.creators_col(brand_id).document(cid).set({
+                stub: dict[str, Any] = {
                     "handle": handle,
                     "platform": platform,
                     "status": "discovered",
                     "tier": "tier_3",  # real tier stamped below via _restamp
                     "addedVia": "project",
                     "createdAt": SERVER_TIMESTAMP,
-                }, merge=True)
+                    # In the stub write itself, not only in the later per-cid
+                    # stamp: the scanner's inequality filter skips docs missing
+                    # nextScanAt entirely, so a failure of that later write
+                    # would otherwise leave a permanently invisible creator.
+                    "nextScanAt": SERVER_TIMESTAMP,
+                }
+                if cid in names:
+                    stub["fullName"] = names[cid]
+                fs.creators_col(brand_id).document(cid).set(stub, merge=True)
+            elif cid in names and not (snap_c.to_dict() or {}).get("fullName"):
+                # Backfill only — the Apify profile refresh owns fullName once
+                # real platform data exists; an import must never overwrite it.
+                fs.creators_col(brand_id).document(cid).set({"fullName": names[cid]}, merge=True)
 
         # ArrayUnion, not read-modify-write: two teammates adding simultaneously
         # must both land. The merge=True-replaces-arrays trap is documented at
@@ -233,17 +295,19 @@ def run(brand_id: str, uid: str, action: str, body: dict[str, Any]) -> dict[str,
             "updatedAt": SERVER_TIMESTAMP,
         }, merge=True)
 
-        # Post-write re-check (review-confirmed TOCTOU): re-read the union and
-        # ROLL BACK this addition if a concurrent add pushed it past the cap.
-        # Not bulletproof — two racers can both roll back — but it converts
+        # Post-write re-check (review-confirmed TOCTOU): re-read the unions and
+        # ROLL BACK this addition if a concurrent add pushed either past its
+        # cap. Not bulletproof — two racers can both roll back — but it converts
         # "cap silently breached forever" into "briefly exceeded, then repaired,
         # caller gets the honest error".
         live = _live_projects(brand_id)
-        if len(_tracked_union(live)) > TRACKED_CREATOR_CAP:
+        try:
+            _check_caps(_tracked_union(live), _tracked_union(live, only_tier="tier_1"))
+        except ProjectError:
             col.document(project_id).set({"creatorIds": ArrayRemove(ids)}, merge=True)
             live = _live_projects(brand_id)
             _restamp(brand_id, ids, live)
-            raise ProjectError(cap_msg, status=409)
+            raise
 
         # Tier via _effective_tier, not a blind stamp of THIS project's tier —
         # a creator also tracked by a faster project must keep the fast cadence.
@@ -252,8 +316,7 @@ def run(brand_id: str, uid: str, action: str, body: dict[str, Any]) -> dict[str,
             # nextScanAt now → eligible on the very next creator-scan run,
             # which is what "start tracking" should mean.
             fs.creators_col(brand_id).document(cid).set({"nextScanAt": SERVER_TIMESTAMP}, merge=True)
-        tier = project.get("trackingTier") or "tier_1"
-        log.info(f"[{brand_id}] project {project_id}: +{len(ids)} creators at {tier} (by {uid})")
+        log.info(f"[{brand_id}] project {project_id}: +{len(ids)} creators at {this_tier} (by {uid})")
         return {"ok": True, "project": _serialize(project_id, col.document(project_id).get().to_dict() or {})}
 
     if action == "removeCreators":
@@ -296,15 +359,13 @@ def run(brand_id: str, uid: str, action: str, body: dict[str, Any]) -> dict[str,
         # members' fast cadence, so it must pass the same cap the add path does.
         if not project.get("archived"):
             raise ProjectError("project is not archived")
+        members = set(project.get("creatorIds") or [])
         live = _live_projects(brand_id)
-        union = _tracked_union(live)
-        union.update(project.get("creatorIds") or [])
-        if len(union) > TRACKED_CREATOR_CAP:
-            raise ProjectError(
-                f"Unarchiving would put {len(union)} creators on tracked cadence — the cap is "
-                f"{TRACKED_CREATOR_CAP}. Free slots first (remove creators or archive another project).",
-                status=409,
-            )
+        total = _tracked_union(live) | members
+        tier1 = _tracked_union(live, only_tier="tier_1")
+        if (project.get("trackingTier") or "tier_1") == "tier_1":
+            tier1 |= members
+        _check_caps(total, tier1)
         col.document(project_id).set({
             "archived": False,
             "updatedAt": SERVER_TIMESTAMP,

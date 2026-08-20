@@ -13,8 +13,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { PageShell, Card, Badge, Button, Avatar } from '../components/ui'
 import { StackedDayBars, bucketByDay, type Series } from '../components/Chart'
+import { PasteImport } from '../components/PasteImport'
 import { dedupeByPost, type DetectionRow } from '../lib/types'
-import { fetchDetections, fetchProjects, projectsAction, type Project } from '../lib/data'
+import { fetchDetections, fetchProjects, projectsAction, fetchCreatorProfiles, type Project } from '../lib/data'
+import { fbStepCreators, type CreatorProfile } from '../lib/firestore'
 import { rollupProject, splitCreatorId } from '../lib/projects'
 import { useMembership } from '../lib/membership'
 
@@ -24,15 +26,24 @@ export default function ProjectPage() {
 
   const [project, setProject] = useState<Project | null>(null)
   const [rows, setRows] = useState<DetectionRow[]>([])
+  const [profiles, setProfiles] = useState<Record<string, CreatorProfile>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [scanMsg, setScanMsg] = useState<string | null>(null)
+  const [showImport, setShowImport] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const all = await fetchProjects()
+      // Profiles ride along for display names + fresh follower counts —
+      // imported roster members have a fullName long before their first hit.
+      const [all, profs] = await Promise.all([
+        fetchProjects(),
+        fetchCreatorProfiles().catch(() => ({} as Record<string, CreatorProfile>)),
+      ])
+      setProfiles(profs)
       const p = all.find((x) => x.id === projectId) ?? null
       setProject(p)
       if (p && p.creatorIds.length) {
@@ -62,12 +73,42 @@ export default function ProjectPage() {
     [project, rows],
   )
 
-  const act = async (action: 'removeCreators' | 'archive' | 'unarchive', params: { creatorIds?: string[] }) => {
+  const act = async (
+    action: 'addCreators' | 'removeCreators' | 'archive' | 'unarchive',
+    params: { creatorIds?: string[]; names?: Record<string, string> },
+  ) => {
     if (!project) return
     setBusy(true)
+    setError(null)
     try {
       const updated = await projectsAction(action, { projectId: project.id, ...params })
       setProject(updated)
+      if (action === 'addCreators') {
+        // New members need their profiles/rows fetched to render properly.
+        setShowImport(false)
+        void load()
+      }
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const scanNow = async () => {
+    setBusy(true)
+    setScanMsg(null)
+    setError(null)
+    try {
+      // Honest scope: this steps the GLOBAL creator scan — every due tracked
+      // creator, not just this project's. That is also why the button lives
+      // here and not per-member.
+      const out = await fbStepCreators(80, 8) as {
+        creators_scanned?: number; posts_added?: number; skipped?: string
+      }
+      setScanMsg(out.skipped
+        ? `Scan overgeslagen (${out.skipped}) — budgetlimiet bereikt voor vandaag.`
+        : `Scan klaar: ${out.creators_scanned ?? 0} creators gescand, ${out.posts_added ?? 0} posts opgehaald. Detecties verschijnen binnen enkele minuten in de feed.`)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -91,6 +132,11 @@ export default function ProjectPage() {
   const trend: Series = { id: 'hits', label: 'Hits', tone: 'accent', data: bucketByDay(rollup?.postedAts ?? [], 60) }
   const r = rollup!
   const scored = r.hits - r.sentiment.unscored
+  // Roster order: by display name where known (imports carry fullName), so the
+  // list reads like the client's sheet instead of raw handle soup.
+  const members = [...r.creators].sort((a, b) =>
+    (profiles[a.handle]?.fullName ?? a.handle).localeCompare(profiles[b.handle]?.fullName ?? b.handle, 'nl'),
+  )
 
   return (
     <PageShell
@@ -98,6 +144,15 @@ export default function ProjectPage() {
       subtitle={`${project.creatorIds.length} tracked creators at ${project.trackingTier === 'tier_1' ? '6h' : '12h'} scan cadence${project.note ? ` · ${project.note}` : ''}${project.archived ? ' · ARCHIVED' : ''}`}
       actions={
         <div className="flex items-center gap-3">
+          {canWrite && !project.archived && (
+            <Button
+              size="sm" variant="secondary" disabled={busy}
+              title="Scant álle due creators (niet alleen dit project) en haalt hun recente posts op"
+              onClick={() => void scanNow()}
+            >
+              Scan creators nu
+            </Button>
+          )}
           {canWrite && !project.archived && (
             <Button
               size="sm" variant="ghost" disabled={busy}
@@ -124,6 +179,7 @@ export default function ProjectPage() {
       }
     >
       {error && <Card className="p-4 mb-4 text-[12px] text-[var(--color-bad)]">{error}</Card>}
+      {scanMsg && <Card className="p-4 mb-4 text-[12px] text-[var(--color-ink-muted)]">{scanMsg}</Card>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <Kpi label="Hits" value={String(r.hits)} />
@@ -151,14 +207,18 @@ export default function ProjectPage() {
             Members — including the silent ones
           </h3>
           <ul className="divide-y divide-[var(--color-border)]">
-            {r.creators.map((c) => (
+            {members.map((c) => {
+              const prof = profiles[c.handle]
+              const displayName = prof?.fullName ?? null
+              const followers = prof?.followerCount ?? c.followers
+              return (
               <li key={c.creatorId} className="flex items-center gap-3 py-2.5">
-                <Avatar src={c.avatar} handle={c.handle} className="w-8 h-8 rounded-full text-[12px] shrink-0" />
+                <Avatar src={prof?.avatarUrl ?? c.avatar} handle={c.handle} className="w-8 h-8 rounded-full text-[12px] shrink-0" />
                 <Link to={`/creators/${c.handle}`} className="min-w-0 flex-1 hover:underline">
-                  <span className="block text-[13px] font-medium truncate">@{c.handle}</span>
+                  <span className="block text-[13px] font-medium truncate">{displayName ?? `@${c.handle}`}</span>
                   <span className="block text-[11px] text-[var(--color-ink-subtle)]">
-                    {c.platform}
-                    {c.followers ? ` · ${c.followers.toLocaleString()} followers` : ''}
+                    {displayName ? `@${c.handle} · ` : ''}{c.platform}
+                    {followers ? ` · ${followers.toLocaleString()} followers` : ''}
                     {c.lastHitAt ? ` · last hit ${new Date(c.lastHitAt).toLocaleDateString('nl-NL')}` : ''}
                   </span>
                 </Link>
@@ -178,7 +238,8 @@ export default function ProjectPage() {
                   </button>
                 )}
               </li>
-            ))}
+              )
+            })}
           </ul>
           {project.creatorIds.length === 0 && (
             <p className="text-[12px] text-[var(--color-ink-muted)] py-6 text-center">
@@ -187,6 +248,26 @@ export default function ProjectPage() {
           )}
         </Card>
       </div>
+
+      {canWrite && !project.archived && (
+        <Card className="p-5 mt-6">
+          <button
+            onClick={() => setShowImport((v) => !v)}
+            className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)]"
+          >
+            Lijst importeren — plak uit een sheet {showImport ? '▴' : '▾'}
+          </button>
+          {showImport && (
+            <div className="mt-4">
+              <PasteImport
+                busy={busy}
+                submitLabel={(n) => `Voeg ${n} creators toe aan ${project.name}`}
+                onImport={(ids, names) => void act('addCreators', { creatorIds: ids, names })}
+              />
+            </div>
+          )}
+        </Card>
+      )}
     </PageShell>
   )
 }

@@ -7,6 +7,7 @@ import Home from './pages/Home'
 import Creator from './pages/Creator'
 import Sounds from './pages/Sounds'
 import ProjectPage from './pages/Project'
+import LowlandsPage from './pages/Lowlands'
 import Settings from './pages/Settings'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
@@ -14,15 +15,23 @@ import Signup from './pages/Signup'
 import Terms from './pages/Terms'
 import Privacy from './pages/Privacy'
 
-// Five primary routes after the 16→5 consolidation:
-//   /              Home (tabs: Briefing · Feed · Creators · Discovery · Trends)
+// Primary routes:
+//   /              Home (tabs: Dashboard · Feed · Review · Creators)
+//   /lowlands      Client roster tab — import screen until the project
+//                  exists, then a redirect to its project page
+//   /sounds(/:key) Sound leaderboard + drill-down
 //   /creators/:id  Creator detail
+//   /projects/:id  Project detail (tracked creator groups)
 //   /settings      Settings
 //   /login + /signup + /landing  Public auth + marketing
 //   /terms /privacy              Static legal (no nav)
 
 const NAV: { to: string; label: string; matchPrefix?: string }[] = [
   { to: '/', label: 'Home' },
+  // matchPrefix '/projects': the Lowlands tab stays lit while reading any
+  // project roster — the tab redirects there once the roster exists.
+  { to: '/lowlands', label: 'Lowlands', matchPrefix: '/projects' },
+  { to: '/sounds', label: 'Sounds', matchPrefix: '/sounds' },
   { to: '/settings', label: 'Settings' },
 ]
 
@@ -61,6 +70,7 @@ export default function App() {
         <Route path="/creators/:handle" element={<Creator />} />
         <Route path="/sounds" element={<Sounds />} />
         <Route path="/sounds/:soundKey" element={<Sounds />} />
+        <Route path="/lowlands" element={<LowlandsPage />} />
         <Route path="/projects/:projectId" element={<ProjectPage />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

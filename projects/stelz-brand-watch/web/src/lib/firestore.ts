@@ -660,7 +660,13 @@ export async function fbListProjects(brandId = BRAND_ID): Promise<Project[]> {
  * adding a creator to a project changes their scan cadence, which is spend. */
 export async function fbProjectsAction(
   action: 'create' | 'rename' | 'archive' | 'unarchive' | 'addCreators' | 'removeCreators',
-  params: { projectId?: string; name?: string; note?: string; trackingTier?: string; creatorIds?: string[] },
+  params: {
+    projectId?: string; name?: string; note?: string; trackingTier?: string
+    creatorIds?: string[]
+    // addCreators only: {compositeId: displayName} from list imports, so a
+    // roster shows real names before the first profile refresh.
+    names?: Record<string, string>
+  },
   brandId = BRAND_ID,
 ): Promise<Project> {
   const out = await authedFetch('api_projects', { brandId, action, ...params }) as { project: Record<string, unknown> & { id: string } }

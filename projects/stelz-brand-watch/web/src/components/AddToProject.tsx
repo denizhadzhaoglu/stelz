@@ -3,8 +3,8 @@
 // Adding a creator to a project is a WRITE WITH A PRICE: the server patches
 // their tier to the project's trackingTier, and the scan cadence map turns
 // that into up to 8x the scrape frequency. So this goes through api_projects
-// (membership-gated, capped at TRACKED_CREATOR_CAP server-side) and the
-// button hides for read-only users rather than teasing a 403.
+// (membership-gated, capped server-side per tracking tier) and the button
+// hides for read-only users rather than teasing a 403.
 //
 // This replaces the DetectionDrawer's old "Promote to tier 1" button, which
 // had no onClick at all — it shipped as a visual promise with nothing behind

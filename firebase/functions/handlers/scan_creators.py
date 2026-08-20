@@ -32,6 +32,12 @@ def run(brand_id: str, max_creators: int = 80, posts_per: int = 15, concurrency:
         raise ValueError(f"brand not found: {brand_id}")
     if usage.budget_exhausted(brand_id):
         return {"creators_scanned": 0, "posts_added": 0, "images_enqueued": 0, "videos_enqueued": 0, "skipped": "budget_exhausted"}
+    if not usage.scraping_allowed(brand_id):
+        # The 95% degrade rung, same gate refresh_profiles uses. Without it the
+        # creator scan kept scraping at full width until the budget was fully
+        # blown — and, before the record() fix below, without even reporting
+        # the spend that was blowing it.
+        return {"creators_scanned": 0, "posts_added": 0, "images_enqueued": 0, "videos_enqueued": 0, "skipped": "budget"}
 
     # Fetch due creators (nextScanAt <= now, status in active set)
     now = dt.datetime.now(dt.timezone.utc)
@@ -72,6 +78,8 @@ def run(brand_id: str, max_creators: int = 80, posts_per: int = 15, concurrency:
         creator_by_handle[handle] = (c.reference, cd)
 
     apify_runs = 0  # one actor run per IG batch + one per TT profile
+    ig_results = 0  # billed unit for IG ($ per result, not per run)
+    tt_results = 0  # clockworks actor is free; recorded for visibility
 
     # ── Instagram: chunked batches (one Apify call per N handles) ─────
     # posts-mode profile-scraper gets slow for large user lists; splitting
@@ -90,6 +98,7 @@ def run(brand_id: str, max_creators: int = 80, posts_per: int = 15, concurrency:
             except Exception as e:
                 log.error(f"  IG apify batch error ({batch[:3]}...): {e}")
                 continue
+        ig_results = len(all_ig_items)
         _audit_creators_scrape(brand_id, "instagram", len(ig_handles), all_ig_items)
         for item in all_ig_items:
             _persist_post(brand_id, item, "instagram", creator_by_handle, posts_col, new_items)
@@ -120,9 +129,14 @@ def run(brand_id: str, max_creators: int = 80, posts_per: int = 15, concurrency:
                 for item in items:
                     _persist_post(brand_id, item, "tiktok", creator_by_handle, posts_col, new_items)
                     posts_added += 1
+        tt_results = len(all_tt_items)
         _audit_creators_scrape(brand_id, "tiktok", len(tt_handles), all_tt_items)
 
-    usage.record(brand_id, apify_runs=apify_runs)
+    # apify_ig_results is the billed unit ($2.30/1k). Recording runs alone —
+    # which cost $0 in COST_PER_UNIT — made every dollar of creator-scan
+    # scraping invisible to the budget ladder: the guards above were reading a
+    # counter this function never fed.
+    usage.record(brand_id, apify_runs=apify_runs, apify_ig_results=ig_results, apify_tt_results=tt_results)
 
     # Update lastScannedAt + nextScanAt for all due creators
     for c in due:
