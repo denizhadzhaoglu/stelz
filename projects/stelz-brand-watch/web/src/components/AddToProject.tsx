@@ -84,7 +84,7 @@ export function AddToProject({ creatorId, label = 'Track in project' }: { creato
       {open && (
         <>
           <span className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <span className="absolute left-0 top-full mt-1 z-40 w-64 bg-[var(--color-surface)] border border-[var(--color-border-strong)] shadow-lg block">
+          <span className="absolute left-0 top-full mt-1 z-40 w-64 bg-[var(--color-surface)] border border-[var(--color-border-strong)] block">
             {projects === null ? (
               <span className="block px-3 py-3 text-[12px] text-[var(--color-ink-subtle)]">Loading…</span>
             ) : (

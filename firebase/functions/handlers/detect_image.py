@@ -24,7 +24,7 @@ import requests
 from PIL import Image
 from google.cloud.firestore import SERVER_TIMESTAMP, Increment
 
-from lib import cache, fs, gemini, identity, inbox, refs, usage, verifier
+from lib import cache, fs, gemini, identity, inbox, refs, scan_state, usage, verifier
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +55,10 @@ def _denormalized_fields(post: dict) -> dict:
         "creatorHandle": post.get("creatorHandle"),
         "platform": post.get("platform"),
         "postedAt": post.get("postedAt"),
+        # Denormalized so the feed can tell a story from a post without an N+1
+        # read back to posts — the UI only ever queries detections.
+        "contentType": post.get("contentType"),
+        "expiresAt": post.get("expiresAt"),
         "postHashtags": post.get("hashtags") or [],
         "postMentions": post.get("mentions") or [],
         "likesCount": post.get("likesCount"),
@@ -113,7 +117,34 @@ def _log_attempt(brand_id: str, post_id: str, image_url: str, outcome: str, reas
         pass
 
 
-def run(brand_id: str, post_id: str, image_url: str, frame_idx: int | None = None) -> dict[str, Any]:
+def run(brand_id: str, post_id: str, image_url: str, frame_idx: int | None = None,
+        bump_progress: bool = True) -> dict[str, Any]:
+    """One detect message. The progress bump lives here, in a finally, so it
+    fires on EVERY terminal path.
+
+    It used to sit inside _persist, which meant the four early returns never
+    counted: budget_exhausted, no_brand, no_post and — the common one —
+    fetch_failed, which is the EXPECTED outcome for an Instagram CDN URL that
+    expired while queued. The denominator counted those messages, the numerator
+    did not, so the "analysing" bar could never reach 100% on any real scan.
+
+    bump_progress=False is for nested calls: detect_video runs this once per
+    frame, and one video message must count as one unit, not N.
+    """
+    result: dict[str, Any] = {"status": "error", "reason": "crashed"}
+    try:
+        result = _run_inner(brand_id, post_id, image_url, frame_idx)
+        return result
+    finally:
+        if bump_progress:
+            scan_state.bump_detect_progress(
+                brand_id,
+                hit=bool(result.get("detected")),
+                skipped=result.get("status") == "skip",
+            )
+
+
+def _run_inner(brand_id: str, post_id: str, image_url: str, frame_idx: int | None = None) -> dict[str, Any]:
     if usage.budget_exhausted(brand_id):
         _log_attempt(brand_id, post_id, image_url, "skipped", "budget_exhausted")
         return {"status": "skip", "reason": "budget_exhausted"}
@@ -486,20 +517,6 @@ def _strictness_gate(result: dict, accept_variants: list[str] | None = None) -> 
     return result
 
 
-def _bump_scan_progress(brand_id: str, hit: bool) -> None:
-    """Increment brand.scan detection counters so the UI pill can show
-    'Analyzing 4234/5285 posts' after scrape completes."""
-    try:
-        fs.brand_doc(brand_id).set({
-            "scan": {
-                "detectionsCompleted": Increment(1),
-                "detectionsHit": Increment(1 if hit else 0),
-            }
-        }, merge=True)
-    except Exception:
-        pass
-
-
 def _persist(brand_id: str, post_id: str, det_id: str, base: dict, result: dict, source: str) -> None:
     """Merge result fields onto base doc and write."""
     doc = {**base, **{
@@ -548,7 +565,6 @@ def _persist(brand_id: str, post_id: str, det_id: str, base: dict, result: dict,
             merge=True,
         )
 
-    _bump_scan_progress(brand_id, hit=doc["detected"])
 
 
 def _maybe_tier1_alert(brand_id: str, post: dict, det_id: str, result: dict) -> None:

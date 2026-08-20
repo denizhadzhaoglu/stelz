@@ -44,6 +44,12 @@ log = logging.getLogger(__name__)
 COST_PER_UNIT = {
     "apify_ig_results": 0.0023,   # $2.30 / 1k results — measured
     "apify_tt_results": 0.0000,   # clockworks free actor; set >0 if you move to the paid one
+    # Stories (handlers/scan_stories.py). NOTE the run fee: this actor breaks
+    # the "runs are free, results are what cost" rule that keeps apify_runs out
+    # of this table, and it dominates the bill at our volume — which is exactly
+    # why every handle goes into ONE run per sweep.
+    "apify_story_runs": 0.099,        # $0.099 per actor start
+    "apify_story_usernames": 0.003,   # + $3 / 1k usernames submitted
     "gemini_flash_calls": 0.00175,
     "gemini_video_calls": 0.00288,  # batched: 8 refs + 6 frames + prompt in ONE call
     "gemini_embed_calls": 0.00010,

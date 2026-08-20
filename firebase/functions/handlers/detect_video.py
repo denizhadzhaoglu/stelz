@@ -21,7 +21,7 @@ from typing import Any
 import requests
 from google.cloud.firestore import SERVER_TIMESTAMP
 
-from lib import cache, fs, gemini, identity, refs, usage
+from lib import cache, fs, gemini, identity, refs, scan_state, usage
 from handlers import detect_image
 
 log = logging.getLogger(__name__)
@@ -284,7 +284,7 @@ def _cover_fallback(
         return {"status": "skip", "reason": "download_failed", "downloadReason": reason}
 
     try:
-        r = detect_image.run(brand_id, post_id, cover)
+        r = detect_image.run(brand_id, post_id, cover, bump_progress=False)
     except Exception as e:
         log.error(f"cover fallback failed for {post_id}: {e}")
         _video_log(brand_id, post_id, video_url, "fallback", "error", {"errMsg": str(e)[:160]})
@@ -306,6 +306,27 @@ def _cover_fallback(
 
 
 def run(brand_id: str, post_id: str, video_url: str) -> dict[str, Any]:
+    """One video message = one progress unit.
+
+    detect_video never bumped at all, while the detect_image calls it makes per
+    frame each bumped once — so numerator and denominator were different units
+    and a video-heavy scan reported nonsense (a 6-frame video moved the bar six
+    places while the queue counted it as one). Nested calls now pass
+    bump_progress=False and this counts the message, once, in a finally.
+    """
+    outcome: dict[str, Any] = {"status": "error", "reason": "crashed"}
+    try:
+        outcome = _run_inner(brand_id, post_id, video_url)
+        return outcome
+    finally:
+        scan_state.bump_detect_progress(
+            brand_id,
+            hit=bool(outcome.get("hit") or outcome.get("detected")),
+            skipped=outcome.get("status") == "skip",
+        )
+
+
+def _run_inner(brand_id: str, post_id: str, video_url: str) -> dict[str, Any]:
     t_start = time.time()
     _video_log(brand_id, post_id, video_url, "received", "ok")
 
@@ -454,7 +475,7 @@ def run(brand_id: str, post_id: str, video_url: str) -> dict[str, Any]:
         frame_url = blob.public_url
 
         try:
-            r = detect_image.run(brand_id, post_id, frame_url, frame_idx=frame_idx)
+            r = detect_image.run(brand_id, post_id, frame_url, frame_idx=frame_idx, bump_progress=False)
         except Exception as e:
             log.error(f"frame {frame_idx} detect_image error: {e}")
             frame_outcomes.append({"idx": frame_idx, "err": str(e)[:120]})

@@ -10,22 +10,44 @@
 // hides those controls for read-only users rather than teasing a 403.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { PageShell, Card, Badge, Button, Avatar } from '../components/ui'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { PageShell, Card, Badge, Button, Avatar, Tabs, CARD_GRID } from '../components/ui'
+import { MediaTile } from '../components/MediaTile'
+import { DetectionDrawer } from '../components/DetectionDrawer'
 import { StackedDayBars, bucketByDay, type Series } from '../components/Chart'
 import { PasteImport } from '../components/PasteImport'
-import { dedupeByPost, type DetectionRow } from '../lib/types'
+import { StoriesStrip } from '../components/StoriesStrip'
+import { fmtNum } from '../lib/format'
+import { dedupeByPost, imageUrlFor, parentPostKey, type DetectionRow } from '../lib/types'
 import { fetchDetections, fetchProjects, projectsAction, fetchCreatorProfiles, type Project } from '../lib/data'
-import { fbStepCreators, type CreatorProfile } from '../lib/firestore'
+import {
+  fbStepCreators, fbStepStories, fbSubscribeStoriesState, fbFetchStories, fbFetchStoryPosts,
+  type CreatorProfile, type StoriesState, type StoryPost,
+} from '../lib/firestore'
 import { rollupProject, splitCreatorId } from '../lib/projects'
 import { useMembership } from '../lib/membership'
+import { useStoryPostsPreview } from '../lib/devPreview'
+import { StoriesView } from './Stories'
+import { joinStories } from '../lib/storyStats'
+
+/** One row of cards at the widest grid step; the rest lives in the feed. */
+const SHOWN_POSTS = 10
 
 export default function ProjectPage() {
   const { projectId = '' } = useParams()
   const { canWrite } = useMembership()
+  // Shareable tab, same pattern as Home. The Stories tab renders the /stories
+  // page's own component scoped to this roster rather than a second copy.
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') === 'stories' ? 'stories' : 'overzicht'
+  const [active, setActive] = useState<DetectionRow | null>(null)
 
   const [project, setProject] = useState<Project | null>(null)
   const [rows, setRows] = useState<DetectionRow[]>([])
+  // Stories come from POSTS joined with story DETECTIONS — see lib/storyStats.
+  // Null posts = that query is unavailable (index not live yet).
+  const [storyPosts, setStoryPosts] = useState<StoryPost[] | null>(null)
+  const [storyDetections, setStoryDetections] = useState<DetectionRow[]>([])
   const [profiles, setProfiles] = useState<Record<string, CreatorProfile>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -56,8 +78,21 @@ export default function ProjectPage() {
         )
         // Moderator-rejected rows are excluded, matching every other surface.
         setRows(dedupeByPost(batches.flat()).filter((r) => r.is_false_positive !== true))
+        // Stories separately: the per-creator fetch above is detected-only, so
+        // it cannot say how many stories were captured — only how many had a
+        // can in them. For a paid roster those are different numbers and the
+        // second one is the one the client asks about.
+        const members = new Set(p.creatorIds.map((cid) => splitCreatorId(cid).handle.toLowerCase()))
+        const [sp, sd] = await Promise.all([
+          fbFetchStoryPosts(2000).catch(() => null),
+          fbFetchStories(2000).catch(() => [] as DetectionRow[]),
+        ])
+        setStoryPosts(sp && sp.filter((x) => members.has(x.creatorHandle)))
+        setStoryDetections(dedupeByPost(sd))
       } else {
         setRows([])
+        setStoryPosts([])
+        setStoryDetections([])
       }
     } catch (e) {
       setError((e as Error).message)
@@ -72,6 +107,42 @@ export default function ProjectPage() {
     () => (project ? rollupProject(project, rows) : null),
     [project, rows],
   )
+
+  // Confirmed hits only, newest first — the same bar the feed and creator
+  // pages use, so a count here never disagrees with a count there.
+  const posts = useMemo(
+    () => rows
+      .filter((d) => d.detected === true && d.is_false_positive !== true)
+      .sort((a, b) => (b.posted_at ?? '').localeCompare(a.posted_at ?? '')),
+    [rows],
+  )
+
+  // Stories for this roster. A festival campaign is the case stories exist
+  // for: the roster posts all weekend and every one of those posts is gone
+  // 24 hours later, so this leads the page rather than sitting below the KPIs.
+  const [storiesState, setStoriesState] = useState<StoriesState | null>(null)
+  const [storiesFetching, setStoriesFetching] = useState(false)
+  const [storiesError, setStoriesError] = useState<string | null>(null)
+  useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
+  const storyPreview = useStoryPostsPreview()
+  const storyRows = useMemo(
+    () => joinStories(storyPreview ?? storyPosts ?? [], storyPreview ? [] : storyDetections),
+    [storyPreview, storyPosts, storyDetections],
+  )
+  const fetchStories = useCallback(async () => {
+    setStoriesFetching(true)
+    setStoriesError(null)
+    try {
+      await fbStepStories()
+      await load()
+      // Detections trail the sweep by a fan-out; look again shortly.
+      window.setTimeout(() => { void load() }, 20_000)
+    } catch (e) {
+      setStoriesError((e as Error).message)
+    } finally {
+      setStoriesFetching(false)
+    }
+  }, [load])
 
   const act = async (
     action: 'addCreators' | 'removeCreators' | 'archive' | 'unarchive',
@@ -117,19 +188,19 @@ export default function ProjectPage() {
   }
 
   if (loading) {
-    return <PageShell title="Project"><Card className="p-14 text-center text-[13px] text-[var(--color-ink-subtle)]">Loading…</Card></PageShell>
+    return <PageShell title="Campagne"><Card className="p-14 text-center text-[13px] text-[var(--color-ink-subtle)]">Laden…</Card></PageShell>
   }
   if (!project) {
     return (
-      <PageShell title="Project">
+      <PageShell title="Campagne">
         <Card className="p-14 text-center text-[13px] text-[var(--color-ink-muted)]">
-          Project not found. <Link to="/" className="underline">Back to the dashboard</Link>
+          Campagne niet gevonden. <Link to="/" className="underline">Terug naar het overzicht</Link>
         </Card>
       </PageShell>
     )
   }
 
-  const trend: Series = { id: 'hits', label: 'Hits', tone: 'accent', data: bucketByDay(rollup?.postedAts ?? [], 60) }
+  const trend: Series = { id: 'hits', label: 'Posts', tone: 'accent', data: bucketByDay(rollup?.postedAts ?? [], 60) }
   const r = rollup!
   const scored = r.hits - r.sentiment.unscored
   // Roster order: by display name where known (imports carry fullName), so the
@@ -141,7 +212,8 @@ export default function ProjectPage() {
   return (
     <PageShell
       title={project.name}
-      subtitle={`${project.creatorIds.length} tracked creators at ${project.trackingTier === 'tier_1' ? '6h' : '12h'} scan cadence${project.note ? ` · ${project.note}` : ''}${project.archived ? ' · ARCHIVED' : ''}`}
+      crumbs={[{ label: 'Overzicht', to: '/' }]}
+      subtitle={`${project.creatorIds.length} creators gevolgd · scan elke ${project.trackingTier === 'tier_1' ? '6 uur' : '12 uur'}${project.note ? ` · ${project.note}` : ''}${project.archived ? ' · GEARCHIVEERD' : ''}`}
       actions={
         <div className="flex items-center gap-3">
           {canWrite && !project.archived && (
@@ -159,52 +231,132 @@ export default function ProjectPage() {
               onClick={() => {
                 // Archiving stops the fast cadence for every member not claimed
                 // by another project — that is its point. Say so before doing it.
-                if (window.confirm('Archive this project? Its creators return to the normal scan cadence unless another project tracks them.')) {
+                if (window.confirm('Deze campagne archiveren? De creators vallen terug op de normale scanfrequentie, tenzij een andere campagne ze volgt.')) {
                   void act('archive', {})
                 }
               }}
             >
-              Archive
+              Archiveren
             </Button>
           )}
           {canWrite && project.archived && (
             // Reviving re-claims the members' fast cadence; the server re-checks
             // the tracking cap and refuses with a clear message when full.
             <Button size="sm" variant="secondary" disabled={busy} onClick={() => void act('unarchive', {})}>
-              Unarchive
+              Terughalen
             </Button>
           )}
-          <Link to="/" className="text-[12px] underline text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]">← Dashboard</Link>
         </div>
       }
     >
       {error && <Card className="p-4 mb-4 text-[12px] text-[var(--color-bad)]">{error}</Card>}
       {scanMsg && <Card className="p-4 mb-4 text-[12px] text-[var(--color-ink-muted)]">{scanMsg}</Card>}
 
+      <StoriesStrip
+        rows={storyRows}
+        state={storiesState}
+        onOpen={(r) => r.detection && setActive(r.detection)}
+        onFetch={fetchStories}
+        fetching={storiesFetching}
+        canWrite={canWrite && !project.archived}
+        error={storiesError}
+        preview={storyPreview != null}
+        storiesHref={`/projects/${project.id}?tab=stories`}
+      />
+
+      <Tabs
+        items={[
+          { id: 'overzicht', label: 'Overzicht', count: r.hits || undefined },
+          { id: 'stories', label: 'Stories', count: storyRows.length || undefined },
+        ]}
+        active={tab}
+        onChange={(id) => {
+          const next = new URLSearchParams(params)
+          if (id === 'overzicht') next.delete('tab')
+          else next.set('tab', id)
+          setParams(next, { replace: true })
+        }}
+      />
+
+      {tab === 'stories' ? (
+        <div className="mt-8">
+          <StoriesView projectId={project.id} params={params} setParams={setParams} embedded />
+        </div>
+      ) : (
+      <div className="mt-8">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <Kpi label="Hits" value={String(r.hits)} />
-        <Kpi label="Members" value={String(project.creatorIds.length)} />
+        <Kpi label="Posts gevonden" value={fmtNum(r.hits)} />
+        <Kpi label="Creators" value={fmtNum(project.creatorIds.length)} />
         <Kpi
-          label="Reach"
-          value={r.reach > 0 ? r.reach.toLocaleString() : '—'}
-          sub={r.reachKnownFor > 0 ? `followers known for ${r.reachKnownFor} of ${project.creatorIds.length}` : 'no follower counts yet — run a profile refresh'}
+          label="Bereik"
+          value={r.reach > 0 ? fmtNum(r.reach) : '—'}
+          sub={r.reachKnownFor > 0
+            ? `volgers bekend van ${r.reachKnownFor} van ${project.creatorIds.length}`
+            : 'nog geen volgersaantallen — draai een profielverversing'}
         />
         <Kpi
-          label="Positive share"
+          label="Positief"
           value={scored > 0 ? `${Math.round((r.sentiment.positive / scored) * 100)}%` : '—'}
-          sub={scored > 0 ? `of ${scored} scored` : 'nothing scored yet'}
+          sub={scored > 0 ? `van ${fmtNum(scored)} beoordeeld` : 'nog niets beoordeeld'}
         />
       </div>
 
+      {/* What they actually posted. The page used to stop at KPIs and a member
+          list, so the one thing a campaign manager opens it for — the content —
+          was two clicks away on someone else's page. */}
+      <Card className="p-5 mb-6">
+        <div className="flex items-baseline justify-between mb-3 gap-3">
+          <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)]">
+            Wat ze plaatsten
+          </h3>
+          {posts.length > SHOWN_POSTS && (
+            <span className="text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
+              nieuwste {SHOWN_POSTS} van {fmtNum(posts.length)}
+            </span>
+          )}
+        </div>
+        {posts.length === 0 ? (
+          <p className="text-[12px] text-[var(--color-ink-muted)] py-8 text-center">
+            Nog geen posts met Stëlz van deze creators. Klik op “Scan creators nu” of wacht op de
+            volgende scan.
+          </p>
+        ) : (
+          <div className={CARD_GRID}>
+            {posts.slice(0, SHOWN_POSTS).map((d) => (
+              <button
+                key={d.detection_id}
+                onClick={() => setActive(d)}
+                className="text-left bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-border-strong)] transition-colors flex flex-col"
+              >
+                <MediaTile src={imageUrlFor(d)} size="card">
+                  <span className="absolute top-2 right-2 text-[10px] uppercase tracking-widest bg-[var(--color-ink)]/80 text-white px-2 py-0.5">
+                    {d.platform === 'tiktok' ? 'TikTok' : 'Instagram'}
+                  </span>
+                  {d.frame_idx != null && (
+                    <span className="absolute bottom-2 right-2 text-[10px] bg-[var(--color-ink)]/80 text-white px-2 py-0.5">▶ video</span>
+                  )}
+                </MediaTile>
+                <div className="p-3 flex items-center justify-between gap-2 text-[11px]">
+                  <span className="font-medium truncate">@{d.creator_handle}</span>
+                  <span className="text-[var(--color-ink-subtle)] tabular-nums shrink-0">
+                    {d.posted_at ? new Date(d.posted_at).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' }) : '—'}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </Card>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="p-5">
-          <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">Hits over time</h3>
+          <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">Posts per dag</h3>
           <StackedDayBars series={[trend]} height={180} days={60} />
         </Card>
 
         <Card className="p-5">
           <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">
-            Members — including the silent ones
+            Creators — ook wie nog niets plaatste
           </h3>
           <ul className="divide-y divide-[var(--color-border)]">
             {members.map((c) => {
@@ -223,15 +375,15 @@ export default function ProjectPage() {
                   </span>
                 </Link>
                 {c.hits === 0 ? (
-                  <Badge tone="muted">no hits yet</Badge>
+                  <Badge tone="muted">nog niets</Badge>
                 ) : (
-                  <Badge tone="accent">{c.hits} {c.hits === 1 ? 'hit' : 'hits'}</Badge>
+                  <Badge tone="accent">{c.hits} {c.hits === 1 ? 'post' : 'posts'}</Badge>
                 )}
                 {canWrite && !project.archived && (
                   <button
                     disabled={busy}
                     onClick={() => void act('removeCreators', { creatorIds: [c.creatorId] })}
-                    title="Remove from project — returns to normal scan cadence unless tracked elsewhere"
+                    title="Verwijder uit campagne — valt terug op de normale scanfrequentie, tenzij elders gevolgd"
                     className="text-[11px] text-[var(--color-ink-subtle)] hover:text-[var(--color-bad)] shrink-0 disabled:opacity-40"
                   >
                     ✕
@@ -243,7 +395,7 @@ export default function ProjectPage() {
           </ul>
           {project.creatorIds.length === 0 && (
             <p className="text-[12px] text-[var(--color-ink-muted)] py-6 text-center">
-              No creators yet. Add them from the Creators tab or a detection's detail panel.
+              Nog geen creators. Voeg ze toe via de Creators-tab of het detailpaneel van een post.
             </p>
           )}
         </Card>
@@ -268,6 +420,19 @@ export default function ProjectPage() {
           )}
         </Card>
       )}
+      </div>
+      )}
+
+      <DetectionDrawer
+        detection={active}
+        similar={active ? posts.filter((d) => d.detection_id !== active.detection_id).slice(0, 8) : []}
+        // Every detected frame of the same post, so the drawer's frame strip works
+        // here exactly as it does on the creator page.
+        frames={active ? rows
+          .filter((d) => d.detected === true && parentPostKey(d) === parentPostKey(active))
+          .sort((a, b) => (a.frame_idx ?? 0) - (b.frame_idx ?? 0)) : []}
+        onClose={() => setActive(null)}
+      />
     </PageShell>
   )
 }

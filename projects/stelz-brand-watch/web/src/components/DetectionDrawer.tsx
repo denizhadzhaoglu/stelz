@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge, Button, Img, formatFollowers, PRODUCT_LINE_LABEL } from './ui'
+import { MediaTile } from './MediaTile'
 import { imageUrlFor, loadState, toggleShortlist, toggleHidden, type DetectionRow } from '../lib/data'
 import { isBrandTag } from '../lib/signal'
 import { detectionQuality } from '../lib/quality'
@@ -53,14 +54,13 @@ export function DetectionDrawer({
 
         <div className="p-5 space-y-6">
           <div className="bg-[var(--color-bg)] border border-[var(--color-border)] relative">
-            <div className="aspect-[4/3] relative">
-              <Img src={imageUrlFor(hero)} fit="contain" />
+            <MediaTile src={imageUrlFor(hero)} size="wide" fit="contain" priority>
               {hero.frame_idx != null && (
                 <span className="absolute bottom-2 right-2 text-[10px] bg-[var(--color-ink)]/80 text-white px-2 py-0.5">
                   frame {hero.frame_idx}
                 </span>
               )}
-            </div>
+            </MediaTile>
           </div>
 
           {/* All detected frames of this post — click to swap the hero image */}
@@ -285,8 +285,8 @@ export function DetectionDrawer({
               </div>
               <div className="grid grid-cols-4 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
                 {similar.slice(0, 8).map((s) => (
-                  <a key={s.detection_id} href={s.post_url ?? '#'} target="_blank" rel="noreferrer" className="bg-[var(--color-surface)] aspect-square p-1.5 block">
-                    <Img src={imageUrlFor(s)} />
+                  <a key={s.detection_id} href={s.post_url ?? '#'} target="_blank" rel="noreferrer" className="bg-[var(--color-surface)] p-1.5 block">
+                    <MediaTile src={imageUrlFor(s)} size="thumb" />
                   </a>
                 ))}
               </div>

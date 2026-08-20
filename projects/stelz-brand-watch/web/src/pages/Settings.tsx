@@ -6,8 +6,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { activeReferenceIds, REFERENCE_SLOTS } from '../lib/refselect'
 import {
-  PageShell, Card, Button, Badge, Field, Input, Textarea, Img,
+  PageShell, Card, Button, Badge, Field, Input, Textarea,
 } from '../components/ui'
+import { MediaTile } from '../components/MediaTile'
 import {
   fbListReferenceImages,
   fbUploadReferenceImage,
@@ -396,7 +397,7 @@ function TrainingSection() {
                   className={`bg-[var(--color-surface)] p-1.5 relative group ${activeIds.has(it.id) ? '' : 'opacity-40'}`}
                   title={activeIds.has(it.id) ? 'Sent to the detector' : 'Stored, but not sent — the detector only takes 8'}
                 >
-                  <div className="aspect-square"><Img src={it.url} /></div>
+                  <MediaTile src={it.url} size="thumb" />
                   {activeIds.has(it.id) && (
                     <span className="absolute bottom-2 left-2 text-[9px] uppercase tracking-widest bg-[var(--color-ink)]/80 text-white px-1.5 py-0.5">
                       in use
@@ -996,6 +997,7 @@ function AdvancedSection() {
   const [open] = useState(true)
   const [confidenceMin, setConfidenceMin] = useState(0.7)
   const [dailyBudget, setDailyBudget] = useState(5)
+  const [storiesAutoScan, setStoriesAutoScan] = useState(false)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -1005,6 +1007,7 @@ function AdvancedSection() {
       if (!b) return
       if (typeof b.confidenceMin === 'number') setConfidenceMin(b.confidenceMin)
       if (typeof b.dailyBudgetUsd === 'number') setDailyBudget(b.dailyBudgetUsd)
+      setStoriesAutoScan(b.storiesAutoScan === true)
     })
   }, [])
 
@@ -1014,6 +1017,7 @@ function AdvancedSection() {
       await fbUpdateBrandSettings({
         confidenceMin,
         dailyBudgetUsd: dailyBudget,
+        storiesAutoScan,
       })
       setMsg('Saved')
       setTimeout(() => setMsg(null), 2500)
@@ -1037,6 +1041,23 @@ function AdvancedSection() {
             onChange={setConfidenceMin}
             format={(v) => `${(v * 100).toFixed(0)}%`}
           />
+
+          {/* The only unattended spend in the product, so it gets an explicit
+              switch and an honest explanation of what it costs. */}
+          <Field
+            label="Stories automatisch ophalen"
+            hint="Elke 6 uur de stories van gevolgde creators binnenhalen — ongeveer $0,28 per keer. Stories verdwijnen na 24 uur, dus zonder deze scan mis je alles wat valt terwijl niemand op Scan drukt. De dagbudgetlimiet hieronder blijft gelden."
+          >
+            <label className="flex items-center gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={storiesAutoScan}
+                disabled={!canWrite}
+                onChange={(e) => setStoriesAutoScan(e.target.checked)}
+              />
+              <span>{storiesAutoScan ? 'Aan — elke 6 uur' : 'Uit'}</span>
+            </label>
+          </Field>
 
           <Field label="Daily budget cap (USD)" hint="Once the day's estimated spend hits this, further scans pause until tomorrow.">
             <Input

@@ -23,6 +23,7 @@ import {
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { fbDb, fbAuth, fbStorage } from './firebase'
 import type { DetectionRow, ResonanceRow } from './types'
+import { spendBreakdown, type SpendLine } from './costs'
 
 // Default brand. Replace once brand switcher reads from auth context.
 export const BRAND_ID = 'stelz'
@@ -83,6 +84,8 @@ function mapDetection(d: QueryDocumentSnapshot<DocumentData>, brandId: string): 
     sentiment: (x.sentiment as DetectionRow['sentiment']) ?? null,
     sentiment_score: (x.sentimentScore as number | null) ?? null,
     sentiment_rationale: (x.sentimentRationale as string | null) ?? null,
+    content_type: (x.contentType as 'image' | 'video' | 'story' | 'unknown' | null) ?? null,
+    expires_at: tsToIso(x.expiresAt),
     frame_idx: (x.frameIdx as number | null) ?? null,
     post_id: (x.postId as string | null) ?? null,
     brand_id: brandId,
@@ -155,6 +158,104 @@ export async function fbFetchDetections({
   if (unreviewedOnly) clauses.push(where('verified', '==', null), where('isFalsePositive', '==', null))
   clauses.push(orderBy('postedAt', 'desc'), fsLimit(limit))
   const snap = await getDocs(query(col, ...clauses))
+  return snap.docs.map((d) => mapDetection(d, brandId))
+}
+
+/**
+ * One captured story, straight from the posts collection.
+ *
+ * THIS is the authoritative list of "all stories", not the detections below.
+ * detect_image writes no detection document when the image fetch fails, and
+ * for stories that path is common rather than exceptional — the CDN URLs are
+ * short-lived signed links. Building the overview from detections would drop
+ * exactly the story we failed to analyse, silently, from a page that promises
+ * to show everything.
+ */
+export type StoryPost = {
+  postId: string
+  creatorHandle: string
+  creatorTier: string | null
+  url: string | null
+  coverUrl: string | null
+  videoUrl: string | null
+  mediaType: 'image' | 'video'
+  videoDuration: number | null
+  postedAt: string | null
+  postedAtEstimated: boolean
+  expiresAt: string | null
+  hashtags: string[]
+  mentions: string[]
+  /** Public and exact. A vote needs a viewer, so this is a floor on views. */
+  pollVotes: number
+  pollCount: number
+  pollQuestions: string[]
+  linkUrls: string[]
+  music: { title: string | null; artist: string | null } | null
+  isPaidPartnership: boolean
+}
+
+function mapStoryPost(d: QueryDocumentSnapshot<DocumentData>): StoryPost {
+  const x = d.data()
+  const music = x.music as Record<string, unknown> | null | undefined
+  return {
+    postId: d.id,
+    creatorHandle: ((x.creatorHandle as string) ?? '').toLowerCase(),
+    creatorTier: (x.creatorTier as string | null) ?? null,
+    url: (x.url as string | null) ?? null,
+    coverUrl: (x.coverUrl as string | null) ?? null,
+    videoUrl: (x.videoUrl as string | null) ?? null,
+    mediaType: x.mediaType === 'video' ? 'video' : 'image',
+    videoDuration: typeof x.videoDuration === 'number' ? x.videoDuration : null,
+    postedAt: tsToIso(x.postedAt),
+    postedAtEstimated: x.postedAtEstimated === true,
+    expiresAt: tsToIso(x.expiresAt),
+    hashtags: (x.hashtags as string[]) ?? [],
+    mentions: (x.mentions as string[]) ?? [],
+    pollVotes: typeof x.pollVotes === 'number' ? x.pollVotes : 0,
+    pollCount: typeof x.pollCount === 'number' ? x.pollCount : 0,
+    pollQuestions: (x.pollQuestions as string[]) ?? [],
+    linkUrls: (x.linkUrls as string[]) ?? [],
+    music: music
+      ? { title: (music.title as string) ?? null, artist: (music.artist as string) ?? null }
+      : null,
+    isPaidPartnership: x.isPaidPartnership === true,
+  }
+}
+
+/** Needs the posts contentType+postedAt index. Throws until it is live; the
+ *  page catches and says so rather than rendering an empty overview. */
+export async function fbFetchStoryPosts(limit = 2000, brandId = BRAND_ID): Promise<StoryPost[]> {
+  const col = collection(fbDb, 'brands', brandId, 'posts')
+  const snap = await getDocs(query(
+    col,
+    where('contentType', '==', 'story'),
+    orderBy('postedAt', 'desc'),
+    fsLimit(limit),
+  ))
+  return snap.docs.map(mapStoryPost)
+}
+
+/**
+ * Story DETECTIONS — the Stëlz verdicts, hits and misses alike.
+ *
+ * Its own query on purpose. Every other detection fetch defaults to
+ * `detected == true`, which is right for the feed and wrong here: a strip that
+ * silently drops the stories without a can in them cannot distinguish "we
+ * scraped forty and six had Stëlz" from "we scraped six".
+ *
+ * Needs the detections contentType+postedAt composite index. Until that index
+ * is live the query throws; callers fall back to filtering rows they already
+ * hold rather than showing an error, so the panel degrades to hits-only
+ * instead of blank.
+ */
+export async function fbFetchStories(limit = 200, brandId = BRAND_ID): Promise<DetectionRow[]> {
+  const col = collection(fbDb, 'brands', brandId, 'detections')
+  const snap = await getDocs(query(
+    col,
+    where('contentType', '==', 'story'),
+    orderBy('postedAt', 'desc'),
+    fsLimit(limit),
+  ))
   return snap.docs.map((d) => mapDetection(d, brandId))
 }
 
@@ -359,18 +460,42 @@ export async function fbFetchLatestScanRun(brandId = BRAND_ID) {
 
 // ────────────── Writes (via Cloud Functions) ──────────────
 
+/**
+ * A Cloud Function that is merged but NOT DEPLOYED looks like a CORS bug.
+ *
+ * Google's Functions frontend answers a request for a non-existent function
+ * with a bare 404 that carries no Access-Control-Allow-Origin header, so the
+ * browser refuses to hand the response to JS and reports "blocked by CORS
+ * policy" plus a `TypeError: Failed to fetch`. Nothing about that message
+ * points at the actual cause, and it has now cost two debugging sessions —
+ * once on api_projects, once on api_step_stories.
+ *
+ * So: catch the network-level failure and say what it almost always means.
+ * A genuine outage produces the same signature, which is why the wording
+ * names both possibilities rather than asserting one.
+ */
 async function authedFetch(path: string, body: unknown) {
   const user = fbAuth.currentUser
   if (!user) throw new Error('Not signed in')
   const token = await user.getIdToken()
-  const res = await fetch(`${FUNCTIONS_BASE}/${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(body),
-  })
+  let res: Response
+  try {
+    res = await fetch(`${FUNCTIONS_BASE}/${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new Error(
+      `${path} is niet bereikbaar. Meestal betekent dit dat deze functie nog niet ` +
+      `is uitgerold naar productie (een 404 van Cloud Functions komt zonder ` +
+      `CORS-header binnen en leest in de browser als een CORS-fout). ` +
+      `Anders: geen netwerkverbinding.`,
+    )
+  }
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`${path} failed: ${res.status} ${text}`)
@@ -471,6 +596,12 @@ export async function fbStepHashtags(perTag = 500, maxTags = 50) {
 export async function fbStepCreators(maxCreators = 80, postsPer = 8) {
   return authedFetch('api_step_creators', { brandId: BRAND_ID, maxCreators, postsPer })
 }
+// Instagram stories for tracked creators. Independent of the other steps —
+// nothing downstream reads it — so the UI fires it in parallel. Stories expire
+// after 24h, which is why a scheduled version of this runs every 6 hours.
+export async function fbStepStories(maxHandles = 60) {
+  return authedFetch('api_step_stories', { brandId: BRAND_ID, maxHandles })
+}
 // fbStepScore removed in productization cleanup — SRS already covers the signal.
 export async function fbStepSrs() {
   return authedFetch('api_step_srs', { brandId: BRAND_ID })
@@ -509,6 +640,7 @@ export type BrandDoc = {
   confidenceMin?: number
   embeddingThreshold?: number
   dailyBudgetUsd?: number
+  storiesAutoScan?: boolean
   hashtagYield?: Record<string, number>
   visualCentroidComputedAt?: string | null
   visualCentroidRefCount?: number
@@ -529,6 +661,7 @@ export async function fbGetBrand(brandId = BRAND_ID): Promise<BrandDoc | null> {
     confidenceMin: x.confidenceMin,
     embeddingThreshold: x.embeddingThreshold,
     dailyBudgetUsd: x.dailyBudgetUsd,
+    storiesAutoScan: x.storiesAutoScan === true,
     hashtagYield: x.hashtagYield,
     visualCentroidComputedAt:
       x.visualCentroidComputedAt instanceof Timestamp
@@ -673,33 +806,37 @@ export async function fbProjectsAction(
   return mapProject(out.project.id, out.project)
 }
 
-// ────────────── Daily usage (Settings → Usage card) ──────────────
+// ────────────── Daily usage ──────────────
 
 export type UsageDay = {
+  /** YYYY-MM-DD, the Firestore doc id (fs.usage_doc writes one doc per UTC day). */
   day: string
-  apify_runs?: number
-  gemini_flash_calls?: number
-  gemini_embed_calls?: number
-  ocr_calls?: number
-  detections_written?: number
-  detections_hit?: number
-  estimated_spend_usd?: number
+  counters: Record<string, number>
+  estimatedSpendUsd: number
+  lines: SpendLine[]
 }
 
+/**
+ * Daily usage, priced from lib/costs.ts.
+ *
+ * This function used to carry its OWN price table, and it was the model the
+ * backend had already corrected: $0.10 for an Apify run (they are free) while
+ * omitting apify_ig_results ($2.30/1k) entirely, and Gemini at 0.00075 instead
+ * of 0.00175. It under-reported Apify spend by roughly 11x. Nothing ever
+ * called it, which is the only reason the wrong number never reached a screen.
+ * The table now lives in one place and a Python test fails on any drift.
+ */
 export async function fbListUsage(days = 14, brandId = BRAND_ID): Promise<UsageDay[]> {
   const snap = await getDocs(
     query(collection(fbDb, 'brands', brandId, 'usage'), orderBy('__name__', 'desc'), fsLimit(days)),
   )
   return snap.docs.map((d) => {
-    const x = d.data() as Record<string, number>
-    const COSTS: Record<string, number> = {
-      gemini_flash_calls: 0.00075,
-      gemini_embed_calls: 0.0001,
-      apify_runs: 0.1,
+    const counters: Record<string, number> = {}
+    for (const [k, v] of Object.entries(d.data())) {
+      if (typeof v === 'number') counters[k] = v
     }
-    let est = 0
-    for (const k of Object.keys(COSTS)) est += (x[k] ?? 0) * COSTS[k]
-    return { day: d.id, ...(x as Record<string, number>), estimated_spend_usd: est }
+    const { total, lines } = spendBreakdown(counters)
+    return { day: d.id, counters, estimatedSpendUsd: total, lines }
   })
 }
 
@@ -744,9 +881,23 @@ export function fbSubscribeInbox(
   })
 }
 
+export type ScanStepKey =
+  | 'hashtags' | 'creators' | 'stories' | 'profiles' | 'subcultures' | 'srs' | 'sentiment'
+
+export type ScanStep = {
+  state: 'running' | 'done' | 'error'
+  startedAt: string | null
+  finishedAt: string | null
+  error: string | null
+  counts: Record<string, number>
+}
+
 export type ScanState = {
   startedAt: string | null
   finishedAt: string | null
+  // Per-step progress. Absent on a backend that predates it — every consumer
+  // must degrade to the flat counters below rather than render a blank panel.
+  steps: Partial<Record<ScanStepKey, ScanStep>>
   hashtagQueued: number
   hashtagDone: number
   postsWritten: number
@@ -757,6 +908,24 @@ export type ScanState = {
   lastActivityAt: string | null
   skippedCount: number
   endReason: string | null
+}
+
+function mapScanSteps(raw: unknown): Partial<Record<ScanStepKey, ScanStep>> {
+  if (!raw || typeof raw !== 'object') return {}
+  const out: Partial<Record<ScanStepKey, ScanStep>> = {}
+  for (const [key, v] of Object.entries(raw as Record<string, Record<string, unknown>>)) {
+    if (!v || typeof v !== 'object') continue
+    const state = v.state
+    if (state !== 'running' && state !== 'done' && state !== 'error') continue
+    out[key as ScanStepKey] = {
+      state,
+      startedAt: v.startedAt instanceof Timestamp ? v.startedAt.toDate().toISOString() : null,
+      finishedAt: v.finishedAt instanceof Timestamp ? v.finishedAt.toDate().toISOString() : null,
+      error: typeof v.error === 'string' ? v.error : null,
+      counts: (v.counts && typeof v.counts === 'object' ? v.counts : {}) as Record<string, number>,
+    }
+  }
+  return out
 }
 
 export function fbSubscribeScanState(
@@ -771,6 +940,7 @@ export function fbSubscribeScanState(
     onChange({
       startedAt: s.startedAt instanceof Timestamp ? s.startedAt.toDate().toISOString() : null,
       finishedAt: s.finishedAt instanceof Timestamp ? s.finishedAt.toDate().toISOString() : null,
+      steps: mapScanSteps(s.steps),
       hashtagQueued: (s.hashtagQueued as number) ?? 0,
       hashtagDone: (s.hashtagDone as number) ?? 0,
       postsWritten: (s.postsWritten as number) ?? 0,
@@ -781,6 +951,39 @@ export function fbSubscribeScanState(
       lastActivityAt: s.lastActivityAt instanceof Timestamp ? s.lastActivityAt.toDate().toISOString() : null,
       skippedCount: (s.skippedCount as number) ?? 0,
       endReason: (s.endReason as string) ?? null,
+    })
+  })
+}
+
+/**
+ * Outcome of the last stories sweep, wherever it came from.
+ *
+ * Deliberately NOT read out of `scan.steps.stories`: that map belongs to a scan
+ * session and is wiped when the next one starts, while most sweeps come from
+ * the 6-hourly scheduler and have no session at all. Without this, "no stories"
+ * and "nothing has looked in a week" render identically.
+ */
+export type StoriesState = {
+  lastRunAt: string | null
+  lastFound: number | null
+  lastChecked: number | null
+  /** Gate that stopped the sweep ("budget", "no_creators"), else null. */
+  lastSkipped: string | null
+}
+
+export function fbSubscribeStoriesState(
+  onChange: (state: StoriesState | null) => void,
+  brandId = BRAND_ID,
+): Unsubscribe {
+  const ref = doc(fbDb, 'brands', brandId)
+  return onSnapshot(ref, (snap) => {
+    const s = (snap.data()?.stories ?? null) as Record<string, unknown> | null
+    if (!s) { onChange(null); return }
+    onChange({
+      lastRunAt: s.lastRunAt instanceof Timestamp ? s.lastRunAt.toDate().toISOString() : null,
+      lastFound: typeof s.lastFound === 'number' ? s.lastFound : null,
+      lastChecked: typeof s.lastChecked === 'number' ? s.lastChecked : null,
+      lastSkipped: typeof s.lastSkipped === 'string' ? s.lastSkipped : null,
     })
   })
 }

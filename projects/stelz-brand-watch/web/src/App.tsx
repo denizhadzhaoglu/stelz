@@ -1,11 +1,16 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, Outlet, Route, Routes, Navigate, useLocation } from 'react-router-dom'
 import { InboxBell } from './components/InboxBell'
+import { ScanProgressLine } from './components/ScanPanel'
+import { fbSubscribeScanState, type ScanState } from './lib/firestore'
 import { useAuth } from './lib/auth'
 
 import Home from './pages/Home'
 import Creator from './pages/Creator'
 import Sounds from './pages/Sounds'
+import StoriesPage from './pages/Stories'
+import { useMembership } from './lib/membership'
+import Costs from './pages/Costs'
 import ProjectPage from './pages/Project'
 import LowlandsPage from './pages/Lowlands'
 import Settings from './pages/Settings'
@@ -26,12 +31,17 @@ import Privacy from './pages/Privacy'
 //   /login + /signup + /landing  Public auth + marketing
 //   /terms /privacy              Static legal (no nav)
 
-const NAV: { to: string; label: string; matchPrefix?: string }[] = [
+// adminOnly: hidden from read-only viewers. For /kosten that is discretion
+// rather than access control — firestore.rules is what actually closes the
+// usage collection (see the `usage` match there).
+const NAV: { to: string; label: string; matchPrefix?: string; adminOnly?: boolean }[] = [
   { to: '/', label: 'Home' },
   // matchPrefix '/projects': the Lowlands tab stays lit while reading any
   // project roster — the tab redirects there once the roster exists.
   { to: '/lowlands', label: 'Lowlands', matchPrefix: '/projects' },
+  { to: '/stories', label: 'Stories', matchPrefix: '/stories' },
   { to: '/sounds', label: 'Sounds', matchPrefix: '/sounds' },
+  { to: '/kosten', label: 'Kosten', matchPrefix: '/kosten', adminOnly: true },
   { to: '/settings', label: 'Settings' },
 ]
 
@@ -68,6 +78,8 @@ export default function App() {
       <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
         <Route path="/" element={<Home />} />
         <Route path="/creators/:handle" element={<Creator />} />
+        <Route path="/stories" element={<StoriesPage />} />
+        <Route path="/kosten" element={<Costs />} />
         <Route path="/sounds" element={<Sounds />} />
         <Route path="/sounds/:soundKey" element={<Sounds />} />
         <Route path="/lowlands" element={<LowlandsPage />} />
@@ -92,13 +104,20 @@ function RequireAuth({ children }: { children: ReactNode }) {
 
 function AppLayout() {
   const { pathname } = useLocation()
+  const { canWrite } = useMembership()
   const [navOpen, setNavOpen] = useState(false)
   useEffect(() => { setNavOpen(false) }, [pathname])
+
+  // Scan state at layout level so the mobile bar can show progress from any
+  // page — below the sm breakpoint there was previously no scan signal at all.
+  const [scan, setScan] = useState<ScanState | null>(null)
+  useEffect(() => fbSubscribeScanState(setScan), [])
 
   return (
     <div className="min-h-screen flex relative">
       {/* Mobile top bar — navy, like the Stelz announcement bar */}
       <div className="lg:hidden fixed top-0 inset-x-0 h-12 z-30 bg-[var(--color-ink)] flex items-center px-4 justify-between">
+        <ScanProgressLine scan={scan} />
         <button onClick={() => setNavOpen((v) => !v)} className="w-8 h-8 flex items-center justify-center -ml-2">
           <span className="block w-4 h-px bg-white relative before:content-[''] before:absolute before:w-4 before:h-px before:bg-white before:-top-1.5 after:content-[''] after:absolute after:w-4 after:h-px after:bg-white after:top-1.5"></span>
         </button>
@@ -124,7 +143,7 @@ function AppLayout() {
         <BrandSwitcher />
 
         <nav className="flex-1 py-3 overflow-y-auto">
-          {NAV.map((n) => {
+          {NAV.filter((n) => !n.adminOnly || canWrite).map((n) => {
             const active = pathname === n.to || (n.matchPrefix && pathname.startsWith(n.matchPrefix))
             return (
               <NavLink

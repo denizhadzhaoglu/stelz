@@ -36,7 +36,7 @@ except ImportError:
     pass
 
 import firebase_admin
-from firebase_functions import https_fn, options, pubsub_fn
+from firebase_functions import https_fn, scheduler_fn, options, pubsub_fn
 from firebase_admin import auth as fb_auth
 
 # Initialize Admin SDK at module load — required for fb_auth + Firestore.
@@ -53,20 +53,51 @@ from handlers import (
     seed_subcultures,
     scan_hashtags,
     scan_creators,
+    scan_stories,
     detect_image,
     detect_video,
     compute_resonance,
 )
-from lib import fs  # noqa: ensure init
+from lib import fs, scan_state  # noqa: ensure init
 
 log = logging.getLogger(__name__)
 options.set_global_options(region="europe-west1", memory=options.MemoryOption.MB_512)
 
 
 # ─────────────────── SCHEDULED ───────────────────
-# All scheduled functions removed (daily_pipeline + scan_watchdog): scans run
-# only when the Run scan button is pressed. The UI already detects stalled
-# sessions (5-min activity heartbeat), so the watchdog isn't needed either.
+# daily_pipeline and scan_watchdog stay removed: feed posts do not expire, so
+# they can wait for someone to press Run scan, and the UI detects stalled
+# sessions itself (5-min activity heartbeat).
+#
+# Stories are the one exception, and the reason is not convenience. A story is
+# gone 24h after it is posted, so click-driven capture structurally misses
+# whatever falls while nobody is looking — a festival weekend is exactly when
+# nobody is looking. Any interval <= 24h catches every story; 6h gives 4x
+# redundancy, so three consecutive failures still lose nothing.
+#
+# This is the first unattended spend in the codebase, so it is fenced:
+#   - opt-in per brand (storiesAutoScan, absent = off — the kill switch),
+#   - bounded (~$0.28 per run at 60 handles, one batched actor run),
+#   - and scan_stories re-checks the budget ladder itself before spending.
+# It deliberately does not touch brand.scan.steps: an unattended run must not
+# repaint the progress panel of a scan a human is watching.
+
+
+@scheduler_fn.on_schedule(
+    schedule="every 6 hours",
+    region="europe-west1",
+    memory=options.MemoryOption.GB_1,
+    timeout_sec=540,
+)
+def scheduled_stories(event: scheduler_fn.ScheduledEvent) -> None:
+    for snap in fs.brands_col().stream():
+        if (snap.to_dict() or {}).get("storiesAutoScan") is not True:
+            continue
+        try:
+            out = scan_stories.run(snap.id)
+            log.info(f"[{snap.id}] scheduled stories: {out}")
+        except Exception:
+            log.exception(f"scheduled_stories failed for {snap.id}")
 
 
 # ─────────────────── PUB/SUB ───────────────────
@@ -205,12 +236,24 @@ def api_bootstrap_brand(req: https_fn.Request) -> https_fn.Response:
         return https_fn.Response(json.dumps({"error": str(e)}), status=500, mimetype="application/json")
 
 
-def _run_step(req: https_fn.Request, runner_factory) -> https_fn.Response:
-    """Shared boilerplate: auth check + brand membership + run one step."""
+def _run_step(req: https_fn.Request, runner_factory, step: str | None = None,
+              completes_inline: bool = True) -> https_fn.Response:
+    """Shared boilerplate: auth check + brand membership + run one step.
+
+    `step` also records progress on brand.scan.steps.{step}, which is how the
+    UI can show a scan as seven named stages instead of one. Doing it here
+    rather than in each handler means no step can be added later and silently
+    stay invisible — which is exactly what happened to the five steps that ran
+    fire-and-forget behind the hashtag phase.
+
+    completes_inline=False for steps that finish asynchronously (hashtags fans
+    out to Pub/Sub workers; the last worker marks it done).
+    """
     if req.method == "OPTIONS":
         return https_fn.Response("", status=204)
     if req.method != "POST":
         return https_fn.Response("Method not allowed", status=405)
+    brand_id = None
     try:
         uid = _require_auth(req)
         body = req.get_json(silent=True) or {}
@@ -218,16 +261,24 @@ def _run_step(req: https_fn.Request, runner_factory) -> https_fn.Response:
         if not brand_id:
             return https_fn.Response(json.dumps({"error": "brandId required"}), status=400, mimetype="application/json")
         _require_brand_member(uid, brand_id)
+        if step:
+            scan_state.step_started(brand_id, step)
         result = runner_factory(brand_id, body)
+        if step and completes_inline:
+            scan_state.step_finished(brand_id, step, result if isinstance(result, dict) else {})
         return https_fn.Response(json.dumps(result), status=200, mimetype="application/json")
     except NotAuthenticated as e:
         return https_fn.Response(json.dumps({"error": str(e)}), status=401, mimetype="application/json")
     except NotABrandMember as e:
         return https_fn.Response(json.dumps({"error": str(e)}), status=403, mimetype="application/json")
     except https_fn.HttpsError as e:
+        if step and brand_id:
+            scan_state.step_failed(brand_id, step, str(e))
         return https_fn.Response(json.dumps({"error": str(e)}), status=400, mimetype="application/json")
     except Exception as e:
         log.exception("step failed")
+        if step and brand_id:
+            scan_state.step_failed(brand_id, step, str(e))
         return https_fn.Response(json.dumps({"error": str(e)}), status=500, mimetype="application/json")
 
 
@@ -244,7 +295,7 @@ def api_step_hashtags(req: https_fn.Request) -> https_fn.Response:
         brand_id,
         per_tag=int(body.get("perTag") or 500),
         max_tags=int(body.get("maxTags") or 50),
-    ))
+    ), step="hashtags", completes_inline=False)
 
 
 @pubsub_fn.on_message_published(
@@ -282,13 +333,26 @@ def api_step_creators(req: https_fn.Request) -> https_fn.Response:
         brand_id,
         max_creators=int(body.get("maxCreators") or 80),
         posts_per=int(body.get("postsPer") or 6),
-    ))
+    ), step="creators")
+
+
+@https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.GB_1, timeout_sec=540)
+def api_step_stories(req: https_fn.Request) -> https_fn.Response:
+    """Instagram stories for tracked creators → posts + detect fan-out.
+
+    Independent of the other steps: nothing downstream reads its output, so the
+    UI fires it in parallel rather than in the creators chain.
+    """
+    return _run_step(req, lambda brand_id, body: scan_stories.run(
+        brand_id,
+        max_handles=int(body.get("maxHandles") or scan_stories.DEFAULT_MAX_HANDLES),
+    ), step="stories")
 
 
 @https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.GB_1, timeout_sec=300)
 def api_step_srs(req: https_fn.Request) -> https_fn.Response:
     """Step 3/3 — Compute SRS over all candidates."""
-    return _run_step(req, lambda brand_id, body: compute_resonance.run(brand_id))
+    return _run_step(req, lambda brand_id, body: compute_resonance.run(brand_id), step="srs")
 
 
 @https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.MB_512, timeout_sec=540)
@@ -302,7 +366,7 @@ def api_step_profiles(req: https_fn.Request) -> https_fn.Response:
     return _run_step(req, lambda brand_id, body: refresh_profiles.run(
         brand_id,
         limit=int(body.get("limit") or refresh_profiles.DEFAULT_LIMIT),
-    ))
+    ), step="profiles")
 
 
 @https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.MB_512, timeout_sec=300)
@@ -313,7 +377,7 @@ def api_step_subcultures(req: https_fn.Request) -> https_fn.Response:
     reads the links this writes. Pure compute over data already in Firestore:
     no Gemini, no Apify, so it is free to re-run.
     """
-    return _run_step(req, lambda brand_id, body: seed_subcultures.run(brand_id))
+    return _run_step(req, lambda brand_id, body: seed_subcultures.run(brand_id), step="subcultures")
 
 
 @https_fn.on_request(cors=CORS_POST, memory=options.MemoryOption.MB_512, timeout_sec=540)
@@ -327,7 +391,7 @@ def api_step_sentiment(req: https_fn.Request) -> https_fn.Response:
     return _run_step(req, lambda brand_id, body: analyze_sentiment.run(
         brand_id,
         limit=int(body.get("limit") or analyze_sentiment.DEFAULT_LIMIT),
-    ))
+    ), step="sentiment")
 
 
 @https_fn.on_request(cors=options.CorsOptions(cors_origins=["*"], cors_methods=["POST", "OPTIONS"]))
@@ -375,6 +439,7 @@ _BRAND_EDITABLE_FIELDS = {
     "confidenceMin",       # float, hides feed entries below this
     "embeddingThreshold",  # float, embedding pre-filter cosine
     "dailyBudgetUsd",      # float, budget guard ceiling
+    "storiesAutoScan",     # bool, kill switch for the 6-hourly stories scan
 }
 
 

@@ -2,12 +2,16 @@
 // Outreach (inline action on Creator detail), Reports, Discover, Moderator.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   PageShell, Card, Badge, Button, Img, Avatar, Input, Tabs, formatFollowers, PRODUCT_LINE_LABEL,
+  CARD_GRID, HAIRLINE_GRID,
 } from '../components/ui'
+import { MediaTile } from '../components/MediaTile'
 import { Sparkline, LineChart, BarChart, Donut, StackedDayBars, bucketByDay, type Series } from '../components/Chart'
 import { DetectionDrawer } from '../components/DetectionDrawer'
+import { ScanPanel } from '../components/ScanPanel'
+import { StoriesStrip } from '../components/StoriesStrip'
 import {
   fetchDetections, fetchTopResonance, fetchCreatorSubcultures, fetchSubcultures,
   fetchCreatorProfiles, fetchProjects,
@@ -15,6 +19,7 @@ import {
   type DetectionRow, type ResonanceRow, type Project,
 } from '../lib/data'
 import { imageUrlFor, parentPostKey, dedupeByPost } from '../lib/types'
+import { storyExpiry } from '../lib/stories'
 import { withSignal, signalCounts, untaggedShare, isBrandTag } from '../lib/signal'
 import { detectionQuality, splitByQuality, isPrimaryAngle } from '../lib/quality'
 import { sceneBreakdown, subcultureBreakdown, type CreatorSceneMap } from '../lib/scenes'
@@ -25,12 +30,19 @@ import { tallySounds, soundHref } from '../lib/sounds'
 import {
   fbBootstrapBrand, fbStepHashtags, fbStepCreators, fbStepSrs, fbStepSentiment,
   fbStepSubcultures, fbStepProfiles,
-  fbFetchPipelineCounts, fbSubscribeScanState, type ScanState,
+  fbFetchPipelineCounts, fbSubscribeScanState, fbStepStories,
+  fbSubscribeStoriesState, fbFetchStories, fbFetchStoryPosts,
+  fbListUsage, fbGetBrand,
+  type ScanState, type ScanStepKey, type StoriesState, type StoryPost, type UsageDay,
 } from '../lib/firestore'
+import { degradeLevel, DEGRADE_LABEL, fmtUsd, UNIT_META } from '../lib/costs'
 import {
   pickWorthALook, biggestFanToday, detectSpike, countNewSince,
 } from '../lib/score'
 import { useMembership, ReadOnlyNotice } from '../lib/membership'
+import { useStoryPostsPreview, useStoryPreview } from '../lib/devPreview'
+import { joinStories, storySource, type StoryRow } from '../lib/storyStats'
+import { StoryDetail } from '../components/StoryDetail'
 
 type Tab = 'briefing' | 'feed' | 'review' | 'creators'
 type PipelineCounts = { creators: number; posts: number; detections: number; detectionsHit: number; discoveryQueue: number }
@@ -68,9 +80,19 @@ function saveCache(c: DashboardCache) {
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(c)) } catch { /* quota — ignore */ }
 }
 
+const TABS: Tab[] = ['briefing', 'feed', 'review', 'creators']
+
 export default function Home() {
-  const [tab, setTab] = useState<Tab>('briefing')
+  // The tab lives in the URL so a tab is linkable — "look at the creators
+  // list" used to be unshareable, and breadcrumbs pointing back at a tab had
+  // nothing to point at. Falls back to the dashboard on an unknown value.
+  const [params, setParams] = useSearchParams()
+  const tab = (TABS.includes(params.get('tab') as Tab) ? params.get('tab') : 'briefing') as Tab
+  const setTab = useCallback((t: Tab) => {
+    setParams(t === 'briefing' ? {} : { tab: t }, { replace: true })
+  }, [setParams])
   const [activeDetection, setActiveDetection] = useState<DetectionRow | null>(null)
+  const [openStory, setOpenStory] = useState<StoryRow | null>(null)
 
   // Boot from cache if we have one — the dashboard is visible instantly,
   // even before the fresh Firestore reads finish. `refreshing` shows a
@@ -95,18 +117,33 @@ export default function Home() {
 
   const [lastSeenAt] = useState<string | null>(() => loadState().lastSeenAt)
   useEffect(() => { markSeen() }, [])
+  const { canWrite } = useMembership()
+
+  // Stories come from POSTS (the authoritative list — a story we could not
+  // analyse has no detection document at all) joined with story DETECTIONS
+  // (the Stëlz verdict). Both are separate queries because the main detection
+  // fetch is detected-only. Null means the query is unavailable, e.g. the
+  // index is not live yet.
+  const [storyPosts, setStoryPosts] = useState<StoryPost[] | null>(null)
+  const [storyDetections, setStoryDetections] = useState<DetectionRow[]>([])
 
   const refreshData = useCallback(async () => {
     setRefreshing(true)
     try {
-      const [d, r, c] = await Promise.all([
+      const [d, r, c, s, sp] = await Promise.all([
         fetchDetections({ limit: DETECTION_FETCH_LIMIT }).catch(() => [] as DetectionRow[]),
         fetchTopResonance(100).catch(() => [] as ResonanceRow[]),
         fbFetchPipelineCounts().catch(() => null),
+        fbFetchStories(2000).catch(() => [] as DetectionRow[]),
+        fbFetchStoryPosts(2000).catch(() => null),
       ])
       setDetections(d)
       setResonance(r)
       setCounts(c)
+      // Raw: joinStories does its own grouping, and one document per examined
+      // frame is how it knows a video verdict rests on thirteen images.
+      setStoryDetections(s)
+      setStoryPosts(sp)
       saveCache({ savedAt: Date.now(), detections: d, resonance: r, counts: c })
     } catch (e) {
       setError((e as Error).message)
@@ -136,8 +173,11 @@ export default function Home() {
   // Poll refreshData every 25s only when the backend is actively working:
   // scan running OR finished within the last 3 minutes.
   const [scanActive, setScanActive] = useState(false)
+  const [scanState, setScanState] = useState<ScanState | null>(null)
+  const [stepErrors, setStepErrors] = useState<Partial<Record<ScanStepKey, string>>>({})
   useEffect(() => {
     const unsub = fbSubscribeScanState((s) => {
+      setScanState(s)
       const started = s?.startedAt ? new Date(s.startedAt).getTime() : 0
       const finished = s?.finishedAt ? new Date(s.finishedAt).getTime() : 0
       const running = !!started && !finished
@@ -151,6 +191,40 @@ export default function Home() {
     const id = window.setInterval(() => { void refreshData() }, 25_000)
     return () => window.clearInterval(id)
   }, [scanActive, refreshData])
+
+  // Stories run on their own 6-hourly schedule, outside any scan session, so
+  // their last-run stamp is a separate subscription rather than a scan step.
+  const [storiesState, setStoriesState] = useState<StoriesState | null>(null)
+  const [storiesFetching, setStoriesFetching] = useState(false)
+  const [storiesError, setStoriesError] = useState<string | null>(null)
+  useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
+  // Dev server only; compiled out of production builds. See lib/devPreview.
+  const storyPreview = useStoryPostsPreview()
+  const storyPreviewDetections = useStoryPreview()
+  // One join, used by the strip here and by the /stories page, so the two can
+  // never report different totals for the same set. Preview brings its own
+  // detections — passing [] threw away every locally produced verdict and made
+  // analysed stories read as "nog niet geanalyseerd".
+  const storyRows = useMemo(() => {
+    const src = storySource(storyPreview, storyPreviewDetections, storyPosts ?? [], storyDetections)
+    return joinStories(src.posts, src.detections)
+  }, [storyPreview, storyPreviewDetections, storyPosts, storyDetections])
+  const fetchStories = useCallback(async () => {
+    setStoriesFetching(true)
+    setStoriesError(null)
+    try {
+      await fbStepStories()
+      // The sweep only writes posts; the detections the strip renders arrive
+      // via the detect fan-out a beat later, so refresh again after a pause
+      // rather than leaving an empty strip behind a finished button.
+      await refreshData()
+      window.setTimeout(() => { void refreshData() }, 20_000)
+    } catch (e) {
+      setStoriesError((e as Error).message)
+    } finally {
+      setStoriesFetching(false)
+    }
+  }, [refreshData])
 
   const days = DAYS_WINDOW
   // Collapse frame-level AND carousel-slot detections into one row per real
@@ -206,7 +280,11 @@ export default function Home() {
           >
             Export CSV
           </Button>
-          <RunScanButton onComplete={refreshData} liveHits={activeRows.filter((d) => d.detected === true).length} />
+          <RunScanButton
+            onComplete={refreshData}
+            liveHits={activeRows.filter((d) => d.detected === true).length}
+            onStepErrors={setStepErrors}
+          />
         </div>
       }
     >
@@ -217,6 +295,23 @@ export default function Home() {
 
       {!loading && !error && (
         <>
+          <ScanPanel scan={scanState} clientErrors={stepErrors} />
+          {/* Above the tabs on purpose. Everything else here can be looked at
+              tomorrow; a story is gone in 24 hours, so it does not get filed
+              behind a tab someone has to remember to open. */}
+          <StoriesStrip
+            rows={storyRows}
+            state={storiesState}
+            // The story panel, not the detection drawer: a story tile has to
+            // open even when nothing was found in it, and the detection drawer
+            // has nothing to show for a story with no hit.
+            onOpen={(r) => setOpenStory(r)}
+            onFetch={fetchStories}
+            fetching={storiesFetching}
+            canWrite={canWrite}
+            error={storiesError}
+            preview={storyPreview != null}
+          />
           <Tabs items={tabItems} active={tab} onChange={(id) => setTab(id as Tab)} />
 
           <div className="mt-8">
@@ -262,6 +357,7 @@ export default function Home() {
           .sort((a, b) => (a.frame_idx ?? 0) - (b.frame_idx ?? 0)) : []}
         onClose={() => setActiveDetection(null)}
       />
+      <StoryDetail row={openStory} onClose={() => setOpenStory(null)} />
     </PageShell>
   )
 }
@@ -293,6 +389,8 @@ function BriefingTab({
 
   return (
     <div className="space-y-8">
+      <SpendCard />
+
       <DashboardSection
         detections={detections}
         rangeRows={rangeRows}
@@ -316,7 +414,7 @@ function BriefingTab({
         {worthLook.length === 0 ? (
           <Card className="p-10 text-center text-[13px] text-[var(--color-ink-muted)]">No standout detections yet.</Card>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
+          <div className={HAIRLINE_GRID}>
             {worthLook.map((d) => (
               <PickCard key={d.detection_id} d={d} onOpen={() => onOpen(d)} />
             ))}
@@ -333,8 +431,8 @@ function BriefingTab({
             </header>
             <Card className="overflow-hidden">
               <div className="grid grid-cols-[120px_1fr]">
-                <div className="aspect-square border-r border-[var(--color-border)]">
-                  <Img src={biggestFan.topDetection ? imageUrlFor(biggestFan.topDetection) : null} />
+                <div className="border-r border-[var(--color-border)]">
+                  <MediaTile src={biggestFan.topDetection ? imageUrlFor(biggestFan.topDetection) : null} size="square" />
                 </div>
                 <div className="p-5">
                   <div className="flex items-center gap-2 mb-2">
@@ -384,6 +482,64 @@ function BriefingTab({
       </div>
 
     </div>
+  )
+}
+
+/**
+ * Today's spend against the budget, on the dashboard.
+ *
+ * Renders nothing for read-only viewers: unit prices reveal margin. That is a
+ * UI decision, not a security boundary — firestore.rules is where the usage
+ * collection is actually closed off.
+ *
+ * Silent when nothing has been spent today. A prominent "$0.00" on a quiet
+ * morning trains the eye to skip the card on the afternoon it matters.
+ */
+function SpendCard() {
+  const { canWrite } = useMembership()
+  const [today, setToday] = useState<UsageDay | null>(null)
+  const [budget, setBudget] = useState(5)
+
+  useEffect(() => {
+    if (!canWrite) return
+    let cancelled = false
+    void Promise.all([fbListUsage(1), fbGetBrand()]).then(([u, b]) => {
+      if (cancelled) return
+      setToday(u[0] ?? null)
+      if (typeof b?.dailyBudgetUsd === 'number') setBudget(b.dailyBudgetUsd)
+    }).catch(() => { /* the dashboard must not break over a cost widget */ })
+    return () => { cancelled = true }
+  }, [canWrite])
+
+  if (!canWrite || !today || today.estimatedSpendUsd <= 0) return null
+
+  const spend = today.estimatedSpendUsd
+  const rung = degradeLevel(spend, budget)
+  const pct = Math.min(100, (spend / budget) * 100)
+  const top = today.lines[0]
+
+  return (
+    <Card className="px-4 py-3">
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <span className="text-[13px] font-medium">{fmtUsd(spend)} vandaag</span>
+        <span className="text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
+          van ${budget.toFixed(2)} budget
+          {top && ` · meeste naar ${UNIT_META[top.key]?.label?.toLowerCase() ?? top.key}`}
+        </span>
+        <span className={`text-[11px] ${rung === 'normal' ? 'text-[var(--color-ink-subtle)]' : 'text-[var(--color-warn)]'}`}>
+          {DEGRADE_LABEL[rung]}
+        </span>
+        <Link to="/kosten" className="ml-auto text-[11px] text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)] hover:underline">
+          kostenoverzicht →
+        </Link>
+      </div>
+      <div className="mt-2 h-1 bg-[var(--color-border)] relative overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0"
+          style={{ width: `${pct}%`, background: rung === 'normal' ? 'var(--color-ink)' : 'var(--color-warn)' }}
+        />
+      </div>
+    </Card>
   )
 }
 
@@ -736,7 +892,7 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
       ) : (
         <>
           {bands.clear.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className={CARD_GRID}>
               {bands.clear.map((d) => (
                 <FeedCard
                   key={d.detection_id}
@@ -785,7 +941,7 @@ function FeedTab({ rows, allDetections, truncated, lastSeenAt, onOpen }: { rows:
                   </button>
                 )}
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              <div className={CARD_GRID}>
                 {bands.review.map((d) => (
                   <FeedCard
                     key={d.detection_id}
@@ -887,6 +1043,7 @@ function FeedCard({ d, isNew, onOpen, onReject }: { d: DetectionRow; isNew: bool
   const conf = (d.confidence ?? 0) * 100
   const q = detectionQuality(d)
   const v = verifyDetection(d)
+  const story = storyExpiry(d)
   return (
     // A div, not a button: the reject control below is itself a button, and
     // nesting buttons is invalid HTML (React will warn, and the inner click
@@ -899,16 +1056,22 @@ function FeedCard({ d, isNew, onOpen, onReject }: { d: DetectionRow; isNew: bool
       className="cursor-pointer text-left bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-border-strong)] focus-visible:border-[var(--color-ink)] focus-visible:outline-none transition-colors flex flex-col group"
     >
       {/* Media */}
-      <div className="relative aspect-[4/5] bg-[var(--color-bg)] overflow-hidden">
-        <Img src={imageUrlFor(d)} />
-        {isNew && (
+      <MediaTile src={imageUrlFor(d)} size="card">
+        {isNew && !story && (
           <span className="absolute top-2 left-2 text-[10px] uppercase tracking-widest bg-[var(--color-accent)] text-white px-2 py-0.5">
-            New
+            Nieuw
           </span>
         )}
         <span className="absolute top-2 right-2 text-[10px] uppercase tracking-widest bg-[var(--color-ink)]/80 text-white px-2 py-0.5">
           {d.platform === 'tiktok' ? 'TikTok' : 'Instagram'}
         </span>
+        {/* A story we caught is worth MORE once it has expired: it no longer
+            exists anywhere else. Hence the label, not a hidden row. */}
+        {story && (
+          <span className={`absolute top-2 left-2 text-[10px] uppercase tracking-widest px-2 py-0.5 text-white ${story.expired ? 'bg-[var(--color-ink-muted)]' : 'bg-[var(--color-accent)]'}`}>
+            {story.label}
+          </span>
+        )}
         {d.frame_idx != null && (
           <span className="absolute bottom-2 right-2 text-[10px] bg-[var(--color-ink)]/80 text-white px-2 py-0.5">
             ▶ video{(d.frame_hits ?? 0) > 1 ? ` · ${d.frame_hits} frames` : ''}
@@ -930,7 +1093,7 @@ function FeedCard({ d, isNew, onOpen, onReject }: { d: DetectionRow; isNew: bool
             ✕
           </button>
         )}
-      </div>
+      </MediaTile>
 
       {/* Body */}
       <div className="p-3.5 flex flex-col gap-2.5 flex-1">
@@ -1089,9 +1252,9 @@ function ReviewTab({ detections, allDetections }: { detections: DetectionRow[]; 
       <Card className="overflow-hidden">
         {/* Media */}
         <div className="relative bg-[var(--color-bg)]">
-          <div className="aspect-[4/3]">
-            <Img src={imageUrlFor(current)} fit="contain" />
-          </div>
+          {/* The judgement surface: contain, not cover — a moderator must see
+              the whole frame, not a crop of it. */}
+          <MediaTile src={imageUrlFor(current)} size="hero" fit="contain" priority />
           <span className="absolute top-3 right-3 text-[10px] uppercase tracking-widest bg-[var(--color-ink)]/80 text-white px-2 py-0.5">
             {current.platform === 'tiktok' ? 'TikTok' : 'Instagram'}
           </span>
@@ -1375,15 +1538,14 @@ function CreatorsTab({ detections, resonance, creatorProfiles }: {
               {/* Recent content strip */}
               <div className="grid grid-cols-4 gap-1">
                 {r.recent.map((d) => (
-                  <div key={d.detection_id} className="relative aspect-square bg-[var(--color-bg)] border border-[var(--color-border)] overflow-hidden">
-                    <Img src={imageUrlFor(d)} />
+                  <MediaTile key={d.detection_id} src={imageUrlFor(d)} size="thumb" className="border border-[var(--color-border)]">
                     {d.frame_idx != null && (
                       <span className="absolute bottom-0.5 right-0.5 text-[8px] bg-[var(--color-ink)]/80 text-white px-1">▶</span>
                     )}
-                  </div>
+                  </MediaTile>
                 ))}
                 {Array.from({ length: Math.max(0, 4 - r.recent.length) }).map((_, i) => (
-                  <div key={`e${i}`} className="aspect-square bg-[var(--color-bg)] border border-[var(--color-border)]" />
+                  <div key={`e${i}`} className="w-full pb-[100%] bg-[var(--color-bg)] border border-[var(--color-border)]" />
                 ))}
               </div>
 
@@ -2278,8 +2440,11 @@ function KpiTile({ label, value, sub }: { label: string; value: string; sub: str
 function PickCard({ d, onOpen }: { d: DetectionRow; onOpen: () => void }) {
   return (
     <div className="bg-[var(--color-surface)] flex flex-col">
-      <button onClick={onOpen} className="block aspect-[4/3] bg-[var(--color-bg)] text-left">
-        <Img src={imageUrlFor(d)} />
+      {/* Same tile size as the feed: one detection used to render 4:3 here and
+          4:5 there, so the identical post looked cropped differently depending
+          on which surface you found it on. */}
+      <button onClick={onOpen} className="block text-left w-full">
+        <MediaTile src={imageUrlFor(d)} size="card" />
       </button>
       <div className="p-4 flex flex-col gap-3 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
@@ -2303,10 +2468,24 @@ function PickCard({ d, onOpen }: { d: DetectionRow; onOpen: () => void }) {
   )
 }
 
-function RunScanButton({ onComplete, liveHits }: { onComplete: () => void; liveHits?: number }) {
+function RunScanButton({ onComplete, liveHits, onStepErrors }: {
+  onComplete: () => void
+  liveHits?: number
+  onStepErrors?: (e: Partial<Record<ScanStepKey, string>>) => void
+}) {
   const [state, setState] = useState<ScanState | null>(null)
   const [clicking, setClicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Client-side step failures. The chain used to .catch(() => {}) every link,
+  // so a failed enrichment step left no trace anywhere — not in the UI, not on
+  // brand.scan, nowhere.
+  // Accumulated in a ref, not state: this component does not render them —
+  // the panel does, one level up.
+  const stepErrorsRef = useRef<Partial<Record<ScanStepKey, string>>>({})
+  const onStepError = useCallback((step: ScanStepKey, e: unknown) => {
+    stepErrorsRef.current = { ...stepErrorsRef.current, [step]: (e as Error)?.message ?? String(e) }
+    onStepErrors?.(stepErrorsRef.current)
+  }, [onStepErrors])
   const prevRunning = useRef(false)
   // An unclaimed brand shows the button to anyone: pressing it calls bootstrap,
   // which makes the caller its owner. That is the only route into membership
@@ -2354,16 +2533,19 @@ function RunScanButton({ onComplete, liveHits }: { onComplete: () => void; liveH
       // Order is load-bearing: profiles must land before SRS (it reads the
       // creator record's follower count) and subcultures before SRS too (it
       // reads the scene links). Chained, not parallel, for that reason.
+      // Stories run in parallel: nothing downstream reads them, and they are
+      // the one surface that expires, so they must not queue behind SRS.
+      void fbStepStories().catch((e) => onStepError('stories', e))
       void fbStepCreators(80, 8)
-        .catch(() => {})
-        .then(() => fbStepProfiles().catch(() => {}))
-        .then(() => fbStepSubcultures().catch(() => {}))
-        .then(() => fbStepSrs().catch(() => {}))
+        .catch((e) => onStepError('creators', e))
+        .then(() => fbStepProfiles().catch((e) => onStepError('profiles', e)))
+        .then(() => fbStepSubcultures().catch((e) => onStepError('subcultures', e)))
+        .then(() => fbStepSrs().catch((e) => onStepError('srs', e)))
       // Sentiment scores whatever is unscored, this scan's hits included on the
       // next run. Batched and capped, so a large backlog drains over several
       // scans rather than in one long call — and a failure here must never
       // surface as a failed scan, since the detections themselves are fine.
-      void fbStepSentiment().catch(() => {})
+      void fbStepSentiment().catch((e) => onStepError('sentiment', e))
     } catch (e) {
       setError((e as Error).message)
     } finally {
