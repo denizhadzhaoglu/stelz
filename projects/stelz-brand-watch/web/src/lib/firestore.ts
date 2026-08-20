@@ -23,6 +23,7 @@ import {
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { fbDb, fbAuth, fbStorage } from './firebase'
 import type { DetectionRow, ResonanceRow } from './types'
+import { spendBreakdown, type SpendLine } from './costs'
 
 // Default brand. Replace once brand switcher reads from auth context.
 export const BRAND_ID = 'stelz'
@@ -805,33 +806,37 @@ export async function fbProjectsAction(
   return mapProject(out.project.id, out.project)
 }
 
-// ────────────── Daily usage (Settings → Usage card) ──────────────
+// ────────────── Daily usage ──────────────
 
 export type UsageDay = {
+  /** YYYY-MM-DD, the Firestore doc id (fs.usage_doc writes one doc per UTC day). */
   day: string
-  apify_runs?: number
-  gemini_flash_calls?: number
-  gemini_embed_calls?: number
-  ocr_calls?: number
-  detections_written?: number
-  detections_hit?: number
-  estimated_spend_usd?: number
+  counters: Record<string, number>
+  estimatedSpendUsd: number
+  lines: SpendLine[]
 }
 
+/**
+ * Daily usage, priced from lib/costs.ts.
+ *
+ * This function used to carry its OWN price table, and it was the model the
+ * backend had already corrected: $0.10 for an Apify run (they are free) while
+ * omitting apify_ig_results ($2.30/1k) entirely, and Gemini at 0.00075 instead
+ * of 0.00175. It under-reported Apify spend by roughly 11x. Nothing ever
+ * called it, which is the only reason the wrong number never reached a screen.
+ * The table now lives in one place and a Python test fails on any drift.
+ */
 export async function fbListUsage(days = 14, brandId = BRAND_ID): Promise<UsageDay[]> {
   const snap = await getDocs(
     query(collection(fbDb, 'brands', brandId, 'usage'), orderBy('__name__', 'desc'), fsLimit(days)),
   )
   return snap.docs.map((d) => {
-    const x = d.data() as Record<string, number>
-    const COSTS: Record<string, number> = {
-      gemini_flash_calls: 0.00075,
-      gemini_embed_calls: 0.0001,
-      apify_runs: 0.1,
+    const counters: Record<string, number> = {}
+    for (const [k, v] of Object.entries(d.data())) {
+      if (typeof v === 'number') counters[k] = v
     }
-    let est = 0
-    for (const k of Object.keys(COSTS)) est += (x[k] ?? 0) * COSTS[k]
-    return { day: d.id, ...(x as Record<string, number>), estimated_spend_usd: est }
+    const { total, lines } = spendBreakdown(counters)
+    return { day: d.id, counters, estimatedSpendUsd: total, lines }
   })
 }
 

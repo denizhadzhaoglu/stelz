@@ -45,11 +45,28 @@ service cloud.firestore {
         allow update: if false;
       }
 
+      // Spend: members only.
+      //
+      // These docs price the pipeline per unit, which is margin information.
+      // The client is a signed-in read-only viewer, not a member, so hiding
+      // the Kosten page in the UI is discretion; this is the part that holds.
+      match /usage/{day} {
+        allow read: if belongsToBrand(brandId);
+        allow write: if false;
+      }
+
       // Everything else (creators, posts, detections, resonance, edges,
-      // discoveryQueue, hashtagPool, imageHashCache, scanRuns, usage,
+      // discoveryQueue, hashtagPool, imageHashCache, scanRuns,
       // scrapeLog, detectLog, videoLog) — signed-in read, server-only write.
+      //
+      // The `!= 'usage'` is load-bearing, and putting the stricter rule above
+      // this one is NOT enough on its own: Firestore evaluates every matching
+      // rule and grants the request if ANY of them allows it. This recursive
+      // pattern also matches usage/{day}, so without the exclusion it would
+      // hand back the read that the block above just restricted, whatever the
+      // ordering suggests.
       match /{subcollection}/{document=**} {
-        allow read: if isSignedIn();
+        allow read: if isSignedIn() && subcollection != 'usage';
         allow write: if false;
       }
     }

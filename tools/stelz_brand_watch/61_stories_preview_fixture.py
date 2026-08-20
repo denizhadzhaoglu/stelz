@@ -37,6 +37,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "firebase" / "functions"))
 from handlers.scan_stories import STORIES_ACTOR, STORY_TTL_HOURS, _normalize_item  # noqa: E402
 
+ARCHIVE = ROOT / ".tmp" / "stories-archive"
+VERDICTS = ARCHIVE / "verdicts.jsonl"
 PUBLIC = ROOT / "projects" / "stelz-brand-watch" / "web" / "public"
 OUT = PUBLIC / "preview-stories.json"          # DetectionRow[] — the strip
 OUT_POSTS = PUBLIC / "preview-story-posts.json"  # StoryPost[] — the /stories page
@@ -76,7 +78,27 @@ def last_dataset_items(actor: str, tok: str) -> list[dict]:
     return out.json()
 
 
-def to_row(norm: dict, idx: int) -> dict:
+def load_verdicts() -> dict[str, dict]:
+    """Local analysis results, keyed by story id (64_stories_analyse.py).
+
+    Absent is not "no Stëlz" — it means nothing has judged that story yet, and
+    the UI renders it as such. Writing detected=false for an unjudged story
+    would report a miss we never looked for.
+    """
+    if not VERDICTS.exists():
+        return {}
+    out: dict[str, dict] = {}
+    for line in VERDICTS.read_text().splitlines():
+        if line.strip():
+            try:
+                v = json.loads(line)
+                out[v["story_id"]] = v
+            except Exception:
+                continue
+    return out
+
+
+def to_row(norm: dict, idx: int, verdict: dict | None = None) -> dict:
     """One normalized story -> one DetectionRow, matching lib/types.ts.
 
     Every field the type declares is present. A row missing a key the UI reads
@@ -94,13 +116,12 @@ def to_row(norm: dict, idx: int) -> dict:
         "creator_handle": handle,
         "creator_category": None,
         "platform": "instagram",
-        "product_line": None,
-        # Nothing has analysed these images, so there is no confidence to state
-        # and no verdict to claim. detected=null renders as "captured, not yet
-        # judged" rather than as a hit we did not earn.
-        "confidence": None,
-        "size_in_frame": None,
-        "is_primary_subject": None,
+        "product_line": (verdict or {}).get("product_line"),
+        # detected=None where nothing has judged the image: that renders as
+        # "captured, not yet judged" rather than as a hit we did not earn.
+        "confidence": (verdict or {}).get("confidence"),
+        "size_in_frame": (verdict or {}).get("size_in_frame"),
+        "is_primary_subject": (verdict or {}).get("is_primary_subject"),
         "image_url": norm["image_url"],
         "stored_path": None,
         "post_url": f"https://www.instagram.com/stories/{handle}/{story_id}/",
@@ -112,7 +133,7 @@ def to_row(norm: dict, idx: int) -> dict:
         "follower_count": None,
         "creator_tier": "tier_2",
         "verified": None,
-        "context": None,
+        "context": (verdict or {}).get("context"),
         "post_hashtags": norm.get("hashtags") or [],
         "post_mentions": norm.get("mentions") or [],
         "music": None,
@@ -121,21 +142,21 @@ def to_row(norm: dict, idx: int) -> dict:
         "expires_at": expires.isoformat(),
         "frame_idx": None,
         "post_id": f"instagram_story{story_id}",
-        "surface_type": None,
-        "visible_text": None,
-        "false_positive_risk": None,
-        "people_count": None,
-        "setting": None,
-        "activity": None,
-        "gate": None,
-        "verify_verdict": None,
-        "verify_brand": None,
-        "verify_reason": None,
+        "surface_type": (verdict or {}).get("surface_type"),
+        "visible_text": (verdict or {}).get("visible_text"),
+        "false_positive_risk": (verdict or {}).get("false_positive_risk"),
+        "people_count": (verdict or {}).get("people_count"),
+        "setting": (verdict or {}).get("setting"),
+        "activity": (verdict or {}).get("activity"),
+        "gate": (verdict or {}).get("gate"),
+        "verify_verdict": (verdict or {}).get("verify_verdict"),
+        "verify_brand": (verdict or {}).get("verify_brand"),
+        "verify_reason": (verdict or {}).get("verify_reason"),
         "sentiment": None,
         "sentiment_score": None,
         "sentiment_rationale": None,
         "brand_id": "stelz",
-        "detected": None,
+        "detected": verdict["detected"] if verdict else None,
         "is_false_positive": None,
     }
 
@@ -188,13 +209,18 @@ def main() -> int:
         return 1
     print(f"  raw items: {len(items)}")
 
+    verdicts = load_verdicts()
     rows, posts, leaked = [], [], 0
     for i, item in enumerate(items):
         norm = _normalize_item(item)
         if norm is None:
             leaked += 1
             continue
-        rows.append(to_row(norm, i))
+        v = verdicts.get(norm["story_id"])
+        # Only stories that were actually judged get a detection row. An absent
+        # row is what makes the UI say "nog niet geanalyseerd".
+        if v is not None:
+            rows.append(to_row(norm, i, v))
         posts.append(to_post(norm))
     print(f"  stories after leak filter: {len(rows)}   rejected as non-story: {leaked}")
 
@@ -208,8 +234,13 @@ def main() -> int:
     OUT_POSTS.write_text(json.dumps(posts, indent=1))
     polls = sum(p["pollVotes"] for p in posts)
     print(f"\n  wrote {OUT.relative_to(ROOT)} and {OUT_POSTS.relative_to(ROOT)}")
+    judged = len(rows)
+    hits = sum(1 for r in rows if r["detected"])
     print(f"  {sum(1 for p in posts if p['mediaType'] == 'video')} video · "
           f"{polls:,} poll votes · {sum(len(p['mentions']) for p in posts)} mentions")
+    print(f"  {judged} of {len(posts)} analysed · {hits} with Stëlz visible")
+    if judged < len(posts):
+        print(f"  ({len(posts) - judged} unjudged — run 64_stories_analyse.py)")
     print("  open http://localhost:5180/stories?preview=stories")
     return 0
 

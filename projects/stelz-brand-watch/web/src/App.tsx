@@ -9,6 +9,8 @@ import Home from './pages/Home'
 import Creator from './pages/Creator'
 import Sounds from './pages/Sounds'
 import StoriesPage from './pages/Stories'
+import { useMembership } from './lib/membership'
+import Costs from './pages/Costs'
 import ProjectPage from './pages/Project'
 import LowlandsPage from './pages/Lowlands'
 import Settings from './pages/Settings'
@@ -29,13 +31,17 @@ import Privacy from './pages/Privacy'
 //   /login + /signup + /landing  Public auth + marketing
 //   /terms /privacy              Static legal (no nav)
 
-const NAV: { to: string; label: string; matchPrefix?: string }[] = [
+// adminOnly: hidden from read-only viewers. For /kosten that is discretion
+// rather than access control — firestore.rules is what actually closes the
+// usage collection (see the `usage` match there).
+const NAV: { to: string; label: string; matchPrefix?: string; adminOnly?: boolean }[] = [
   { to: '/', label: 'Home' },
   // matchPrefix '/projects': the Lowlands tab stays lit while reading any
   // project roster — the tab redirects there once the roster exists.
   { to: '/lowlands', label: 'Lowlands', matchPrefix: '/projects' },
   { to: '/stories', label: 'Stories', matchPrefix: '/stories' },
   { to: '/sounds', label: 'Sounds', matchPrefix: '/sounds' },
+  { to: '/kosten', label: 'Kosten', matchPrefix: '/kosten', adminOnly: true },
   { to: '/settings', label: 'Settings' },
 ]
 
@@ -73,6 +79,7 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/creators/:handle" element={<Creator />} />
         <Route path="/stories" element={<StoriesPage />} />
+        <Route path="/kosten" element={<Costs />} />
         <Route path="/sounds" element={<Sounds />} />
         <Route path="/sounds/:soundKey" element={<Sounds />} />
         <Route path="/lowlands" element={<LowlandsPage />} />
@@ -97,6 +104,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
 
 function AppLayout() {
   const { pathname } = useLocation()
+  const { canWrite } = useMembership()
   const [navOpen, setNavOpen] = useState(false)
   useEffect(() => { setNavOpen(false) }, [pathname])
 
@@ -135,7 +143,7 @@ function AppLayout() {
         <BrandSwitcher />
 
         <nav className="flex-1 py-3 overflow-y-auto">
-          {NAV.map((n) => {
+          {NAV.filter((n) => !n.adminOnly || canWrite).map((n) => {
             const active = pathname === n.to || (n.matchPrefix && pathname.startsWith(n.matchPrefix))
             return (
               <NavLink

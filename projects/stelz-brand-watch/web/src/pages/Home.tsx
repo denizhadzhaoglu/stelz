@@ -32,8 +32,10 @@ import {
   fbStepSubcultures, fbStepProfiles,
   fbFetchPipelineCounts, fbSubscribeScanState, fbStepStories,
   fbSubscribeStoriesState, fbFetchStories, fbFetchStoryPosts,
-  type ScanState, type ScanStepKey, type StoriesState, type StoryPost,
+  fbListUsage, fbGetBrand,
+  type ScanState, type ScanStepKey, type StoriesState, type StoryPost, type UsageDay,
 } from '../lib/firestore'
+import { degradeLevel, DEGRADE_LABEL, fmtUsd, UNIT_META } from '../lib/costs'
 import {
   pickWorthALook, biggestFanToday, detectSpike, countNewSince,
 } from '../lib/score'
@@ -376,6 +378,8 @@ function BriefingTab({
 
   return (
     <div className="space-y-8">
+      <SpendCard />
+
       <DashboardSection
         detections={detections}
         rangeRows={rangeRows}
@@ -467,6 +471,64 @@ function BriefingTab({
       </div>
 
     </div>
+  )
+}
+
+/**
+ * Today's spend against the budget, on the dashboard.
+ *
+ * Renders nothing for read-only viewers: unit prices reveal margin. That is a
+ * UI decision, not a security boundary — firestore.rules is where the usage
+ * collection is actually closed off.
+ *
+ * Silent when nothing has been spent today. A prominent "$0.00" on a quiet
+ * morning trains the eye to skip the card on the afternoon it matters.
+ */
+function SpendCard() {
+  const { canWrite } = useMembership()
+  const [today, setToday] = useState<UsageDay | null>(null)
+  const [budget, setBudget] = useState(5)
+
+  useEffect(() => {
+    if (!canWrite) return
+    let cancelled = false
+    void Promise.all([fbListUsage(1), fbGetBrand()]).then(([u, b]) => {
+      if (cancelled) return
+      setToday(u[0] ?? null)
+      if (typeof b?.dailyBudgetUsd === 'number') setBudget(b.dailyBudgetUsd)
+    }).catch(() => { /* the dashboard must not break over a cost widget */ })
+    return () => { cancelled = true }
+  }, [canWrite])
+
+  if (!canWrite || !today || today.estimatedSpendUsd <= 0) return null
+
+  const spend = today.estimatedSpendUsd
+  const rung = degradeLevel(spend, budget)
+  const pct = Math.min(100, (spend / budget) * 100)
+  const top = today.lines[0]
+
+  return (
+    <Card className="px-4 py-3">
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <span className="text-[13px] font-medium">{fmtUsd(spend)} vandaag</span>
+        <span className="text-[11px] text-[var(--color-ink-subtle)] tabular-nums">
+          van ${budget.toFixed(2)} budget
+          {top && ` · meeste naar ${UNIT_META[top.key]?.label?.toLowerCase() ?? top.key}`}
+        </span>
+        <span className={`text-[11px] ${rung === 'normal' ? 'text-[var(--color-ink-subtle)]' : 'text-[var(--color-warn)]'}`}>
+          {DEGRADE_LABEL[rung]}
+        </span>
+        <Link to="/kosten" className="ml-auto text-[11px] text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)] hover:underline">
+          kostenoverzicht →
+        </Link>
+      </div>
+      <div className="mt-2 h-1 bg-[var(--color-border)] relative overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0"
+          style={{ width: `${pct}%`, background: rung === 'normal' ? 'var(--color-ink)' : 'var(--color-warn)' }}
+        />
+      </div>
+    </Card>
   )
 }
 
