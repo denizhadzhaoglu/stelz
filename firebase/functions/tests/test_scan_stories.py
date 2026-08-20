@@ -153,47 +153,133 @@ class StoriesBase(unittest.TestCase):
         return {}
 
 
-STORY = {"id": "31415926535", "ownerUsername": "anna", "takenAt": 1755680000,
-         "displayUrl": "https://cdn/story.jpg"}
+# Shaped from a real actor response (Lowlands roster, 20 Aug 2026), not from
+# the API docs and not from imagination. The previous fixture in this file was
+# invented — camelCase feed-post fields that no vendor has ever returned — so
+# sixteen passing tests proved nothing, and a live run rejected 69 of 69 real
+# stories. URLs and ids are stand-ins; every KEY is what the vendor sends.
+STORY = {
+    "product_type": "story",
+    # "{media_id}_{user_id}" — this is what broke the old str.isdigit() check.
+    "id": "31415926535_314162194",
+    # 64-bit id mangled by JSON's float: deliberately wrong here, and unread.
+    "pk": 31415926500,
+    "code": "DcOVs-KMRoO",          # stories DO have a shortcode
+    "media_type": 1,                 # 1 = image, 2 = video
+    "username": "anna",
+    "user": {"username": "anna"},
+    "taken_at": 1755680000,
+    "expiring_at": 1755680000 + 86400,
+    "image_versions2": {"candidates": [
+        {"url": "https://cdn/story-1320.jpg", "width": 1320, "height": 2346},
+        {"url": "https://cdn/story-750.jpg", "width": 750, "height": 1333},
+    ]},
+    "caption": None,
+}
+
+VIDEO_STORY = {
+    **STORY,
+    "media_type": 2,
+    "video_versions": [
+        {"url": "https://cdn/story-720.mp4", "width": 720, "height": 1280},
+        {"url": "https://cdn/story-360.mp4", "width": 360, "height": 640},
+    ],
+}
 
 
 class TestLeakFilter(StoriesBase):
-    def test_rejects_items_shaped_like_feed_posts(self):
-        # Real observed failure: the stories output leaks reels and posts.
+    def test_product_type_is_the_discriminator(self):
+        # Stories endpoints leak reels and feed posts. Instagram labels the
+        # media itself, so this reads the label instead of guessing from shape.
         for leak in (
-            {**STORY, "shortCode": "Cabc123"},
-            {**STORY, "type": "Sidecar"},
-            {**STORY, "productType": "clips"},
-            {**STORY, "productType": "feed"},
+            {**STORY, "product_type": "clips"},
+            {**STORY, "product_type": "feed"},
+            {**STORY, "product_type": "igtv"},
+            {k: v for k, v in STORY.items() if k != "product_type"},
         ):
             self.assertIsNone(scan_stories._normalize_item(leak))
 
-    def test_rejects_non_numeric_ids(self):
-        self.assertIsNone(scan_stories._normalize_item({**STORY, "id": "abc"}))
-        self.assertIsNone(scan_stories._normalize_item({**STORY, "id": None}))
+    def test_a_shortcode_does_not_make_it_a_post(self):
+        # The old filter rejected anything carrying a shortCode. Every one of
+        # the 69 real stories in the live run had a `code`, so that heuristic
+        # alone would have thrown the entire feature away.
+        self.assertIsNotNone(scan_stories._normalize_item({**STORY, "code": "DcOVs-KMRoO"}))
 
-    def test_accepts_a_real_story(self):
+    def test_accepts_the_real_composite_id(self):
+        # "{media_id}_{user_id}" — str.isdigit() on the whole string is what
+        # rejected 69 of 69 genuine stories.
         out = scan_stories._normalize_item(STORY)
         self.assertEqual(out["story_id"], "31415926535")
         self.assertEqual(out["handle"], "anna")
 
+    def test_rejects_ids_that_are_not_ids(self):
+        for bad in ("abc", "", None, "_314162194"):
+            self.assertIsNone(scan_stories._normalize_item({**STORY, "id": bad}), bad)
+
+    def test_takes_the_widest_image_and_best_video(self):
+        # Candidates arrive widest-first; the detector should see full res.
+        self.assertEqual(scan_stories._normalize_item(STORY)["image_url"],
+                         "https://cdn/story-1320.jpg")
+        self.assertEqual(scan_stories._normalize_item(VIDEO_STORY)["video_url"],
+                         "https://cdn/story-720.mp4")
+
+    def test_falls_back_to_nested_username(self):
+        out = scan_stories._normalize_item({k: v for k, v in STORY.items() if k != "username"})
+        self.assertEqual(out["handle"], "anna")
+
     def test_leaked_items_are_counted_not_silently_dropped(self):
-        self.apify.run_sync.return_value = [STORY, {**STORY, "id": "999", "shortCode": "X"}]
+        self.apify.run_sync.return_value = [
+            STORY, {**STORY, "id": "999_1", "product_type": "clips"},
+        ]
         out = self.run_stories()
         self.assertEqual(out["storiesFound"], 1)
         self.assertEqual(out["skippedNonStory"], 1)
 
     def test_foreign_handle_is_skipped(self):
         # An account we never asked about must not enter the corpus.
-        self.apify.run_sync.return_value = [{**STORY, "ownerUsername": "vreemde"}]
+        self.apify.run_sync.return_value = [
+            {**STORY, "username": "vreemde", "user": {"username": "vreemde"}},
+        ]
         out = self.run_stories()
         self.assertEqual(out["storiesFound"], 0)
         self.assertEqual(out["skippedNonStory"], 1)
 
 
+class TestStoryMetadata(StoriesBase):
+    def test_mentions_and_hashtags_are_carried(self):
+        # A story that @-mentions the brand is a hit whether or not a can is in
+        # frame. These were being written as empty lists while the payload
+        # carried them.
+        item = {**STORY,
+                "reel_mentions": [{"user": {"username": "Stelz"}},
+                                  {"user": {"username": "lowlands"}}],
+                "story_hashtags": [{"hashtag": {"name": "Vrijmibo"}}]}
+        self.apify.run_sync.return_value = [item]
+        self.run_stories()
+        doc = self.posts["instagram_story31415926535"]
+        self.assertEqual(doc["mentions"], ["stelz", "lowlands"])
+        self.assertEqual(doc["hashtags"], ["vrijmibo"])
+
+    def test_malformed_mention_entries_are_dropped_not_fatal(self):
+        item = {**STORY, "reel_mentions": [{}, {"user": {}}, {"user": {"username": "ok"}}]}
+        self.apify.run_sync.return_value = [item]
+        self.run_stories()
+        self.assertEqual(self.posts["instagram_story31415926535"]["mentions"], ["ok"])
+
+
 class TestPersistence(StoriesBase):
-    def test_expires_at_is_posted_at_plus_24h(self):
-        self.apify.run_sync.return_value = [STORY]
+    def test_uses_instagrams_own_expiry_when_given(self):
+        # The payload states expiring_at. Preferring it over our arithmetic
+        # gives the true countdown for a story near the boundary.
+        self.apify.run_sync.return_value = [{**STORY, "expiring_at": STORY["taken_at"] + 3600}]
+        self.run_stories()
+        doc = self.posts["instagram_story31415926535"]
+        self.assertEqual(doc["expiresAt"] - doc["postedAt"], dt.timedelta(hours=1))
+
+    def test_falls_back_to_posted_at_plus_24h(self):
+        self.apify.run_sync.return_value = [
+            {k: v for k, v in STORY.items() if k != "expiring_at"},
+        ]
         self.run_stories()
         doc = self.posts["instagram_story31415926535"]
         self.assertEqual(doc["expiresAt"] - doc["postedAt"], dt.timedelta(hours=24))
@@ -217,7 +303,7 @@ class TestPersistence(StoriesBase):
         # An id like "instagram_story_123" parses as post "story", so every
         # story in the corpus would collapse into one feed row — the whole
         # feature, invisible. Two stories from the same creator must stay two.
-        self.apify.run_sync.return_value = [STORY, {**STORY, "id": "27182818284"}]
+        self.apify.run_sync.return_value = [STORY, {**STORY, "id": "27182818284_314162194"}]
         self.run_stories()
         ids = [k for k in self.posts if k.startswith("instagram_story")]
         self.assertEqual(len(ids), 2, ids)
@@ -226,7 +312,9 @@ class TestPersistence(StoriesBase):
             self.assertEqual(head, post_id, f"{post_id} would dedupe into {head}")
 
     def test_missing_timestamp_is_flagged_as_estimated(self):
-        self.apify.run_sync.return_value = [{k: v for k, v in STORY.items() if k != "takenAt"}]
+        self.apify.run_sync.return_value = [
+            {k: v for k, v in STORY.items() if k not in ("taken_at", "expiring_at")},
+        ]
         self.run_stories()
         doc = self.posts["instagram_story31415926535"]
         self.assertTrue(doc["postedAtEstimated"])
@@ -235,7 +323,7 @@ class TestPersistence(StoriesBase):
     def test_video_story_enqueues_video_and_its_cover(self):
         # Story video URLs are short-lived signed links that routinely expire in
         # the queue; the cover is the pass that reliably succeeds.
-        self.apify.run_sync.return_value = [{**STORY, "videoUrl": "https://cdn/s.mp4"}]
+        self.apify.run_sync.return_value = [VIDEO_STORY]
         out = self.run_stories()
         self.assertEqual(out["videosEnqueued"], 1)
         self.assertEqual(out["imagesEnqueued"], 1)

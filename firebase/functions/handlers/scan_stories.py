@@ -54,45 +54,72 @@ def _actor_payload(handles: list[str]) -> dict[str, Any]:
     return {"usernames": handles}
 
 
+def _epoch(v: Any) -> dt.datetime | None:
+    """Instagram timestamps are epoch seconds. Anything else is not a time."""
+    if isinstance(v, (int, float)) and v > 1e9:
+        return dt.datetime.fromtimestamp(v, tz=dt.timezone.utc)
+    return None
+
+
 def _normalize_item(item: dict) -> dict | None:
     """Actor output -> our shape, or None when the item is not a story.
 
-    Swap point 2. The leak filter is carried over verbatim from the 49_
-    prototype: stories endpoints leak reels and feed posts into their output,
-    and a reel silently filed as a story corrupts the "caught before it
-    disappeared" claim the feature is sold on.
+    Swap point 2, and the part that was wrong. Both vendors return Instagram's
+    OWN media object — snake_case, not the camelCase feed-post shape the two
+    prototypes guessed at. A live run against the Lowlands roster returned 69
+    genuine stories and the previous filter rejected all 69, chiefly because
+    `id` is "{media_id}_{user_id}" and the check demanded str.isdigit().
+
+    The leak test is now the positive one: Instagram itself labels the media
+    `product_type`, and a story says "story". That is a fact from the payload
+    rather than the old "a story has no shortCode" heuristic — which is simply
+    false, every one of those 69 carried a `code`.
+
+    Deliberately NOT reading `pk`: it is a 64-bit id that JSON hands over as a
+    float, so 3967203771136678414 arrives as ...678400. `id` keeps every digit.
     """
-    # A real story has NO shortCode (posts/reels do) and a numeric id.
-    if item.get("shortCode") or item.get("type") in ("Sidecar",) \
-            or item.get("productType") in ("clips", "feed"):
+    if item.get("product_type") != "story":
         return None
-    story_id = item.get("id") or item.get("storyId") or item.get("mediaId")
-    if not story_id or not str(story_id).isdigit():
+    raw_id = str(item.get("id") or "")
+    story_id = raw_id.split("_", 1)[0]
+    if not story_id.isdigit():
         return None
 
-    handle = (
-        item.get("ownerUsername") or item.get("username") or item.get("owner_username") or ""
-    ).strip().lower().lstrip("@")
+    user = item.get("user") or {}
+    handle = (item.get("username") or user.get("username") or "").strip().lower().lstrip("@")
+    if not handle:
+        return None
 
-    posted_at: dt.datetime | None = None
-    ts = item.get("takenAt") or item.get("takenAtTimestamp") or item.get("timestamp")
-    if isinstance(ts, (int, float)) and ts > 1e9:
-        posted_at = dt.datetime.fromtimestamp(ts, tz=dt.timezone.utc)
-    elif isinstance(ts, str) and ts.strip():
-        try:
-            posted_at = dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        except ValueError:
-            posted_at = None
+    # Candidates come widest-first; the first is the full-resolution frame,
+    # which is what the detector should see.
+    candidates = (item.get("image_versions2") or {}).get("candidates") or []
+    image_url = next((c.get("url") for c in candidates if c.get("url")), None)
+    videos = item.get("video_versions") or []
+    video_url = next((v.get("url") for v in videos if v.get("url")), None)
 
     return {
-        "story_id": str(story_id),
+        "story_id": story_id,
         "handle": handle,
-        "posted_at": posted_at,
-        "video_url": item.get("videoUrl") or item.get("video_url"),
-        "image_url": (
-            item.get("displayUrl") or item.get("imageUrl")
-            or item.get("thumbnailUrl") or item.get("videoCoverUrl")
-        ),
+        "posted_at": _epoch(item.get("taken_at")),
+        # Instagram states the real expiry. Prefer it over posted_at + 24h:
+        # a story whose author extended it, or one captured near the boundary,
+        # gets the true countdown rather than our arithmetic.
+        "expires_at": _epoch(item.get("expiring_at")),
+        "video_url": video_url,
+        "image_url": image_url,
+        # A story that @-mentions the brand is a hit whether or not a can is in
+        # frame, and the tags say which scene it belongs to. Both were being
+        # written as empty lists while the payload carried them.
+        "mentions": [
+            (m.get("user") or {}).get("username", "").lower()
+            for m in (item.get("reel_mentions") or [])
+            if (m.get("user") or {}).get("username")
+        ],
+        "hashtags": [
+            (h.get("hashtag") or {}).get("name", "").lower()
+            for h in (item.get("story_hashtags") or [])
+            if (h.get("hashtag") or {}).get("name")
+        ],
     }
 
 
@@ -208,12 +235,13 @@ def run(brand_id: str, max_handles: int = DEFAULT_MAX_HANDLES, dry_run: bool = F
             # story should look like a story, not like a stray JPEG.
             "url": f"https://www.instagram.com/stories/{handle}/{story_id}/",
             "caption": "",
-            "hashtags": [],
-            "mentions": [],
+            "hashtags": norm["hashtags"],
+            "mentions": norm["mentions"],
             "postedAt": posted_at,
-            # Computed here — both prototypes promised this field in their
-            # header and neither one ever wrote it.
-            "expiresAt": posted_at + dt.timedelta(hours=STORY_TTL_HOURS),
+            # Instagram's own expiry when it gave us one, our arithmetic when
+            # it did not. Both prototypes promised this field and neither wrote
+            # it at all.
+            "expiresAt": norm["expires_at"] or (posted_at + dt.timedelta(hours=STORY_TTL_HOURS)),
             "contentType": "story",
             "videoUrl": norm["video_url"],
             "coverUrl": norm["image_url"],
