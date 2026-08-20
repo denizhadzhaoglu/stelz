@@ -2,7 +2,7 @@
 // Outreach (inline action on Creator detail), Reports, Discover, Moderator.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   PageShell, Card, Badge, Button, Img, Avatar, Input, Tabs, formatFollowers, PRODUCT_LINE_LABEL,
   CARD_GRID, HAIRLINE_GRID,
@@ -70,8 +70,17 @@ function saveCache(c: DashboardCache) {
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(c)) } catch { /* quota — ignore */ }
 }
 
+const TABS: Tab[] = ['briefing', 'feed', 'review', 'creators']
+
 export default function Home() {
-  const [tab, setTab] = useState<Tab>('briefing')
+  // The tab lives in the URL so a tab is linkable — "look at the creators
+  // list" used to be unshareable, and breadcrumbs pointing back at a tab had
+  // nothing to point at. Falls back to the dashboard on an unknown value.
+  const [params, setParams] = useSearchParams()
+  const tab = (TABS.includes(params.get('tab') as Tab) ? params.get('tab') : 'briefing') as Tab
+  const setTab = useCallback((t: Tab) => {
+    setParams(t === 'briefing' ? {} : { tab: t }, { replace: true })
+  }, [setParams])
   const [activeDetection, setActiveDetection] = useState<DetectionRow | null>(null)
 
   // Boot from cache if we have one — the dashboard is visible instantly,

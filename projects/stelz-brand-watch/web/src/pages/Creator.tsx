@@ -105,6 +105,10 @@ export default function Creator() {
   return (
     <PageShell
       title={`@${handle}`}
+      // The most-linked-to page in the app had no way back out of it, and a
+      // shared link has no history to go back through — hence crumbs.
+      crumbs={[{ label: 'Overzicht', to: '/' }, { label: 'Creators', to: '/?tab=creators' }]}
+      brandMark={false}
       subtitle={profile.platform === 'tiktok' ? 'TikTok creator' : 'Instagram creator'}
       actions={
         <a href={profile.externalUrl} target="_blank" rel="noreferrer">
