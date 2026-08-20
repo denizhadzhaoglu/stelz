@@ -10,8 +10,8 @@
 // hides those controls for read-only users rather than teasing a 403.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { PageShell, Card, Badge, Button, Avatar, CARD_GRID } from '../components/ui'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { PageShell, Card, Badge, Button, Avatar, Tabs, CARD_GRID } from '../components/ui'
 import { MediaTile } from '../components/MediaTile'
 import { DetectionDrawer } from '../components/DetectionDrawer'
 import { StackedDayBars, bucketByDay, type Series } from '../components/Chart'
@@ -21,12 +21,14 @@ import { fmtNum } from '../lib/format'
 import { dedupeByPost, imageUrlFor, parentPostKey, type DetectionRow } from '../lib/types'
 import { fetchDetections, fetchProjects, projectsAction, fetchCreatorProfiles, type Project } from '../lib/data'
 import {
-  fbStepCreators, fbStepStories, fbSubscribeStoriesState, fbFetchStories,
-  type CreatorProfile, type StoriesState,
+  fbStepCreators, fbStepStories, fbSubscribeStoriesState, fbFetchStories, fbFetchStoryPosts,
+  type CreatorProfile, type StoriesState, type StoryPost,
 } from '../lib/firestore'
 import { rollupProject, splitCreatorId } from '../lib/projects'
 import { useMembership } from '../lib/membership'
-import { useStoryPreview } from '../lib/devPreview'
+import { useStoryPostsPreview } from '../lib/devPreview'
+import { StoriesView } from './Stories'
+import { joinStories } from '../lib/storyStats'
 
 /** One row of cards at the widest grid step; the rest lives in the feed. */
 const SHOWN_POSTS = 10
@@ -34,13 +36,18 @@ const SHOWN_POSTS = 10
 export default function ProjectPage() {
   const { projectId = '' } = useParams()
   const { canWrite } = useMembership()
+  // Shareable tab, same pattern as Home. The Stories tab renders the /stories
+  // page's own component scoped to this roster rather than a second copy.
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') === 'stories' ? 'stories' : 'overzicht'
   const [active, setActive] = useState<DetectionRow | null>(null)
 
   const [project, setProject] = useState<Project | null>(null)
   const [rows, setRows] = useState<DetectionRow[]>([])
-  // Null = the stories query is unavailable (index not live); the strip then
-  // falls back to the detected-only rows above.
-  const [storyRows, setStoryRows] = useState<DetectionRow[] | null>(null)
+  // Stories come from POSTS joined with story DETECTIONS — see lib/storyStats.
+  // Null posts = that query is unavailable (index not live yet).
+  const [storyPosts, setStoryPosts] = useState<StoryPost[] | null>(null)
+  const [storyDetections, setStoryDetections] = useState<DetectionRow[]>([])
   const [profiles, setProfiles] = useState<Record<string, CreatorProfile>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -76,13 +83,16 @@ export default function ProjectPage() {
         // can in them. For a paid roster those are different numbers and the
         // second one is the one the client asks about.
         const members = new Set(p.creatorIds.map((cid) => splitCreatorId(cid).handle.toLowerCase()))
-        const st = await fbFetchStories(200).catch(() => null)
-        setStoryRows(st && dedupeByPost(st)
-          .filter((x) => x.is_false_positive !== true)
-          .filter((x) => members.has((x.creator_handle ?? '').toLowerCase())))
+        const [sp, sd] = await Promise.all([
+          fbFetchStoryPosts(2000).catch(() => null),
+          fbFetchStories(2000).catch(() => [] as DetectionRow[]),
+        ])
+        setStoryPosts(sp && sp.filter((x) => members.has(x.creatorHandle)))
+        setStoryDetections(dedupeByPost(sd))
       } else {
         setRows([])
-        setStoryRows([])
+        setStoryPosts([])
+        setStoryDetections([])
       }
     } catch (e) {
       setError((e as Error).message)
@@ -114,7 +124,11 @@ export default function ProjectPage() {
   const [storiesFetching, setStoriesFetching] = useState(false)
   const [storiesError, setStoriesError] = useState<string | null>(null)
   useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
-  const storyPreview = useStoryPreview()
+  const storyPreview = useStoryPostsPreview()
+  const storyRows = useMemo(
+    () => joinStories(storyPreview ?? storyPosts ?? [], storyPreview ? [] : storyDetections),
+    [storyPreview, storyPosts, storyDetections],
+  )
   const fetchStories = useCallback(async () => {
     setStoriesFetching(true)
     setStoriesError(null)
@@ -239,16 +253,37 @@ export default function ProjectPage() {
       {scanMsg && <Card className="p-4 mb-4 text-[12px] text-[var(--color-ink-muted)]">{scanMsg}</Card>}
 
       <StoriesStrip
-        rows={storyPreview ?? storyRows ?? rows}
+        rows={storyRows}
         state={storiesState}
-        onOpen={setActive}
+        onOpen={(r) => r.detection && setActive(r.detection)}
         onFetch={fetchStories}
         fetching={storiesFetching}
         canWrite={canWrite && !project.archived}
         error={storiesError}
         preview={storyPreview != null}
+        storiesHref={`/projects/${project.id}?tab=stories`}
       />
 
+      <Tabs
+        items={[
+          { id: 'overzicht', label: 'Overzicht', count: r.hits || undefined },
+          { id: 'stories', label: 'Stories', count: storyRows.length || undefined },
+        ]}
+        active={tab}
+        onChange={(id) => {
+          const next = new URLSearchParams(params)
+          if (id === 'overzicht') next.delete('tab')
+          else next.set('tab', id)
+          setParams(next, { replace: true })
+        }}
+      />
+
+      {tab === 'stories' ? (
+        <div className="mt-8">
+          <StoriesView projectId={project.id} params={params} setParams={setParams} embedded />
+        </div>
+      ) : (
+      <div className="mt-8">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <Kpi label="Posts gevonden" value={fmtNum(r.hits)} />
         <Kpi label="Creators" value={fmtNum(project.creatorIds.length)} />
@@ -384,6 +419,8 @@ export default function ProjectPage() {
             </div>
           )}
         </Card>
+      )}
+      </div>
       )}
 
       <DetectionDrawer

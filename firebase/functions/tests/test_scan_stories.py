@@ -58,12 +58,32 @@ from handlers import scan_stories  # noqa: E402
 
 # ── In-memory doubles ───────────────────────────────────────────────────
 
+class FakeRef:
+    """Creator reference that can actually be written to.
+
+    It used to be a bare SimpleNamespace with only `.path`, so _enrich_creator's
+    `.set()` raised AttributeError straight into its own try/except and the
+    tests asserted nothing about enrichment while appearing to cover it.
+    """
+
+    def __init__(self, doc_id, store):
+        self.path = f"creators/{doc_id}"
+        self._store, self._key = store, doc_id
+        self.writes: list[dict] = []
+
+    def set(self, data, merge=False):
+        self.writes.append(data)
+        cur = dict(self._store.get(self._key) or {}) if merge else {}
+        cur.update(data)
+        self._store[self._key] = cur
+
+
 class FakeSnap:
-    def __init__(self, doc_id, data, exists=True):
+    def __init__(self, doc_id, data, exists=True, store=None):
         self.id = doc_id
         self._d = dict(data or {})
         self.exists = exists
-        self.reference = types.SimpleNamespace(path=f"creators/{doc_id}")
+        self.reference = FakeRef(doc_id, store if store is not None else {})
 
     def to_dict(self):
         return dict(self._d)
@@ -105,7 +125,16 @@ class FakeCol:
         return self
 
     def stream(self):
-        return [FakeSnap(k, v) for k, v in self.store.items()]
+        # One snapshot object per key, reused across calls, so a test can read
+        # back what _enrich_creator wrote to a creator's reference.
+        self._snaps = getattr(self, "_snaps", {})
+        out = []
+        for k, v in self.store.items():
+            snap = self._snaps.get(k)
+            if snap is None:
+                snap = self._snaps[k] = FakeSnap(k, v, store=self.store)
+            out.append(snap)
+        return out
 
 
 class StoriesBase(unittest.TestCase):
@@ -180,10 +209,40 @@ STORY = {
 VIDEO_STORY = {
     **STORY,
     "media_type": 2,
+    "video_duration": 14.232,
     "video_versions": [
         {"url": "https://cdn/story-720.mp4", "width": 720, "height": 1280},
         {"url": "https://cdn/story-360.mp4", "width": 360, "height": 640},
     ],
+}
+
+# Everything the payload carries that used to be discarded. Field names and
+# nesting copied from the live response; the poll numbers are the shape of the
+# real ones (one story in that run had 18,412 votes).
+RICH_STORY = {
+    **STORY,
+    "is_paid_partnership": True,
+    "story_polls": [{"poll_sticker": {
+        "question": "WAT MOETEN WIJ BESTELLEN?",
+        "total_votes": 18412,
+        "tallies": [{"count": 11561, "text": "Stelz"}, {"count": 6851, "text": "Iets anders"}],
+    }}],
+    "story_link_stickers": [{"story_link": {
+        "display_url": "drinkstelz.com/nl",
+        "url": "https://l.instagram.com/?u=https%3A%2F%2Fdrinkstelz.com",
+        "link_type": "web",
+    }}],
+    "story_music_stickers": [{"music_asset_info": {
+        "title": "Bette Davis Eyes (Instrumental)",
+        "display_artist": "The Hit Crew",
+        "audio_asset_id": "245185149714723",
+    }}],
+    "user": {
+        "username": "anna",
+        "full_name": "Anna de Vries",
+        "profile_pic_url": "https://cdn/anna.jpg",
+        "is_verified": True,
+    },
 }
 
 
@@ -391,6 +450,139 @@ class TestEmptyIsNormal(StoriesBase):
         self.assertEqual(out["storiesFound"], 0)
         self.assertNotIn("skipped", out)
         self.assertEqual(self.runs_col.added[0]["status"], "ok")
+
+
+class TestPublicMetrics(StoriesBase):
+    """The numbers that DO exist, and the one that does not.
+
+    Instagram shows story views to the account owner only — every item in the
+    live run carried `can_see_insights_as_brand: false`, and there is no view,
+    viewer, reach or impression field anywhere in the payload. So the honest
+    set is: poll votes (a vote requires a viewer, so it is a verified floor),
+    link stickers, music, mentions, hashtags, duration.
+    """
+
+    def doc(self):
+        return self.posts["instagram_story31415926535"]
+
+    def test_views_are_null_not_zero(self):
+        # Zero is a claim — "nobody watched" — and it would be read straight
+        # into a client report. Unknown is the truth.
+        self.apify.run_sync.return_value = [STORY]
+        self.run_stories()
+        self.assertIsNone(self.doc()["viewsCount"])
+
+    def test_poll_votes_use_instagrams_stated_total(self):
+        self.apify.run_sync.return_value = [RICH_STORY]
+        self.run_stories()
+        self.assertEqual(self.doc()["pollVotes"], 18412)
+        self.assertEqual(self.doc()["pollCount"], 1)
+        self.assertEqual(self.doc()["pollQuestions"], ["WAT MOETEN WIJ BESTELLEN?"])
+
+    def test_poll_votes_fall_back_to_summing_tallies(self):
+        item = {**RICH_STORY}
+        item["story_polls"] = [{"poll_sticker": {
+            "tallies": [{"count": 10}, {"count": 5}],
+        }}]
+        self.apify.run_sync.return_value = [item]
+        self.run_stories()
+        self.assertEqual(self.doc()["pollVotes"], 15)
+        # A poll with no question text is still a poll; it must not vanish.
+        self.assertEqual(self.doc()["pollCount"], 1)
+        self.assertEqual(self.doc()["pollQuestions"], [])
+
+    def test_no_polls_is_zero_not_missing(self):
+        self.apify.run_sync.return_value = [STORY]
+        self.run_stories()
+        self.assertEqual(self.doc()["pollVotes"], 0)
+
+    def test_link_stickers_music_and_paid_label(self):
+        self.apify.run_sync.return_value = [RICH_STORY]
+        self.run_stories()
+        d = self.doc()
+        self.assertEqual(d["linkUrls"], ["drinkstelz.com/nl"])
+        self.assertEqual(d["music"]["title"], "Bette Davis Eyes (Instrumental)")
+        self.assertEqual(d["music"]["artist"], "The Hit Crew")
+        self.assertTrue(d["isPaidPartnership"])
+
+    def test_media_type_and_duration(self):
+        self.apify.run_sync.return_value = [VIDEO_STORY]
+        self.run_stories()
+        self.assertEqual(self.doc()["mediaType"], "video")
+        self.assertAlmostEqual(self.doc()["videoDuration"], 14.232)
+
+    def test_media_type_reads_the_label_not_the_video_url(self):
+        # The vendor sometimes cannot resolve a stream; the item is still a
+        # video story and mislabelling it as a photo would misreport the mix.
+        item = {k: v for k, v in VIDEO_STORY.items() if k != "video_versions"}
+        self.apify.run_sync.return_value = [item]
+        self.run_stories()
+        self.assertEqual(self.doc()["mediaType"], "video")
+
+
+class TestCreatorEnrichment(StoriesBase):
+    """Names and avatars ride along free; refresh_profiles stays authoritative."""
+
+    def test_fills_blank_profile_fields(self):
+        self.apify.run_sync.return_value = [RICH_STORY]
+        self.run_stories()
+        c = self.creators["instagram_anna"]
+        self.assertEqual(c["fullName"], "Anna de Vries")
+        self.assertEqual(c["avatarUrl"], "https://cdn/anna.jpg")
+        self.assertTrue(c["verifiedAccount"])
+
+    def test_never_overwrites_what_is_already_there(self):
+        # refresh_profiles scrapes these properly. A story payload must not be
+        # able to clobber a better value — the same backfill-only rule that
+        # protects fullName in handlers/projects.py.
+        self.creators["instagram_anna"].update(
+            {"fullName": "Anna V.", "avatarUrl": "https://cdn/better.jpg"},
+        )
+        self.apify.run_sync.return_value = [RICH_STORY]
+        self.run_stories()
+        c = self.creators["instagram_anna"]
+        self.assertEqual(c["fullName"], "Anna V.")
+        self.assertEqual(c["avatarUrl"], "https://cdn/better.jpg")
+
+    def test_enrichment_failure_cannot_fail_the_sweep(self):
+        # The write has to actually blow up, or this asserts nothing: an
+        # earlier version of these doubles had no .set at all, so enrichment
+        # raised AttributeError into its own except and the tests looked green
+        # while covering none of it.
+        with mock.patch.object(FakeRef, "set", side_effect=RuntimeError("firestore down")):
+            self.apify.run_sync.return_value = [RICH_STORY]
+            out = self.run_stories()
+        self.assertEqual(out["storiesFound"], 1)
+        self.assertNotIn("fullName", self.creators["instagram_anna"])
+
+
+class TestReanalysisIsSkipped(StoriesBase):
+    def test_a_story_already_captured_is_not_queued_again(self):
+        # A story lives 24h and the sweep runs every 6h, so the same story
+        # returns up to four times. Re-analysing costs no Gemini (the image
+        # hash cache absorbs that) but does cost four fetches and four Storage
+        # writes where one would do.
+        self.apify.run_sync.return_value = [STORY]
+        first = self.run_stories()
+        self.assertEqual(first["imagesEnqueued"], 1)
+        self.assertEqual(first["alreadyHad"], 0)
+
+        second = self.run_stories()
+        self.assertEqual(second["storiesFound"], 1)
+        self.assertEqual(second["alreadyHad"], 1)
+        self.assertEqual(second["imagesEnqueued"], 0)
+
+    def test_metadata_still_refreshes_on_a_second_sweep(self):
+        # Poll counts climb while a story is live, so the doc is rewritten even
+        # though the image is not re-analysed.
+        self.apify.run_sync.return_value = [RICH_STORY]
+        self.run_stories()
+        grown = {**RICH_STORY}
+        grown["story_polls"] = [{"poll_sticker": {"question": "WAT MOETEN WIJ BESTELLEN?",
+                                                  "total_votes": 20000, "tallies": []}}]
+        self.apify.run_sync.return_value = [grown]
+        self.run_stories()
+        self.assertEqual(self.posts["instagram_story31415926535"]["pollVotes"], 20000)
 
 
 class TestLastRunStamp(StoriesBase):

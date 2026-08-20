@@ -21,8 +21,15 @@ export function storyExpiry(
   now = Date.now(),
 ): StoryExpiry | null {
   if (!isStory(d)) return null
-  if (!d.expires_at) return { expired: false, hoursLeft: null, label: 'Story' }
-  const t = new Date(d.expires_at).getTime()
+  return expiryAt(d.expires_at, now)
+}
+
+/** The countdown itself, on a bare timestamp. One implementation, so the strip,
+ *  the feed card and the stories page cannot drift apart on what "verlopen"
+ *  means or on where the hour/minute boundary sits. */
+export function expiryAt(expiresAt: string | null | undefined, now = Date.now()): StoryExpiry {
+  if (!expiresAt) return { expired: false, hoursLeft: null, label: 'Story' }
+  const t = new Date(expiresAt).getTime()
   if (Number.isNaN(t)) return { expired: false, hoursLeft: null, label: 'Story' }
 
   const msLeft = t - now
@@ -43,17 +50,19 @@ export function storyChip(e: StoryExpiry): string {
   return e.label.replace(/^Story · /, '').replace(/^Story$/, '—')
 }
 
-type StoryRow = Pick<DetectionRow, 'content_type' | 'expires_at' | 'posted_at'>
+/** Anything with a story's two timestamps — a StoryRow from storyStats today,
+ *  and whatever else needs the same split tomorrow. */
+type Expiring = { expiresAt: string | null; postedAt: string | null }
 
 /**
- * Split scraped stories into what is still live and what has already gone.
+ * Split captured stories into what is still live and what has already gone.
  *
  * Both halves are kept and both are shown. An expired story is not stale data:
  * it is the only surviving copy of something Instagram has already deleted,
- * which is the entire reason for scraping stories at all. Live ones lead
+ * which is the entire reason for capturing stories at all. Live ones lead
  * because they are the ones you can still open on Instagram and react to.
  */
-export function storyFeed<T extends StoryRow>(rows: T[], now = Date.now()): {
+export function splitByExpiry<T extends Expiring>(rows: T[], now = Date.now()): {
   active: T[]
   expired: T[]
   all: T[]
@@ -61,12 +70,10 @@ export function storyFeed<T extends StoryRow>(rows: T[], now = Date.now()): {
   const active: T[] = []
   const expired: T[] = []
   for (const r of rows) {
-    const e = storyExpiry(r, now)
-    if (!e) continue
-    ;(e.expired ? expired : active).push(r)
+    (expiryAt(r.expiresAt, now).expired ? expired : active).push(r)
   }
   const newestFirst = (a: T, b: T) =>
-    (b.posted_at ? Date.parse(b.posted_at) : 0) - (a.posted_at ? Date.parse(a.posted_at) : 0)
+    (b.postedAt ? Date.parse(b.postedAt) : 0) - (a.postedAt ? Date.parse(a.postedAt) : 0)
   active.sort(newestFirst)
   expired.sort(newestFirst)
   return { active, expired, all: [...active, ...expired] }

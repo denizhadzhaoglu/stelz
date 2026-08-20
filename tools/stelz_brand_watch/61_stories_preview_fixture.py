@@ -37,7 +37,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "firebase" / "functions"))
 from handlers.scan_stories import STORIES_ACTOR, STORY_TTL_HOURS, _normalize_item  # noqa: E402
 
-OUT = ROOT / "projects" / "stelz-brand-watch" / "web" / "public" / "preview-stories.json"
+PUBLIC = ROOT / "projects" / "stelz-brand-watch" / "web" / "public"
+OUT = PUBLIC / "preview-stories.json"          # DetectionRow[] — the strip
+OUT_POSTS = PUBLIC / "preview-story-posts.json"  # StoryPost[] — the /stories page
 APIFY = "https://api.apify.com/v2"
 
 
@@ -138,6 +140,40 @@ def to_row(norm: dict, idx: int) -> dict:
     }
 
 
+def to_post(norm: dict) -> dict:
+    """One normalized story -> one StoryPost, matching lib/firestore.ts.
+
+    The /stories page is driven by POSTS, not detections, so the preview has to
+    supply posts or it would exercise a different code path than production.
+    No detections accompany them, which is correct: nothing has analysed these,
+    and the page renders every row as "nog niet geanalyseerd".
+    """
+    posted = norm["posted_at"] or dt.datetime.now(dt.timezone.utc)
+    expires = norm.get("expires_at") or posted + dt.timedelta(hours=STORY_TTL_HOURS)
+    story_id = norm["story_id"]
+    return {
+        "postId": f"instagram_story{story_id}",
+        "creatorHandle": norm["handle"],
+        "creatorTier": "tier_2",
+        "url": f"https://www.instagram.com/stories/{norm['handle']}/{story_id}/",
+        "coverUrl": norm["image_url"],
+        "videoUrl": norm["video_url"],
+        "mediaType": norm["media_type"],
+        "videoDuration": norm["video_duration"],
+        "postedAt": posted.isoformat(),
+        "postedAtEstimated": norm["posted_at"] is None,
+        "expiresAt": expires.isoformat(),
+        "hashtags": norm["hashtags"],
+        "mentions": norm["mentions"],
+        "pollVotes": norm["poll_votes"],
+        "pollCount": norm["poll_count"],
+        "pollQuestions": norm["poll_questions"],
+        "linkUrls": norm["link_urls"],
+        "music": norm["music"],
+        "isPaidPartnership": norm["is_paid_partnership"],
+    }
+
+
 def main() -> int:
     tok = token()
     if not tok:
@@ -152,13 +188,14 @@ def main() -> int:
         return 1
     print(f"  raw items: {len(items)}")
 
-    rows, leaked = [], 0
+    rows, posts, leaked = [], [], 0
     for i, item in enumerate(items):
         norm = _normalize_item(item)
         if norm is None:
             leaked += 1
             continue
         rows.append(to_row(norm, i))
+        posts.append(to_post(norm))
     print(f"  stories after leak filter: {len(rows)}   rejected as non-story: {leaked}")
 
     if not rows:
@@ -168,8 +205,12 @@ def main() -> int:
     handles = sorted({r["creator_handle"] for r in rows})
     print(f"  from {len(handles)} accounts: {', '.join(handles)}")
     OUT.write_text(json.dumps(rows, indent=1))
-    print(f"\n  wrote {OUT.relative_to(ROOT)}")
-    print("  open http://localhost:5180/?preview=stories")
+    OUT_POSTS.write_text(json.dumps(posts, indent=1))
+    polls = sum(p["pollVotes"] for p in posts)
+    print(f"\n  wrote {OUT.relative_to(ROOT)} and {OUT_POSTS.relative_to(ROOT)}")
+    print(f"  {sum(1 for p in posts if p['mediaType'] == 'video')} video · "
+          f"{polls:,} poll votes · {sum(len(p['mentions']) for p in posts)} mentions")
+    print("  open http://localhost:5180/stories?preview=stories")
     return 0
 
 

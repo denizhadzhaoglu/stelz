@@ -59,3 +59,4 @@ firebase/web-dist/
 # so a committed copy is a snapshot of broken images. Regenerate with
 # tools/stelz_brand_watch/61_stories_preview_fixture.py
 projects/stelz-brand-watch/web/public/preview-stories.json
+projects/stelz-brand-watch/web/public/preview-story-posts.json

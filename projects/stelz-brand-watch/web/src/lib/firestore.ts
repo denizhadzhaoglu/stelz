@@ -161,17 +161,91 @@ export async function fbFetchDetections({
 }
 
 /**
- * Stories, hits and misses alike.
+ * One captured story, straight from the posts collection.
+ *
+ * THIS is the authoritative list of "all stories", not the detections below.
+ * detect_image writes no detection document when the image fetch fails, and
+ * for stories that path is common rather than exceptional — the CDN URLs are
+ * short-lived signed links. Building the overview from detections would drop
+ * exactly the story we failed to analyse, silently, from a page that promises
+ * to show everything.
+ */
+export type StoryPost = {
+  postId: string
+  creatorHandle: string
+  creatorTier: string | null
+  url: string | null
+  coverUrl: string | null
+  videoUrl: string | null
+  mediaType: 'image' | 'video'
+  videoDuration: number | null
+  postedAt: string | null
+  postedAtEstimated: boolean
+  expiresAt: string | null
+  hashtags: string[]
+  mentions: string[]
+  /** Public and exact. A vote needs a viewer, so this is a floor on views. */
+  pollVotes: number
+  pollCount: number
+  pollQuestions: string[]
+  linkUrls: string[]
+  music: { title: string | null; artist: string | null } | null
+  isPaidPartnership: boolean
+}
+
+function mapStoryPost(d: QueryDocumentSnapshot<DocumentData>): StoryPost {
+  const x = d.data()
+  const music = x.music as Record<string, unknown> | null | undefined
+  return {
+    postId: d.id,
+    creatorHandle: ((x.creatorHandle as string) ?? '').toLowerCase(),
+    creatorTier: (x.creatorTier as string | null) ?? null,
+    url: (x.url as string | null) ?? null,
+    coverUrl: (x.coverUrl as string | null) ?? null,
+    videoUrl: (x.videoUrl as string | null) ?? null,
+    mediaType: x.mediaType === 'video' ? 'video' : 'image',
+    videoDuration: typeof x.videoDuration === 'number' ? x.videoDuration : null,
+    postedAt: tsToIso(x.postedAt),
+    postedAtEstimated: x.postedAtEstimated === true,
+    expiresAt: tsToIso(x.expiresAt),
+    hashtags: (x.hashtags as string[]) ?? [],
+    mentions: (x.mentions as string[]) ?? [],
+    pollVotes: typeof x.pollVotes === 'number' ? x.pollVotes : 0,
+    pollCount: typeof x.pollCount === 'number' ? x.pollCount : 0,
+    pollQuestions: (x.pollQuestions as string[]) ?? [],
+    linkUrls: (x.linkUrls as string[]) ?? [],
+    music: music
+      ? { title: (music.title as string) ?? null, artist: (music.artist as string) ?? null }
+      : null,
+    isPaidPartnership: x.isPaidPartnership === true,
+  }
+}
+
+/** Needs the posts contentType+postedAt index. Throws until it is live; the
+ *  page catches and says so rather than rendering an empty overview. */
+export async function fbFetchStoryPosts(limit = 2000, brandId = BRAND_ID): Promise<StoryPost[]> {
+  const col = collection(fbDb, 'brands', brandId, 'posts')
+  const snap = await getDocs(query(
+    col,
+    where('contentType', '==', 'story'),
+    orderBy('postedAt', 'desc'),
+    fsLimit(limit),
+  ))
+  return snap.docs.map(mapStoryPost)
+}
+
+/**
+ * Story DETECTIONS — the Stëlz verdicts, hits and misses alike.
  *
  * Its own query on purpose. Every other detection fetch defaults to
- * `detected == true`, which is right for the feed and wrong here: the question
- * a stories panel answers first is "did we capture the roster's stories at
- * all", and a strip that silently drops the ones without a can in them cannot
- * distinguish "we scraped forty and six had Stëlz" from "we scraped six".
+ * `detected == true`, which is right for the feed and wrong here: a strip that
+ * silently drops the stories without a can in them cannot distinguish "we
+ * scraped forty and six had Stëlz" from "we scraped six".
  *
- * Needs the contentType+postedAt composite index. Until that index is live the
- * query throws; callers fall back to filtering rows they already hold rather
- * than showing an error, so the panel degrades to hits-only instead of blank.
+ * Needs the detections contentType+postedAt composite index. Until that index
+ * is live the query throws; callers fall back to filtering rows they already
+ * hold rather than showing an error, so the panel degrades to hits-only
+ * instead of blank.
  */
 export async function fbFetchStories(limit = 200, brandId = BRAND_ID): Promise<DetectionRow[]> {
   const col = collection(fbDb, 'brands', brandId, 'detections')

@@ -31,14 +31,15 @@ import {
   fbBootstrapBrand, fbStepHashtags, fbStepCreators, fbStepSrs, fbStepSentiment,
   fbStepSubcultures, fbStepProfiles,
   fbFetchPipelineCounts, fbSubscribeScanState, fbStepStories,
-  fbSubscribeStoriesState, fbFetchStories,
-  type ScanState, type ScanStepKey, type StoriesState,
+  fbSubscribeStoriesState, fbFetchStories, fbFetchStoryPosts,
+  type ScanState, type ScanStepKey, type StoriesState, type StoryPost,
 } from '../lib/firestore'
 import {
   pickWorthALook, biggestFanToday, detectSpike, countNewSince,
 } from '../lib/score'
 import { useMembership, ReadOnlyNotice } from '../lib/membership'
-import { useStoryPreview } from '../lib/devPreview'
+import { useStoryPostsPreview } from '../lib/devPreview'
+import { joinStories } from '../lib/storyStats'
 
 type Tab = 'briefing' | 'feed' | 'review' | 'creators'
 type PipelineCounts = { creators: number; posts: number; detections: number; detectionsHit: number; discoveryQueue: number }
@@ -114,25 +115,29 @@ export default function Home() {
   useEffect(() => { markSeen() }, [])
   const { canWrite } = useMembership()
 
-  // Stories are fetched by their own query because the main one is
-  // detected-only. Null means "that query is unavailable" (index not live
-  // yet) and the strip falls back to the hits it already has — see
-  // fbFetchStories.
-  const [storyRows, setStoryRows] = useState<DetectionRow[] | null>(null)
+  // Stories come from POSTS (the authoritative list — a story we could not
+  // analyse has no detection document at all) joined with story DETECTIONS
+  // (the Stëlz verdict). Both are separate queries because the main detection
+  // fetch is detected-only. Null means the query is unavailable, e.g. the
+  // index is not live yet.
+  const [storyPosts, setStoryPosts] = useState<StoryPost[] | null>(null)
+  const [storyDetections, setStoryDetections] = useState<DetectionRow[]>([])
 
   const refreshData = useCallback(async () => {
     setRefreshing(true)
     try {
-      const [d, r, c, s] = await Promise.all([
+      const [d, r, c, s, sp] = await Promise.all([
         fetchDetections({ limit: DETECTION_FETCH_LIMIT }).catch(() => [] as DetectionRow[]),
         fetchTopResonance(100).catch(() => [] as ResonanceRow[]),
         fbFetchPipelineCounts().catch(() => null),
-        fbFetchStories(200).catch(() => null),
+        fbFetchStories(2000).catch(() => [] as DetectionRow[]),
+        fbFetchStoryPosts(2000).catch(() => null),
       ])
       setDetections(d)
       setResonance(r)
       setCounts(c)
-      setStoryRows(s && dedupeByPost(s).filter((x) => x.is_false_positive !== true))
+      setStoryDetections(dedupeByPost(s))
+      setStoryPosts(sp)
       saveCache({ savedAt: Date.now(), detections: d, resonance: r, counts: c })
     } catch (e) {
       setError((e as Error).message)
@@ -188,7 +193,13 @@ export default function Home() {
   const [storiesError, setStoriesError] = useState<string | null>(null)
   useEffect(() => fbSubscribeStoriesState(setStoriesState), [])
   // Dev server only; compiled out of production builds. See lib/devPreview.
-  const storyPreview = useStoryPreview()
+  const storyPreview = useStoryPostsPreview()
+  // One join, used by the strip here and by the /stories page, so the two can
+  // never report different totals for the same set.
+  const storyRows = useMemo(
+    () => joinStories(storyPreview ?? storyPosts ?? [], storyPreview ? [] : storyDetections),
+    [storyPreview, storyPosts, storyDetections],
+  )
   const fetchStories = useCallback(async () => {
     setStoriesFetching(true)
     setStoriesError(null)
@@ -280,9 +291,9 @@ export default function Home() {
               tomorrow; a story is gone in 24 hours, so it does not get filed
               behind a tab someone has to remember to open. */}
           <StoriesStrip
-            rows={storyPreview ?? storyRows ?? uniqueDetections}
+            rows={storyRows}
             state={storiesState}
-            onOpen={setActiveDetection}
+            onOpen={(r) => r.detection && setActiveDetection(r.detection)}
             onFetch={fetchStories}
             fetching={storiesFetching}
             canWrite={canWrite}

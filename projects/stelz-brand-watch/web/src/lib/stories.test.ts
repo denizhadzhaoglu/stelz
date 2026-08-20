@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isStory, storyChip, storyExpiry, storyFeed } from './stories'
+import { isStory, splitByExpiry, storyChip, storyExpiry } from './stories'
 
 const NOW = Date.parse('2026-08-20T12:00:00Z')
 const story = (expires: string | null) => ({ content_type: 'story' as const, expires_at: expires })
@@ -55,20 +55,14 @@ describe('storyChip', () => {
   })
 })
 
-describe('storyFeed', () => {
-  const row = (expires: string, posted: string, type = 'story') =>
-    ({ content_type: type as 'story', expires_at: expires, posted_at: posted })
-
-  it('ignores everything that is not a story', () => {
-    const out = storyFeed([row('2026-08-20T19:00:00Z', '2026-08-19T19:00:00Z', 'image')], NOW)
-    expect(out.all).toEqual([])
-  })
+describe('splitByExpiry', () => {
+  const row = (expiresAt: string | null, postedAt: string | null) => ({ expiresAt, postedAt })
 
   it('puts live stories first, newest of each half at the front', () => {
     const oldLive = row('2026-08-20T14:00:00Z', '2026-08-19T14:00:00Z')
     const newLive = row('2026-08-20T20:00:00Z', '2026-08-19T20:00:00Z')
     const gone = row('2026-08-20T08:00:00Z', '2026-08-19T08:00:00Z')
-    const out = storyFeed([gone, oldLive, newLive], NOW)
+    const out = splitByExpiry([gone, oldLive, newLive], NOW)
     expect(out.active).toEqual([newLive, oldLive])
     expect(out.expired).toEqual([gone])
     // Expired stories stay in the list: they are the only surviving copy of
@@ -76,9 +70,14 @@ describe('storyFeed', () => {
     expect(out.all).toEqual([newLive, oldLive, gone])
   })
 
-  it('sorts a missing posted_at to the back rather than dropping it', () => {
+  it('treats a story with no recorded expiry as live rather than dropping it', () => {
+    const undated = row(null, '2026-08-19T20:00:00Z')
+    expect(splitByExpiry([undated], NOW).active).toEqual([undated])
+  })
+
+  it('sorts a missing postedAt to the back rather than dropping it', () => {
     const dated = row('2026-08-20T20:00:00Z', '2026-08-19T20:00:00Z')
-    const undated = { content_type: 'story' as const, expires_at: '2026-08-20T20:00:00Z', posted_at: null }
-    expect(storyFeed([undated, dated], NOW).active).toEqual([dated, undated])
+    const undated = row('2026-08-20T20:00:00Z', null)
+    expect(splitByExpiry([undated, dated], NOW).active).toEqual([dated, undated])
   })
 })

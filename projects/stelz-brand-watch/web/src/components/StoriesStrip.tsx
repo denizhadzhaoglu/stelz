@@ -17,9 +17,9 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from './ui'
 import { MediaTile } from './MediaTile'
-import { imageUrlFor, type DetectionRow } from '../lib/types'
-import { storyChip, storyExpiry, storyFeed } from '../lib/stories'
-import { timeAgo } from '../lib/format'
+import { expiryAt, splitByExpiry, storyChip } from '../lib/stories'
+import { isStelzStory, storyImage, VERDICT_LABEL, type StoryRow } from '../lib/storyStats'
+import { compactNum, timeAgo } from '../lib/format'
 import type { StoriesState } from '../lib/firestore'
 
 /** How many fit before the row asks you to scroll. */
@@ -34,10 +34,12 @@ export function StoriesStrip({
   canWrite = true,
   error = null,
   preview = false,
+  storiesHref = '/stories',
 }: {
-  rows: DetectionRow[]
+  rows: StoryRow[]
   state: StoriesState | null
-  onOpen: (d: DetectionRow) => void
+  /** Optional: the drawer only opens for a story that was actually analysed. */
+  onOpen?: (row: StoryRow) => void
   onFetch?: () => void
   fetching?: boolean
   /** Read-only viewers see the strip but not the fetch button. */
@@ -46,10 +48,13 @@ export function StoriesStrip({
   error?: string | null
   /** Rows came from a local fixture, not Firestore. Must be stated, not implied. */
   preview?: boolean
+  /** Where "alle stories" goes. A campaign passes its own scoped link so the
+   *  full page opens on the same set the strip was showing. */
+  storiesHref?: string
 }) {
   const [onlyHits, setOnlyHits] = useState(false)
-  const feed = storyFeed(rows)
-  const hits = feed.all.filter((d) => d.detected === true)
+  const feed = splitByExpiry(rows)
+  const hits = feed.all.filter((r) => isStelzStory(r.verdict))
   const shown = (onlyHits ? hits : feed.all).slice(0, SHOWN)
 
   return (
@@ -83,6 +88,9 @@ export function StoriesStrip({
 
         <span className="ml-auto flex items-center gap-3 text-[11px] text-[var(--color-ink-subtle)]">
           {!preview && <LastRun state={state} />}
+          <Link to={storiesHref} className="hover:text-[var(--color-ink)] hover:underline">
+            alle stories →
+          </Link>
           {canWrite && onFetch && (
             <button
               onClick={onFetch}
@@ -118,8 +126,8 @@ export function StoriesStrip({
         // rest of the page down as the roster grows, and stories are read in
         // sequence anyway — that is the format's own grammar.
         <div className="flex gap-2 overflow-x-auto px-4 py-3">
-          {shown.map((d) => (
-            <StoryTile key={d.detection_id} d={d} onOpen={() => onOpen(d)} />
+          {shown.map((r) => (
+            <StoryTile key={r.postId} row={r} onOpen={onOpen ? () => onOpen(r) : undefined} />
           ))}
           {(onlyHits ? hits : feed.all).length > SHOWN && (
             <div className="shrink-0 w-[112px] flex items-center justify-center text-[11px] text-[var(--color-ink-subtle)] border border-dashed border-[var(--color-border)]">
@@ -132,38 +140,53 @@ export function StoriesStrip({
   )
 }
 
-function StoryTile({ d, onOpen }: { d: DetectionRow; onOpen: () => void }) {
-  const e = storyExpiry(d)
-  const hit = d.detected === true
-  return (
-    <button
-      onClick={onOpen}
-      title={`@${d.creator_handle}`}
-      className={`shrink-0 w-[112px] text-left border transition-colors ${
-        hit
-          ? 'border-[var(--color-good)] hover:border-[var(--color-ink)]'
-          : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)]'
-      } ${e?.expired ? 'opacity-70 hover:opacity-100' : ''}`}
-    >
-      <MediaTile src={imageUrlFor(d)} size="story" alt={`Story van @${d.creator_handle}`}>
+function StoryTile({ row, onOpen }: { row: StoryRow; onOpen?: () => void }) {
+  const e = expiryAt(row.expiresAt)
+  const hit = isStelzStory(row.verdict)
+  const cls = `shrink-0 w-[112px] text-left border transition-colors ${
+    hit
+      ? 'border-[var(--color-good)] hover:border-[var(--color-ink)]'
+      : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)]'
+  } ${e.expired ? 'opacity-70 hover:opacity-100' : ''}`
+
+  const body = (
+    <>
+      <MediaTile src={storyImage(row)} size="story" alt={`Story van @${row.creatorHandle}`}>
         <span
           className={`absolute top-1 left-1 text-[9px] uppercase tracking-wider px-1.5 py-0.5 text-white ${
-            e?.expired ? 'bg-[var(--color-ink-muted)]' : 'bg-[var(--color-accent)]'
+            e.expired ? 'bg-[var(--color-ink-muted)]' : 'bg-[var(--color-accent)]'
           }`}
         >
-          {e ? storyChip(e) : '—'}
+          {storyChip(e)}
         </span>
         {hit && (
-          <span className="absolute top-1 right-1 text-[9px] px-1 py-0.5 bg-[var(--color-good)] text-white">
+          <span
+            className="absolute top-1 right-1 text-[9px] px-1 py-0.5 bg-[var(--color-good)] text-white"
+            title={VERDICT_LABEL[row.verdict]}
+          >
             Stëlz
           </span>
         )}
       </MediaTile>
-      <span className="block px-1.5 py-1 text-[10px] truncate text-[var(--color-ink-muted)]">
-        @{d.creator_handle}
+      <span className="block px-1.5 pt-1 text-[10px] truncate text-[var(--color-ink-muted)]">
+        @{row.creatorHandle}
       </span>
-    </button>
+      {row.pollVotes > 0 && (
+        <span className="block px-1.5 pb-1 text-[9px] truncate text-[var(--color-ink-subtle)]">
+          {compactNum(row.pollVotes)} stemmen
+        </span>
+      )}
+    </>
   )
+
+  // A story with no detection has nothing for the drawer to show, so it opens
+  // on Instagram instead of into an empty panel.
+  if (onOpen && row.detection) {
+    return <button onClick={onOpen} title={`@${row.creatorHandle}`} className={cls}>{body}</button>
+  }
+  return row.url
+    ? <a href={row.url} target="_blank" rel="noreferrer" title={`@${row.creatorHandle}`} className={cls}>{body}</a>
+    : <div className={cls}>{body}</div>
 }
 
 function LastRun({ state }: { state: StoriesState | null }) {

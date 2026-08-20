@@ -120,7 +120,104 @@ def _normalize_item(item: dict) -> dict | None:
             for h in (item.get("story_hashtags") or [])
             if (h.get("hashtag") or {}).get("name")
         ],
+        # 1 = photo, 2 = video. Recorded rather than inferred from video_url,
+        # which is absent whenever the vendor could not resolve the stream.
+        "media_type": "video" if item.get("media_type") == 2 else "image",
+        "video_duration": item.get("video_duration"),
+        # Instagram will not tell a third party how many people saw a story
+        # (`can_see_insights_as_brand` is false on every item). Poll tallies,
+        # however, ARE public, and they are the only real engagement number
+        # obtainable here — 13,442 votes on one of these.
+        "poll_votes": _poll_votes(item),
+        "poll_count": len(item.get("story_polls") or []),
+        "poll_questions": [
+            q for q in (
+                ((p.get("poll_sticker") or {}).get("question") or "").strip()
+                for p in (item.get("story_polls") or [])
+            ) if q
+        ],
+        # Swipe-up targets. A story linking to drinkstelz.com is a conversion,
+        # not just an impression.
+        "link_urls": [
+            (s.get("story_link") or {}).get("display_url")
+            for s in (item.get("story_link_stickers") or [])
+            if (s.get("story_link") or {}).get("display_url")
+        ],
+        "music": _music(item),
+        "is_paid_partnership": bool(item.get("is_paid_partnership")),
+        # Free profile data. Instagram avatars otherwise require a separate
+        # refresh_profiles scrape, and these ride along at no cost.
+        "full_name": (user.get("full_name") or "").strip() or None,
+        "avatar_url": user.get("profile_pic_url") or None,
+        "is_verified": bool(user.get("is_verified")),
     }
+
+
+def _poll_votes(item: dict) -> int:
+    """Total votes across every poll sticker on the story.
+
+    This is the only hard viewing number obtainable from outside the account:
+    a vote requires a person who saw the story, so N votes is a verified FLOOR
+    on how many people saw it — not an estimate. One of these carried 18,412.
+
+    Instagram reports `total_votes` and also itemised `tallies`; the two agreed
+    exactly across every poll in the sample, so the stated total wins and the
+    sum is the fallback for a payload that omits it.
+    """
+    total = 0
+    for poll in item.get("story_polls") or []:
+        sticker = poll.get("poll_sticker") or {}
+        stated = sticker.get("total_votes")
+        if isinstance(stated, int):
+            total += stated
+            continue
+        for tally in sticker.get("tallies") or []:
+            c = tally.get("count")
+            if isinstance(c, int):
+                total += c
+    return total
+
+
+def _music(item: dict) -> dict | None:
+    """First music sticker, in the same shape post docs already use for music,
+    so story sounds flow into the existing Sounds page without a special case."""
+    for sticker in item.get("story_music_stickers") or []:
+        info = sticker.get("music_asset_info") or {}
+        title = info.get("title") or info.get("display_artist")
+        if not title:
+            continue
+        return {
+            "title": info.get("title"),
+            "artist": info.get("display_artist"),
+            "musicId": info.get("audio_asset_id") or info.get("id"),
+        }
+    return None
+
+
+def _enrich_creator(creator_ref: Any, current: dict, norm: dict) -> None:
+    """Fill blank creator fields from the story payload. Free profile data.
+
+    BACKFILL ONLY, never overwrite — same rule as handlers/projects.py holds for
+    fullName. refresh_profiles scrapes these deliberately and more accurately;
+    this only helps a creator who has never been through that pass. An avatar
+    here is also the sole no-cost source of Instagram profile pictures, which
+    otherwise need their own paid scrape.
+
+    Never raises: a profile nicety must not fail a story sweep.
+    """
+    patch: dict[str, Any] = {}
+    if not current.get("fullName") and norm.get("full_name"):
+        patch["fullName"] = norm["full_name"]
+    if not current.get("avatarUrl") and norm.get("avatar_url"):
+        patch["avatarUrl"] = norm["avatar_url"]
+    if current.get("verifiedAccount") is None and norm.get("is_verified"):
+        patch["verifiedAccount"] = True
+    if not patch:
+        return
+    try:
+        creator_ref.set(patch, merge=True)
+    except Exception:
+        log.exception("could not enrich creator from story payload")
 
 
 def _mark_run(brand_id: str, *, found: int, checked: int, skipped: str | None = None) -> None:
@@ -202,6 +299,7 @@ def run(brand_id: str, max_handles: int = DEFAULT_MAX_HANDLES, dry_run: bool = F
     new_items: list[tuple[str, str, str]] = []
     stories_found = 0
     skipped_non_story = 0
+    reseen = 0
     now = dt.datetime.now(dt.timezone.utc)
 
     for item in items:
@@ -243,18 +341,40 @@ def run(brand_id: str, max_handles: int = DEFAULT_MAX_HANDLES, dry_run: bool = F
             # it at all.
             "expiresAt": norm["expires_at"] or (posted_at + dt.timedelta(hours=STORY_TTL_HOURS)),
             "contentType": "story",
+            "mediaType": norm["media_type"],
             "videoUrl": norm["video_url"],
+            "videoDuration": norm["video_duration"],
             "coverUrl": norm["image_url"],
             "likesCount": 0,
             "commentsCount": 0,
-            "viewsCount": 0,
+            # NOT zero. Instagram shows story views to the account owner only
+            # (`can_see_insights_as_brand` is false on every item), so we do not
+            # know this number. Writing 0 states that nobody watched, which is
+            # a claim, and one that would be read straight into a client report.
+            "viewsCount": None,
+            # Poll votes are the exception: a vote requires someone who saw the
+            # story, so this is a verified floor on views rather than a guess.
+            "pollVotes": norm["poll_votes"],
+            "pollCount": norm["poll_count"],
+            "pollQuestions": norm["poll_questions"],
+            "linkUrls": norm["link_urls"],
+            "music": norm["music"],
+            "isPaidPartnership": norm["is_paid_partnership"],
             "ingestedAt": SERVER_TIMESTAMP,
             "ingestedBy": "scan_stories",
         }
         if norm["posted_at"] is None:
             doc["postedAtEstimated"] = True
+
+        # Already have it? A story lives 24h and the sweep runs every 6h, so
+        # the same story comes back up to four times. Re-analysing it costs no
+        # Gemini (imageHashCache absorbs that) but does cost four image fetches
+        # and four Storage writes where one would do.
+        existed = posts_col.document(post_id).get().exists
         posts_col.document(post_id).set(doc, merge=True)
         stories_found += 1
+        if existed:
+            reseen += 1
 
         if norm["image_url"]:
             img_id = fs.composite_id(post_id, "0")
@@ -263,14 +383,17 @@ def run(brand_id: str, max_handles: int = DEFAULT_MAX_HANDLES, dry_run: bool = F
                 "sequenceIdx": 0,
                 "ingestedAt": SERVER_TIMESTAMP,
             }, merge=True)
-        if norm["video_url"]:
-            new_items.append((post_id, "video", norm["video_url"]))
-        # The cover is analysed even for video stories: story video URLs are
-        # short-lived signed CDN links that routinely expire while queued, and
-        # the cover is the pass that reliably succeeds (same reasoning as
-        # scan_creators._persist_post).
-        if norm["image_url"]:
-            new_items.append((post_id, "image", norm["image_url"]))
+        if not existed:
+            if norm["video_url"]:
+                new_items.append((post_id, "video", norm["video_url"]))
+            # The cover is analysed even for video stories: story video URLs are
+            # short-lived signed CDN links that routinely expire while queued,
+            # and the cover is the pass that reliably succeeds (same reasoning
+            # as scan_creators._persist_post).
+            if norm["image_url"]:
+                new_items.append((post_id, "image", norm["image_url"]))
+
+        _enrich_creator(creator_ref, cd, norm)
 
     images_enqueued = 0
     videos_enqueued = 0
@@ -299,6 +422,10 @@ def run(brand_id: str, max_handles: int = DEFAULT_MAX_HANDLES, dry_run: bool = F
         "imagesEnqueued": images_enqueued,
         "videosEnqueued": videos_enqueued,
         "skippedNonStory": skipped_non_story,
+        # Stories we had already captured on an earlier sweep. Metadata is
+        # refreshed (poll counts climb while a story is live) but the image is
+        # not re-analysed.
+        "alreadyHad": reseen,
     }
     _mark_run(brand_id, found=stories_found, checked=len(handles))
     fs.scan_runs_col(brand_id).add({

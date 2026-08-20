@@ -28,10 +28,31 @@ describe('preview mode is dev-only', () => {
     expect(src).not.toMatch(/if \(!previewRequested\(/)
   })
 
-  it('reads a local fixture only — never a remote host', () => {
-    const urls = src.match(/fetch\(\s*'([^']+)'/g) ?? []
-    expect(urls).toHaveLength(1)
-    expect(urls[0]).toContain("'/preview-stories.json'")
+  it('reads local fixtures only — never a remote host', () => {
+    // There is one fetch, and every path handed to it is root-relative. A
+    // preview that could pull from a URL would be a data-exfiltration switch
+    // sitting in a client dashboard, whatever the DEV gate says.
+    expect(src.match(/\bfetch\(/g) ?? []).toHaveLength(1)
+    const paths = [...src.matchAll(/'(\/[\w-]*\.json)'/g)].map((m) => m[1])
+    expect(paths.length).toBeGreaterThan(0)
+    for (const p of paths) {
+      expect(p, `${p} must be root-relative`).toMatch(/^\/[\w-]+\.json$/)
+    }
+  })
+
+  it('wraps every fixture path in a DEV ternary so the build drops it', () => {
+    // Not decoration. Passing the path straight into usePreviewFixture leaves
+    // the literal in dist/: the minifier folds the gate inside the hook but
+    // cannot reach the call site to delete its argument. This shipped twice
+    // before being caught by grepping the built bundle.
+    // `return ...` anchors this to call sites; without it the regex also
+    // matched the function's own declaration and read its parameter list.
+    const calls = [...src.matchAll(/return usePreviewFixture<[^>]+>\(([^\n]*)\)/g)].map((m) => m[1])
+    expect(calls.length).toBeGreaterThan(0)
+    for (const c of calls) {
+      expect(c, `argument must be DEV-gated: ${c}`).toContain("import.meta.env.DEV ? '/")
+      expect(c, `non-DEV branch must be empty: ${c}`).toContain(": ''")
+    }
   })
 })
 

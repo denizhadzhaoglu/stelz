@@ -8,6 +8,7 @@ import { useAuth } from './lib/auth'
 import Home from './pages/Home'
 import Creator from './pages/Creator'
 import Sounds from './pages/Sounds'
+import StoriesPage from './pages/Stories'
 import ProjectPage from './pages/Project'
 import LowlandsPage from './pages/Lowlands'
 import Settings from './pages/Settings'
@@ -33,6 +34,7 @@ const NAV: { to: string; label: string; matchPrefix?: string }[] = [
   // matchPrefix '/projects': the Lowlands tab stays lit while reading any
   // project roster — the tab redirects there once the roster exists.
   { to: '/lowlands', label: 'Lowlands', matchPrefix: '/projects' },
+  { to: '/stories', label: 'Stories', matchPrefix: '/stories' },
   { to: '/sounds', label: 'Sounds', matchPrefix: '/sounds' },
   { to: '/settings', label: 'Settings' },
 ]
@@ -70,6 +72,7 @@ export default function App() {
       <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
         <Route path="/" element={<Home />} />
         <Route path="/creators/:handle" element={<Creator />} />
+        <Route path="/stories" element={<StoriesPage />} />
         <Route path="/sounds" element={<Sounds />} />
         <Route path="/sounds/:soundKey" element={<Sounds />} />
         <Route path="/lowlands" element={<LowlandsPage />} />

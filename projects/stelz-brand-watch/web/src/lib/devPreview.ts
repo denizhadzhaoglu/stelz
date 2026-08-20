@@ -24,6 +24,7 @@
 
 import { useEffect, useState } from 'react'
 import type { DetectionRow } from './types'
+import type { StoryPost } from './firestore'
 
 /** Pure matching rule, testable without a DOM. Exact match only: `?preview=1`
  *  and `?preview=storiesx` must not switch anything on. */
@@ -31,19 +32,38 @@ export function matchesPreview(search: string, kind: 'stories'): boolean {
   return new URLSearchParams(search).get('preview') === kind
 }
 
-/** Preview rows, or null when not in preview mode / the fixture is absent. */
-export function useStoryPreview(): DetectionRow[] | null {
-  const [rows, setRows] = useState<DetectionRow[] | null>(null)
+function usePreviewFixture<T>(file: string): T[] | null {
+  const [rows, setRows] = useState<T[] | null>(null)
   useEffect(() => {
-    // Inline, not extracted — see rule 1 above.
+    // Inline, not extracted — see rule 1 above. Both checks have to sit in the
+    // block they guard for the minifier to fold them away.
     if (!import.meta.env.DEV) return
+    if (!file) return
     if (!matchesPreview(window.location.search, 'stories')) return
     let cancelled = false
-    void fetch('/preview-stories.json')
+    void fetch(file)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => { if (!cancelled && Array.isArray(data)) setRows(data as DetectionRow[]) })
+      .then((data) => { if (!cancelled && Array.isArray(data)) setRows(data as T[]) })
       .catch(() => { /* no fixture generated yet — stay on live data */ })
     return () => { cancelled = true }
-  }, [])
+  }, [file])
   return rows
+}
+
+// The path literals sit INSIDE a DEV ternary, not in the argument position of a
+// helper call. Second time this bit: a plain `usePreviewFixture('/x.json')`
+// keeps the string in the production bundle, because the minifier folds the
+// gate inside the hook but cannot reach back out to the call site to delete its
+// argument. With `DEV ? path : ''` the whole literal folds to '' in the build.
+// Verified by grepping dist/, both times — not by reasoning about it.
+
+/** Story detections for the strip, or null outside preview mode. */
+export function useStoryPreview(): DetectionRow[] | null {
+  return usePreviewFixture<DetectionRow>(import.meta.env.DEV ? '/preview-stories.json' : '')
+}
+
+/** Story POSTS for the /stories page — the page is driven by posts, so the
+ *  preview has to supply posts or it exercises a different path than prod. */
+export function useStoryPostsPreview(): StoryPost[] | null {
+  return usePreviewFixture<StoryPost>(import.meta.env.DEV ? '/preview-story-posts.json' : '')
 }
