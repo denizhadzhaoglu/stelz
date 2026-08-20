@@ -160,3 +160,93 @@ describe('who delivered', () => {
     expect(campaignRollup(rows).creators[0].handle).toBe('bo')
   })
 })
+
+describe('Stëlz that is not on a can', () => {
+  // A festival sponsorship is bought partly as signage: a branded bar front, a
+  // parasol, a cooler, an inflatable, a cap. The verifier used to answer
+  // "not_a_container" for every one of those and the detection was deleted —
+  // 22 of 41 rejections on the Lowlands archive. They are hits, but they are a
+  // different KIND of hit, and a report that flattens them into one number
+  // loses the distinction a sponsor is actually buying.
+  const rows = () => joinCampaign([
+    item({ itemId: 'bar', creatorHandle: 'sterre', surface: 'post' }),
+    item({ itemId: 'ring', creatorHandle: 'daan', surface: 'post' }),
+    item({ itemId: 'can', creatorHandle: 'daan', surface: 'post' }),
+  ], [
+    det({ post_id: 'bar', verify_placement: 'signage', verify_verdict: 'confirmed' }),
+    det({ post_id: 'ring', verify_placement: 'merchandise', verify_verdict: 'confirmed' }),
+    det({ post_id: 'can' }),
+  ])
+
+  it('counts a placement as a sighting', () => {
+    const r = campaignRollup(rows())
+    expect(r.withStelz).toBe(3)
+  })
+
+  it('counts off-container placements as a SUBSET, never an addition', () => {
+    const r = campaignRollup(rows())
+    expect(r.offContainer).toBe(2)
+    expect(r.offContainer).toBeLessThanOrEqual(r.withStelz)
+    expect(r.bySurface.post.offContainer).toBe(2)
+  })
+
+  it('carries the placement onto the row so the panel can name it', () => {
+    const byId = Object.fromEntries(rows().map((r) => [r.itemId, r]))
+    expect(byId.bar.placement).toBe('signage')
+    expect(byId.ring.placement).toBe('merchandise')
+    expect(byId.can.placement).toBeNull()
+  })
+
+  it('never counts a placement on something that is not a sighting', () => {
+    // A rejected row carrying a stale placement must not inflate the count.
+    const r = campaignRollup(joinCampaign(
+      [item({ itemId: 'x', creatorHandle: 'anna', surface: 'post' })],
+      [det({ post_id: 'x', detected: false, verify_placement: 'signage' })],
+    ))
+    expect(r.withStelz).toBe(0)
+    expect(r.offContainer).toBe(0)
+  })
+})
+
+describe('the gap between this page and the deployed backend', () => {
+  // The page is generated from an archive that can be analysed at the images'
+  // own resolution. The deployed function downscales everything to 512px
+  // first, and on the Lowlands archive that costs 13 of 46 sightings —
+  // several of them confirmed by eye. Left unstated, the count would simply
+  // drop after a deploy and read as a scraping failure.
+  it('flags a sighting the deploy would miss', () => {
+    const rows = joinCampaign(
+      [item({ itemId: 'a', creatorHandle: 'niek', surface: 'tiktok', platform: 'tiktok' })],
+      [det({ post_id: 'a', found_at_prod_res: false })],
+    )
+    expect(rows[0].missedByDeploy).toBe(true)
+    expect(campaignRollup(rows).missedByDeploy).toBe(1)
+  })
+
+  it('says nothing when the deploy would find it too', () => {
+    const rows = joinCampaign(
+      [item({ itemId: 'a', creatorHandle: 'lize', surface: 'post' })],
+      [det({ post_id: 'a', found_at_prod_res: true })],
+    )
+    expect(rows[0].missedByDeploy).toBe(false)
+    expect(campaignRollup(rows).missedByDeploy).toBe(0)
+  })
+
+  it('stays silent rather than guessing when the field is absent', () => {
+    // Production detections never carry it — a deployed detection IS at
+    // production resolution. Undefined must not render as "not live".
+    const rows = joinCampaign(
+      [item({ itemId: 'a', creatorHandle: 'lize', surface: 'post' })],
+      [det({ post_id: 'a' })],
+    )
+    expect(rows[0].missedByDeploy).toBe(false)
+  })
+
+  it('never counts a miss on something that was not a sighting', () => {
+    const rows = joinCampaign(
+      [item({ itemId: 'a', creatorHandle: 'lize', surface: 'post' })],
+      [det({ post_id: 'a', detected: false, found_at_prod_res: false })],
+    )
+    expect(campaignRollup(rows).missedByDeploy).toBe(0)
+  })
+})

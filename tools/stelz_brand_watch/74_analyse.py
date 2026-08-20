@@ -90,6 +90,26 @@ def main() -> int:
     ap.add_argument("--limit", type=int)
     ap.add_argument("--covers-only", action="store_true")
     ap.add_argument("--redo", action="store_true")
+    # Re-judge only the rows a verifier change can move: the ones the second
+    # look already touched, plus the one hard rejection it is now allowed to
+    # re-open (verifier.REOPENABLE_GATE). That is a few dozen out of fifteen
+    # hundred — re-running the whole archive would re-bill the ~97% no verifier
+    # rule can reach.
+    ap.add_argument("--redo-verified", action="store_true",
+                    help="re-judge items the second-look pass can change its mind about")
+    # Re-judge everything the archive currently CLAIMS. Used to check that a
+    # finding survives a change to the detection path without re-billing the
+    # ~97% of an archive that says "nothing here" — those rows are only at risk
+    # from a change that makes the pass see MORE, and this flag exists for the
+    # opposite case.
+    ap.add_argument("--redo-found", action="store_true",
+                    help="re-judge every hit and near miss")
+    # What the first pass sees. The default matches the deployed function, so a
+    # local number means the same thing as a deployed one. 0 sends the archived
+    # bytes as-is, which finds more and costs more — see _local_detect.
+    ap.add_argument("--max-dim", type=int, default=D.PROD_MAX_DIM,
+                    help=f"first-pass long edge in px (default {D.PROD_MAX_DIM}, "
+                         f"as production; 0 = no downscale)")
     # Frame extraction is CPU-bound and the Gemini calls are almost all waiting
     # on the network, so one item at a time leaves both idle. 288 TikToks at
     # ~30s each is two and a half hours serial; the work is embarrassingly
@@ -111,15 +131,31 @@ def main() -> int:
 
     entries = [json.loads(l) for l in index.read_text().splitlines() if l.strip()]
     verdicts = load_verdicts(vpath)
-    todo = [e for e in entries if args.redo or e[id_field] not in verdicts]
+    def wanted(e: dict) -> bool:
+        if args.redo:
+            return True
+        if args.redo_found:
+            v = verdicts.get(e[id_field]) or {}
+            return bool(v.get("detected")) or bool(v.get("near_miss"))
+        if args.redo_verified:
+            v = verdicts.get(e[id_field]) or {}
+            return bool(v.get("verify_verdict")) or v.get("gate") == D.REOPENABLE_GATE
+        return e[id_field] not in verdicts
+
+    todo = [e for e in entries if wanted(e)]
     if args.limit:
         todo = todo[: args.limit]
 
     print(f"{len(entries)} archived · {len(verdicts)} already judged · {len(todo)} to analyse")
+    print("First pass at "
+          + (f"{args.max_dim}px (as production)" if args.max_dim == D.PROD_MAX_DIM
+             else f"{args.max_dim}px" if args.max_dim > 0
+             else "the archived resolution — MORE than production sees"))
     if not todo:
         print("Nothing to do.")
         return 0
 
+    D.set_max_dim(args.max_dim)
     D.warm()
     refs = D.load_references()
     print(f"{len(refs)} reference images, logo first")
@@ -148,6 +184,19 @@ def main() -> int:
             return
         v = D.verdict_record(iid, e["handle"], results,
                              frames_extracted=frames, duration_s=e.get("duration"))
+        # A verdict with no description is not a verdict. The model returned
+        # nothing usable — a malformed response, a safety block, a truncated
+        # call — and writing it stores "no Stëlz" for an image nothing ever
+        # actually read, which is indistinguishable on screen from a real
+        # negative. Leaving it out keeps the item in the todo list so the next
+        # run retries it, exactly as detect_image refuses to cache a failed call
+        # ("Never cache a failed call ... not evidence the brand is absent").
+        if not v["detected"] and not (v.get("context") or "").strip():
+            with lock:
+                counts["done"] += 1
+                print(f"[{counts['done']}/{len(todo)}] @{e['handle']} → LEEG antwoord, "
+                      f"niet opgeslagen (blijft ongeanalyseerd)")
+            return
         # A clip we never obtained is judged on a thumbnail. Say so in the row
         # rather than letting it read like a full viewing.
         v["cover_only"] = bool(e.get("video_unavailable")) or (

@@ -79,6 +79,15 @@ export type CampaignRow = CampaignItem & {
   framesJudged: number
   /** The clip was never obtained; only its cover was judged. */
   coverOnly: boolean
+  /** Where the wordmark was, when it was NOT on a can — a bar front, a parasol,
+   *  a branded tray, a cap. Null for an ordinary can sighting. Kept as its own
+   *  field rather than folded into the verdict: "someone drank one" and "the
+   *  bar carried our logo" are different things to have bought. */
+  placement: DetectionRow['verify_placement']
+  /** True when this sighting would NOT survive the deployed backend's 512px
+   *  downscale. Not a doubt about the photo — a gap between what was measured
+   *  here and what the live function currently sees. */
+  missedByDeploy: boolean
 }
 
 /** Same join as joinStories, over items instead of story posts. Pass RAW
@@ -102,6 +111,8 @@ export function joinCampaign(items: CampaignItem[], detections: DetectionRow[]):
       verdict: verdictFor(best),
       framesJudged: framesJudgedIn(group),
       coverOnly: best?.cover_only === true,
+      placement: best?.verify_placement ?? null,
+      missedByDeploy: best?.detected === true && best?.found_at_prod_res === false,
     }
   })
 }
@@ -140,6 +151,9 @@ export type SurfaceStats = {
   near: number
   unanalysed: number
   coverOnly: number
+  /** Sightings where the wordmark was NOT on a can. A subset of withStelz, not
+   *  an addition to it. */
+  offContainer: number
   /** The one metric this surface actually publishes. Null when it publishes
    *  none — a story has no view count and 0 would be a claim, not a blank. */
   metric: number | null
@@ -148,7 +162,7 @@ export type SurfaceStats = {
 
 const EMPTY: SurfaceStats = {
   items: 0, judged: 0, imagesSeen: 0, withStelz: 0, near: 0,
-  unanalysed: 0, coverOnly: 0, metric: null, lastPostedAt: null,
+  unanalysed: 0, coverOnly: 0, offContainer: 0, metric: null, lastPostedAt: null,
 }
 
 export type CampaignCreator = {
@@ -178,6 +192,13 @@ export type CampaignRollup = {
   withStelz: number
   near: number
   unanalysed: number
+  /** Of the sightings, how many were signage, merchandise or clothing rather
+   *  than a can in someone's hand. A subset of withStelz. */
+  offContainer: number
+  /** Of the sightings, how many the DEPLOYED backend would currently miss. A
+   *  subset of withStelz, and a number about the deploy rather than the
+   *  campaign — but one nobody should have to discover from a footnote. */
+  missedByDeploy: number
   bySurface: Record<Surface, SurfaceStats>
   /** Named, not "reach": TikTok is the only surface here that publishes views.
    *  Kept out of every other total on purpose. */
@@ -222,6 +243,7 @@ export function campaignRollup(
   const out: CampaignRollup = {
     creators: [], rosterSize: roster.length, delivered: 0, silent: 0,
     items: 0, judged: 0, imagesSeen: 0, withStelz: 0, near: 0, unanalysed: 0,
+    offContainer: 0, missedByDeploy: 0,
     bySurface: blankSurfaces(),
     tiktokViews: 0, pollVotes: 0, postLikes: 0,
   }
@@ -234,6 +256,7 @@ export function campaignRollup(
     if (isStelzStory(r.verdict)) s.withStelz += 1
     if (r.verdict === 'near') s.near += 1
     if (r.coverOnly) s.coverOnly += 1
+    if (r.placement && isStelzStory(r.verdict)) s.offContainer += 1
     const m = metricFor(r)
     if (m != null) s.metric = (s.metric ?? 0) + m
     if (r.postedAt && (!s.lastPostedAt || r.postedAt > s.lastPostedAt)) {
@@ -259,6 +282,8 @@ export function campaignRollup(
     else out.judged += 1
     if (isStelzStory(r.verdict)) out.withStelz += 1
     if (r.verdict === 'near') out.near += 1
+    if (r.placement && isStelzStory(r.verdict)) out.offContainer += 1
+    if (r.missedByDeploy) out.missedByDeploy += 1
 
     // Kept in three separate fields rather than one "reach". Nothing in this
     // file adds them together, and nothing downstream should either.

@@ -61,6 +61,15 @@ const VERDICT_TONE: Record<StoryVerdict, string> = {
   rejected: 'bg-[var(--color-bad)] text-white',
 }
 
+// Shown instead of the plain "Stëlz" tag when the wordmark was not on a can.
+// Short enough for a 112px tile; the drawer spells it out.
+const PLACEMENT_TAG: Record<string, string> = {
+  signage: 'Stëlz bord',
+  merchandise: 'Stëlz merch',
+  clothing: 'Stëlz kleding',
+  other: 'Stëlz',
+}
+
 export default function Campaign() {
   const [params, setParams] = useSearchParams()
   const filter = (params.get('f') as Filter) || 'all'
@@ -187,7 +196,9 @@ export default function Campaign() {
               label="Stëlz zichtbaar"
               value={share == null ? '—' : `${Math.round(share)}%`}
               sub={share == null ? 'nog niets beoordeeld'
-                : `${fmtNum(rollup.withStelz)} van ${fmtNum(rollup.judged)}`}
+                : rollup.offContainer > 0
+                  ? `${fmtNum(rollup.withStelz)} van ${fmtNum(rollup.judged)} · ${rollup.offContainer}× niet op een blikje`
+                  : `${fmtNum(rollup.withStelz)} van ${fmtNum(rollup.judged)}`}
             />
             <Kpi
               label="Mogelijk Stëlz"
@@ -217,6 +228,24 @@ export default function Campaign() {
             {rollup.postLikes > 0 ? ` (${fmtNum(rollup.postLikes)})` : ''}, en alleen reels een
             afspeelteller. Eén opgeteld "bereik" zou geen van deze dingen betekenen.
           </Card>
+
+          {/* A gap between this page and the backend that will serve it. Stated
+              here rather than left for someone to discover after the deploy,
+              when the count silently drops and looks like a scraping problem. */}
+          {rollup.missedByDeploy > 0 && (
+            <Card className="mb-6 px-4 py-3 text-[12px] text-[var(--color-ink-muted)] leading-relaxed border-l-2 border-[var(--color-warn)]">
+              <strong className="font-medium text-[var(--color-ink)]">
+                {rollup.missedByDeploy} van deze {fmtNum(rollup.withStelz)} vondsten vindt de
+                live backend op dit moment niet.
+              </strong>{' '}
+              De gepubliceerde functie verkleint elk beeld naar 512 pixels voordat het model
+              kijkt. Videoframes komen binnen op de resolutie van de clip zelf, dus een frame
+              van 1080×1920 verliest ruim 90% van zijn pixels en een merknaam van 40 pixels
+              breed wordt er 19. Deze pagina is geanalyseerd op de archiefresolutie, wat meer
+              vindt en meer kost. Beelden waar dat verschil speelt zijn hieronder gemarkeerd;
+              de keuze om die grens te verhogen ligt bij wie de Gemini-rekening betaalt.
+            </Card>
+          )}
 
           <div className="flex flex-wrap items-center gap-2 mb-4">
             {FILTERS.map((f) => (
@@ -368,7 +397,10 @@ function ContentCard({ row, onOpen }: { row: CampaignRow; onOpen: () => void }) 
         alt={`${SURFACE_LABEL[row.surface]} van @${row.creatorHandle}`}
       >
         <span className={`absolute top-1 left-1 text-[9px] uppercase tracking-wider px-1.5 py-0.5 ${VERDICT_TONE[row.verdict]}`}>
-          {row.verdict === 'visible' ? 'Stëlz'
+          {/* A logo on a bar front or a cap is a sighting, but not the same
+              sighting as a can in someone's hand — the tile says which. */}
+          {row.placement ? PLACEMENT_TAG[row.placement]
+            : row.verdict === 'visible' ? 'Stëlz'
             : row.verdict === 'small' ? 'Stëlz klein'
             : row.verdict === 'near' ? 'Mogelijk' : VERDICT_LABEL[row.verdict]}
         </span>
@@ -378,6 +410,14 @@ function ContentCard({ row, onOpen }: { row: CampaignRow; onOpen: () => void }) 
         {row.framesJudged > 1 && (
           <span className="absolute bottom-1 left-1 text-[9px] px-1 py-0.5 bg-[var(--color-ink)]/70 text-white tabular-nums">
             {row.framesJudged} beelden
+          </span>
+        )}
+        {row.missedByDeploy && (
+          <span
+            title="De live backend verkleint dit beeld naar 512px en vindt Stëlz dan niet meer"
+            className="absolute bottom-1 right-1 text-[9px] px-1 py-0.5 bg-[var(--color-warn)] text-white"
+          >
+            niet live
           </span>
         )}
       </MediaTile>

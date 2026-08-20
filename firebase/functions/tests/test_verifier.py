@@ -112,8 +112,9 @@ class TestDecide(unittest.TestCase):
             out = verifier.decide(self.BASE, {"brand": b, "confidence": 0.9})
             self.assertFalse(out["detected"], f"{b} should reject")
 
-    def test_not_a_container_rejects(self):
-        # The microphone / thermos / deodorant class.
+    def test_not_a_container_rejects_when_the_brand_is_nowhere(self):
+        # The microphone / thermos / deodorant class: no container, and the
+        # wordmark is not on anything else either.
         out = verifier.decide(self.BASE, {"brand": "not_a_container", "confidence": 0.9})
         self.assertFalse(out["detected"])
 
@@ -377,3 +378,205 @@ class TestNeedsReverify(unittest.TestCase):
                 verifier.needs_reverify(r)
             except (TypeError, ValueError):
                 self.fail(f"crashed on verify_version={bad!r}")
+
+
+class TestBrandAwayFromTheContainer(unittest.TestCase):
+    """A drinks brand at a festival is not only on cans.
+
+    This class exists because of a measured failure, not a hypothetical. On the
+    Lowlands archive 22 of 41 verifier rejections came back "not_a_container",
+    and the first three checked by eye were: a STELZ-branded swim ring on a
+    yacht, a STELZ festival bar with the wordmark across the front and cans on
+    the shelf, and a man raising a can to his mouth. All three were deleted from
+    the client's results while the client could see them with their own eyes.
+
+    The cause was structural. Steps 1-3 of VERIFY_PROMPT ask which brand is on
+    the CONTAINER, so a placement that is not a container has no honest answer
+    except "not_a_container" — and that fell through into the rejection branch.
+    """
+    BASE = {"detected": True, "confidence": 0.70, "gate": "capped_small_object"}
+
+    def test_the_swim_ring_survives(self):
+        # No beverage container in frame at all; the wordmark is on an inflatable.
+        out = verifier.decide(self.BASE, {
+            "brand": "not_a_container",
+            "brand_elsewhere": "merchandise",
+            "visible_text": "STELZ HARD LEMONADE",
+            "confidence": 0.9,
+        })
+        self.assertTrue(out["detected"])
+        self.assertEqual(out["verify_verdict"], "confirmed")
+        self.assertEqual(out["gate"], "verified_off_container")
+        self.assertEqual(out["verify_placement"], "merchandise")
+
+    def test_the_festival_bar_survives(self):
+        out = verifier.decide(self.BASE, {
+            "brand": "not_a_container",
+            "brand_elsewhere": "signage",
+            "visible_text": "STELZ HARD DRINKS 4.5% ALC.",
+            "confidence": 0.85,
+        })
+        self.assertTrue(out["detected"])
+        self.assertEqual(out["verify_placement"], "signage")
+
+    def test_our_branding_next_to_a_rivals_can_still_counts(self):
+        # A Heineken can in someone's hand in front of a STELZ bar is a STELZ
+        # placement. Reading the rival correctly must not delete ours.
+        out = verifier.decide(self.BASE, {
+            "brand": "Heineken",
+            "brand_elsewhere": "signage",
+            "visible_text": "STELZ",
+            "confidence": 0.9,
+        })
+        self.assertTrue(out["detected"])
+        self.assertEqual(out["verify_placement"], "signage")
+
+    def test_a_placement_with_nothing_read_is_not_evidence(self):
+        # "There is orange merchandise" is not "I read the wordmark". Without a
+        # transcript this claim is exactly the hallucination the module exists
+        # to catch, so it must not rescue anything.
+        out = verifier.decide(self.BASE, {
+            "brand": "not_a_container",
+            "brand_elsewhere": "merchandise",
+            "visible_text": None,
+            "confidence": 0.9,
+        })
+        self.assertFalse(out["detected"])
+        self.assertEqual(out["verify_verdict"], "rejected")
+
+    def test_a_clean_can_read_still_upgrades(self):
+        # The container branch stays ahead of this one: reading the wordmark on
+        # the can itself is the stronger evidence and must keep its promotion.
+        out = verifier.decide(self.BASE, {
+            "brand": "STELZ", "brand_elsewhere": "signage",
+            "visible_text": "STELZ HARD LEMONADE", "confidence": 0.95,
+        })
+        self.assertEqual(out["verify_verdict"], "upgraded")
+        self.assertGreaterEqual(out["confidence"], 0.90)
+
+    def test_the_prompt_actually_asks_for_it(self):
+        # The decision rule is unreachable unless the prompt requests the field.
+        p = verifier.build_prompt("STELZ")
+        self.assertIn("brand_elsewhere", p)
+        for placement in verifier.PLACEMENTS:
+            self.assertIn(placement, p, placement)
+
+    def test_placement_normalizes_junk_without_discarding_the_claim(self):
+        self.assertEqual(verifier.placement_of({"brand_elsewhere": "a parasol"}), "other")
+        self.assertEqual(verifier.placement_of({"brand_elsewhere": "SIGNAGE"}), "signage")
+        for empty in (None, "", "null", "none", 0, [], {"x": 1}):
+            self.assertIsNone(verifier.placement_of({"brand_elsewhere": empty}), repr(empty))
+
+    def test_verdicts_are_versioned_apart_from_v1(self):
+        # v1 rejected every one of the cases above. A stored v1 verdict is not
+        # comparable to a v2 one, and needs_reverify is what re-opens them.
+        self.assertGreaterEqual(verifier.VERIFY_VERSION, 2)
+        self.assertTrue(verifier.needs_reverify(
+            {"detected": True, "confidence": 0.70, "verify_version": 1}))
+
+
+class TestCropCannotVetoTheFullFrame(unittest.TestCase):
+    """The crop is taken from a box the model chose for itself.
+
+    When that box is wrong the second call is looking at sky, and its "no
+    container here" is a statement about the crop rather than about the photo.
+    Production guarded against `no_readable_brand` and not against
+    `not_a_container`; the local analyser had no guard at all and overwrote the
+    full-frame verdict unconditionally.
+    """
+    def test_a_resolved_brand_supersedes(self):
+        self.assertTrue(verifier.crop_supersedes({"brand": "STELZ"}))
+        self.assertTrue(verifier.crop_supersedes({"brand": "White Claw"}))
+
+    def test_an_empty_crop_does_not(self):
+        for brand in (None, "", "no_readable_brand", "not_a_container"):
+            self.assertFalse(verifier.crop_supersedes({"brand": brand}), repr(brand))
+
+    def test_a_crop_that_found_the_brand_off_container_does(self):
+        self.assertTrue(verifier.crop_supersedes(
+            {"brand": "not_a_container", "brand_elsewhere": "signage"}))
+
+    def test_both_call_sites_use_the_shared_guard(self):
+        # Two copies of this rule drifted apart once already — production had
+        # half of it and the local analyser had none. Assert they share one.
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parents[3]
+        for rel in ("firebase/functions/handlers/detect_image.py",
+                    "tools/stelz_brand_watch/_local_detect.py"):
+            src = (root / rel).read_text()
+            self.assertIn("crop_supersedes", src, rel)
+
+
+class TestTheOneReopenedRejection(unittest.TestCase):
+    """detect_image's fine-print rule deletes rows before the verifier runs.
+
+    Measured case: booijagency's TikTok cover — the brand's OWN agency — showing
+    a two-metre inflatable STELZ Hard Lemonade can across a yacht deck with
+    "NATURAL FLAVOURING 63 CALORIES 250 ml e ALC. 4.5% VOL" printed a hand's
+    width tall, four people each holding a can, and STELZ towels. size_in_frame
+    said "medium", legibility said not clear, fine_print counted three, and the
+    row was hard-rejected without a second look.
+
+    The gate's premise is about APPARENT size and it is right about cans. It is
+    wrong about the objects a drinks brand deploys at an event. So the rejection
+    stands but stops being final.
+    """
+    REJECTED = {
+        "detected": False, "confidence": 0.75,
+        "gate": "rejected_fabricated_fine_print", "false_positive_risk": "high",
+    }
+
+    def test_the_fine_print_rejection_gets_a_second_look(self):
+        self.assertTrue(verifier.should_verify(self.REJECTED))
+
+    def test_no_other_rejection_is_re_opened(self):
+        for gate in ("rejected_no_brand_text", "rejected_by_verifier",
+                     "rejected_legibility_contradiction", None):
+            self.assertFalse(
+                verifier.should_verify({**self.REJECTED, "gate": gate}), repr(gate))
+
+    def test_a_confident_read_restores_it(self):
+        out = verifier.decide(self.REJECTED, {"brand": "STELZ", "confidence": 0.95})
+        self.assertTrue(out["detected"])
+        self.assertEqual(out["gate"], "verified_upgraded")
+
+    def test_the_inflatable_read_off_container_restores_it(self):
+        out = verifier.decide(self.REJECTED, {
+            "brand": "not_a_container", "brand_elsewhere": "merchandise",
+            "visible_text": "STELZ HARD LEMONADE ORANGE", "confidence": 0.9,
+        })
+        self.assertTrue(out["detected"])
+        self.assertEqual(out["gate"], "verified_off_container")
+
+    def test_a_hesitant_read_does_NOT_restore_it(self):
+        # Re-opening a rejection must require positive evidence. "Probably
+        # STELZ" is what the gate already disbelieved.
+        out = verifier.decide(self.REJECTED, {"brand": "STELZ", "confidence": 0.6})
+        self.assertFalse(out["detected"])
+        self.assertEqual(out["verify_verdict"], "inconclusive")
+
+    def test_silence_does_NOT_restore_it(self):
+        for verdict in ({}, {"brand": "no_readable_brand", "confidence": 0.9},
+                        {"brand": "not_a_container", "confidence": 0.9},
+                        {"brand": "White Claw", "confidence": 0.9}):
+            out = verifier.decide(self.REJECTED, verdict)
+            self.assertFalse(out["detected"], repr(verdict))
+
+    def test_a_demoted_hit_is_unaffected_by_the_re_open_rule(self):
+        # The ordinary population still behaves exactly as before: a hesitant
+        # STELZ read on a live detection confirms rather than going inconclusive.
+        live = {"detected": True, "confidence": 0.70, "gate": "capped_small_object"}
+        out = verifier.decide(live, {"brand": "STELZ", "confidence": 0.6})
+        self.assertEqual(out["verify_verdict"], "confirmed")
+        self.assertTrue(out["detected"])
+
+    def test_a_placement_cannot_resurrect_an_unrelated_rejection(self):
+        # decide() is public. A caller that skipped should_verify must not be
+        # able to turn "rejected: the wordmark is not there" into a hit by way
+        # of the off-container branch.
+        out = verifier.decide(
+            {"detected": False, "confidence": 0.0, "gate": "rejected_no_brand_text"},
+            {"brand": "not_a_container", "brand_elsewhere": "signage",
+             "visible_text": "STELZ", "confidence": 0.9},
+        )
+        self.assertFalse(out["detected"])

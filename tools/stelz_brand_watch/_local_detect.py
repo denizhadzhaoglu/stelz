@@ -20,13 +20,21 @@ exactly the half that misses a can that is small in one frame of twelve.
 So: everything here is imported from the handlers rather than reimplemented.
 Where this file has its own code it is because the local environment genuinely
 differs — the reference images come from a directory instead of Firestore, and
-there are no moderator rejections to feed the verifier.
+moderator rejections come from a manifest instead of a ✕ button.
 
-TWO REMAINING DIFFERENCES FROM PRODUCTION, stated rather than hidden:
-  * no imageHashCache, so every run bills Gemini afresh;
-  * the verifier gets no negative exemplars, because moderator rejections live
-    in Firestore. It still runs — with a thinner evidence base than it has in
-    production, which makes it MORE likely to reject, not less.
+THE SAME MISTAKE, TWICE MORE. "Import the handler" is not the same as "call it
+the way the handler is called", and both gaps produced wrong answers:
+
+  * the first pass ran at up to 4096px because gemini.detect_image does not
+    resize and detect_image.run does it at the CALL SITE. Local numbers
+    flattered a deploy, and the verifier's "4x the pixel area" premise inverted;
+  * the crop verdict overwrote the full-frame one unconditionally, so a box the
+    model got wrong sent the second call at a patch of sky and its "nothing
+    here" deleted the detection. Production had half of that guard; this file
+    had none.
+
+ONE REMAINING DIFFERENCE FROM PRODUCTION, stated rather than hidden: there is
+no imageHashCache, so every run bills Gemini afresh.
 """
 from __future__ import annotations
 
@@ -82,8 +90,14 @@ def _bootstrap() -> None:
 _bootstrap()
 
 from lib import gemini, verifier                                    # noqa: E402
-from handlers.detect_image import _accept_variants, _strictness_gate, _resize  # noqa: E402
+from handlers.detect_image import (                                   # noqa: E402
+    _accept_variants, _strictness_gate, _resize, MAX_IMAGE_DIM,
+)
 from handlers.detect_video import _extract_frames, screen_flags_frame          # noqa: E402
+
+# Re-exported so the analyser can select rows a verifier change can move without
+# hard-coding the gate name a second time.
+REOPENABLE_GATE = verifier.REOPENABLE_GATE
 
 # Mirrors firebase/seed_brand.py, same as tools/eval/run_eval.py.
 BRAND: dict[str, Any] = {
@@ -183,26 +197,84 @@ def reference_files(max_count: int = 8) -> list[Path]:
     return ordered[:max_count]
 
 
-def load_references(max_count: int = 8) -> list[bytes]:
-    """Reference packshots at 512px, matching lib/refs._MAX_DIM."""
+def _downscale(blob: bytes, max_dim: int = 512) -> bytes:
+    """JPEG at most max_dim on the long edge. Returns the input unchanged if it
+    cannot be decoded — a caller is sending this to Gemini either way, and a
+    resize failure is not a reason to drop the image."""
     from PIL import Image
 
+    try:
+        img = Image.open(io.BytesIO(blob))
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        w, h = img.size
+        if max(w, h) > max_dim:
+            s = max_dim / max(w, h)
+            img = img.resize((int(w * s), int(h * s)), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+    except Exception:
+        return blob
+
+
+def load_references(max_count: int = 8) -> list[bytes]:
+    """Reference packshots at 512px, matching lib/refs._MAX_DIM."""
     out: list[bytes] = []
     for p in reference_files(max_count):
         try:
-            img = Image.open(io.BytesIO(p.read_bytes()))
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            w, h = img.size
-            if max(w, h) > 512:
-                s = 512 / max(w, h)
-                img = img.resize((int(w * s), int(h * s)), Image.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85)
-            out.append(buf.getvalue())
+            out.append(_downscale(p.read_bytes(), 512))
         except Exception as e:
             print(f"    ref skipped ({p.name}): {str(e)[:60]}")
     return out
+
+
+# ──────────────────── confirmed false positives ────────────────────
+#
+# Production closes this loop through Firestore: a moderator clicks ✕, and
+# refs.load_negative_exemplars feeds that image back into the verify prompt as a
+# LABELLED negative. Locally there is no moderator UI, so the same loop runs off
+# a manifest — negatives.json is committed, the images are not (they are other
+# people's photos; same rule as tools/eval/golden_sources.json).
+#
+# Every entry here is an image checked by eye at native resolution and confirmed
+# to contain no Stelz.
+
+NEGATIVES_MANIFEST = Path(__file__).with_name("negatives.json")
+NEGATIVES_DIR = ROOT / ".tmp" / "negatives"
+
+
+def load_negatives(limit: int = 4) -> list[tuple[str, bytes]]:
+    """Labelled counter-examples for the verify prompt, or [] if unavailable.
+
+    Returns (label, bytes) PAIRS via verifier.build_negative_exemplars — never
+    bare bytes. That signature is load-bearing: the legacy stack emitted these
+    same images as unlabelled "Reference {i}:" parts and so taught the detector
+    that twelve confirmed false positives WERE the brand.
+    """
+    import json as _json
+
+    if not NEGATIVES_MANIFEST.exists():
+        return []
+    try:
+        entries = _json.loads(NEGATIVES_MANIFEST.read_text()).get("rejected", [])
+    except Exception as e:
+        print(f"    negatives manifest unreadable ({str(e)[:60]}) — running without")
+        return []
+    rows: list[dict] = []
+    for e in entries:
+        p = NEGATIVES_DIR / (e.get("file") or "")
+        if not p.exists():
+            continue
+        # 512px, matching the thumbnails production pulls from Firestore. A
+        # counter-example only has to be recognisable as the same object; at
+        # native resolution one of these is a megabyte of prompt per call.
+        rows.append({
+            "imageBytes": _downscale(p.read_bytes(), 512),
+            "visibleText": e.get("hallucinatedText"),
+            "highSignal": bool(e.get("highSignal")),
+        })
+    return verifier.build_negative_exemplars(rows, BRAND["name"], limit=limit)
 
 
 # ─────────────────────────── one image ───────────────────────────
@@ -216,11 +288,12 @@ def _verify(result: dict, image_bytes: bytes, refs: list[bytes], stats: dict) ->
     if not verifier.should_verify(result):
         return result
     try:
+        negatives = load_negatives()
         verdict = gemini.verify_brand(
             _resize(image_bytes, verifier.VERIFY_MAX_DIM),
             BRAND["name"],
             reference_image_bytes=refs,
-            negative_exemplars=[],
+            negative_exemplars=negatives,
             model="gemini-2.5-flash",
         )
         stats["verify_calls"] += 1
@@ -228,15 +301,55 @@ def _verify(result: dict, image_bytes: bytes, refs: list[bytes], stats: dict) ->
         if verifier.needs_crop(box):
             crop = verifier.crop_to_box(image_bytes, box)
             if crop:
-                verdict = gemini.verify_brand(
+                refined = gemini.verify_brand(
                     crop, BRAND["name"], reference_image_bytes=refs,
-                    negative_exemplars=[], model="gemini-2.5-flash",
+                    negative_exemplars=negatives, model="gemini-2.5-flash",
                 )
                 stats["verify_calls"] += 1
+                # Same guard as detect_image._verify_pass, and it was missing
+                # here entirely: the crop replaced the full-frame verdict
+                # unconditionally, so a box that landed on sky deleted a
+                # detection the full frame had read correctly.
+                if verifier.crop_supersedes(refined):
+                    verdict = refined
         return verifier.decide(result, verdict, brand_slug=BRAND["slug"])
     except Exception as e:
         print(f"    verifier failed, keeping first verdict: {str(e)[:70]}")
         return result
+
+
+# What the FIRST pass sees, on the long edge. PROD is what the deployed function
+# uses (handlers.detect_image.MAX_IMAGE_DIM); 0 means "send it as archived".
+#
+# This is a real lever, not a knob. Measured on the Lowlands TikTok archive,
+# re-judging every finding at PROD instead of native resolution lost three
+# sightings that are plainly Stelz to the eye: @niekroozen's poolside sign read
+# "STELZ" at 0.95 and became nothing, @booijagency's frame 7 read "STELZ HARD
+# SELTZER ALCOHOL INFUSED SPARKLING" and became nothing, @eloisevoranje's
+# parasol likewise. Video frames arrive at the clip's own resolution — cv2
+# encodes them straight out of the decoder — so a 1080x1920 frame loses about
+# 93% of its pixels on the way in, and a wordmark that was 40px wide becomes 19.
+#
+# Not changed in production here: MAX_IMAGE_DIM applies to every image the
+# pipeline has ever seen, and raising it is a cost decision for the account
+# owner, not a detail of this archive. It is recorded in each verdict instead,
+# so a number can always be traced to the resolution that produced it.
+PROD_MAX_DIM = MAX_IMAGE_DIM
+_max_dim = PROD_MAX_DIM
+
+
+def set_max_dim(value: int) -> None:
+    """Set the first-pass resolution for this process. 0 disables downscaling."""
+    global _max_dim
+    _max_dim = int(value)
+
+
+def current_max_dim() -> int:
+    return _max_dim
+
+
+def _first_pass_bytes(image_bytes: bytes) -> bytes:
+    return image_bytes if _max_dim <= 0 else _resize(image_bytes, _max_dim)
 
 
 def judge_image(image_bytes: bytes, refs: list[bytes], stats: dict,
@@ -248,8 +361,17 @@ def judge_image(image_bytes: bytes, refs: list[bytes], stats: dict,
     gate or verifier overturned is NOT the same thing as a frame with nothing
     in it, and the UI has no way to tell them apart unless it is recorded here.
     """
+    # 512px, because that is what production sends. gemini.detect_image does
+    # NOT resize — detect_image.run does it at the call site — so passing the
+    # archived bytes straight through was quietly running the first pass at up
+    # to 4096px. Two problems with that: the local numbers would flatter what
+    # the deployed function will actually see, and the verifier's whole premise
+    # ("this pass looks at 4x the pixel area of the first") stops being true.
+    #
+    # It also failed outright. One 3072x4096 progressive JPEG came back as an
+    # empty object every single time at full size and parsed cleanly at 512.
     res = gemini.detect_image(
-        image_url="", image_bytes=image_bytes,
+        image_url="", image_bytes=_first_pass_bytes(image_bytes),
         brand_name=BRAND["name"], product_lines=BRAND["productLines"],
         reference_image_bytes=refs,
     )
@@ -364,6 +486,10 @@ def verdict_record(item_id: str, handle: str, results: list[dict],
         "verify_verdict": best.get("verify_verdict"),
         "verify_brand": best.get("verify_brand"),
         "verify_reason": best.get("verify_reason"),
+        # Where the wordmark was, when it was not on a can: signage, merchandise,
+        # clothing. A branded bar front is a placement a brand paid for, and the
+        # screen should say which kind it was rather than flatten it into "hit".
+        "verify_placement": best.get("verify_placement"),
         "false_positive_risk": best.get("false_positive_risk"),
         "people_count": best.get("people_count"),
         "setting": best.get("setting"),
@@ -375,4 +501,8 @@ def verdict_record(item_id: str, handle: str, results: list[dict],
         "frames_analysed": sum(1 for r in results if not r.get("screened_out")),
         "frames_extracted": frames_extracted or len(results),
         "video_seconds": duration_s,
+        # The resolution the first pass actually saw. Without it a hit count
+        # cannot be compared with another run, and the gap between local and
+        # deployed results has no visible cause.
+        "max_dim": current_max_dim(),
     }

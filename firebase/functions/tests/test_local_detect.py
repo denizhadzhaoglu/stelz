@@ -195,3 +195,99 @@ class TestGeminiClientIsBuiltOnce(unittest.TestCase):
 
 if __name__ == "__main__":
     sys.exit(unittest.main())
+
+
+class TestTheLocalVerifierLearnsFromRejections(unittest.TestCase):
+    """Production feeds moderator-rejected images back into the verify prompt.
+
+    The local analyser used to pass negative_exemplars=[] — so a false positive
+    confirmed by eye was re-made on every subsequent run, forever. The measured
+    case: a mirror selfie of a white slim can reading SAVRY, which the detector
+    transcribed as "STËLZ HARD ICED TEA" in an Instagram post AND, separately,
+    in a story of the same scene.
+    """
+
+    def test_the_manifest_is_committed_and_the_images_are_not(self):
+        # Same rule as tools/eval/golden_sources.json: the manifest is the
+        # artefact, the pixels are other people's photographs.
+        self.assertTrue(D.NEGATIVES_MANIFEST.exists(), "negatives.json is missing")
+        self.assertIn(".tmp", str(D.NEGATIVES_DIR))
+
+    def test_every_entry_names_what_the_detector_hallucinated(self):
+        import json
+        data = json.loads(D.NEGATIVES_MANIFEST.read_text())
+        self.assertTrue(data.get("rejected"), "manifest has no entries")
+        for e in data["rejected"]:
+            self.assertTrue(e.get("file"), e)
+            self.assertTrue(e.get("hallucinatedText"), e)
+            self.assertTrue(e.get("whyItIsNotStelz"), e)
+
+    def test_exemplars_are_labelled_pairs_never_bare_bytes(self):
+        # The legacy stack emitted these as unlabelled "Reference {i}:" parts and
+        # taught the detector that twelve confirmed false positives WERE the
+        # brand. The label has to travel with the image.
+        for label, blob in D.load_negatives():
+            self.assertIsInstance(label, str)
+            self.assertIn("NOT STELZ", label)
+            self.assertIsInstance(blob, (bytes, bytearray))
+
+    def test_a_missing_image_degrades_to_no_exemplars_not_a_crash(self):
+        with mock.patch.object(D, "NEGATIVES_DIR", Path("/nonexistent-negatives")):
+            self.assertEqual(D.load_negatives(), [])
+
+    def test_a_missing_manifest_degrades_too(self):
+        with mock.patch.object(D, "NEGATIVES_MANIFEST", Path("/nonexistent.json")):
+            self.assertEqual(D.load_negatives(), [])
+
+    def test_the_verifier_is_actually_given_them(self):
+        # A loader nothing calls is decoration. Assert the wiring, not just the
+        # helper — this is the bug that existed for the whole first analysis run.
+        src = Path(D.__file__).read_text()
+        self.assertNotIn("negative_exemplars=[]", src,
+                         "the local verifier is still running blind")
+        self.assertIn("negative_exemplars=negatives", src)
+
+
+class TestTheFirstPassSeesWhatProductionSees(unittest.TestCase):
+    """gemini.detect_image does not resize. detect_image.run does, at the call
+    site, to MAX_IMAGE_DIM=512 — and this module passed the archived bytes
+    straight through, so the local first pass was reading images at up to
+    4096px while the deployed function reads them at 512.
+
+    Two consequences, both bad. Local hit counts would flatter what a deploy
+    actually finds, and lib/verifier's premise — "this pass looks at 4x the
+    pixel area of the first" — silently inverts when the first pass had eight
+    times the pixels of the second.
+
+    It also broke outright: one 3072x4096 progressive JPEG returned an empty
+    object on every attempt at full size and parsed cleanly at 512.
+    """
+
+    def _tiny_jpeg(self, w: int, h: int) -> bytes:
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (w, h), (200, 30, 30)).save(buf, format="JPEG")
+        return buf.getvalue()
+
+    def test_a_large_image_is_downscaled_before_the_model_sees_it(self):
+        from PIL import Image
+        import io
+        big = self._tiny_jpeg(3072, 4096)
+        seen: dict = {}
+
+        def fake_detect(**kw):
+            seen["bytes"] = kw["image_bytes"]
+            return {"detected": False, "context": "nothing here"}
+
+        with mock.patch.object(D.gemini, "detect_image", side_effect=fake_detect):
+            D.judge_image(big, [], D.new_stats())
+
+        w, h = Image.open(io.BytesIO(seen["bytes"])).size
+        self.assertLessEqual(max(w, h), 512, f"first pass got {w}x{h}")
+
+    def test_the_verifier_still_gets_more_pixels_than_the_first_pass(self):
+        # The ordering the second look depends on. If these ever cross, the
+        # legibility-contradiction rule starts deleting true positives.
+        from handlers.detect_image import MAX_IMAGE_DIM
+        self.assertGreater(D.verifier.VERIFY_MAX_DIM, MAX_IMAGE_DIM)

@@ -1,0 +1,46 @@
+{
+  "_comment": [
+    "Confirmed false positives, fed back to the verifier as LABELLED negative",
+    "exemplars — the local stand-in for the moderator '✕' loop that production",
+    "runs through refs.load_negative_exemplars.",
+    "",
+    "The IMAGES are not committed. They are other people's photographs, and the",
+    "same rule applies as to tools/eval/golden_sources.json: the manifest is the",
+    "artefact, the pixels are fetched. Put the files in .tmp/negatives/ (already",
+    "gitignored); a missing file is skipped, never fatal.",
+    "",
+    "Every entry has been checked BY EYE at native resolution. 'hallucinatedText'",
+    "is what the detector claimed to read, verbatim — naming the invented string",
+    "next to the image that does not contain it is the whole lesson, and",
+    "verifier.build_negative_exemplars puts it in the label.",
+    "",
+    "highSignal marks a rejection that overturned a CONFIDENT detection. Those",
+    "sort first, because there are only four slots and the model's confident",
+    "mistakes teach more than its hesitant ones."
+  ],
+  "rejected": [
+    {
+      "id": "savry-mirror-selfie",
+      "file": "DcOytrcjILws1.jpg",
+      "source": "instagram.com/annekeemolenaar — carousel DcOytrcjILw, slide 1 of 20",
+      "hallucinatedText": "STËLZ HARD ICED TEA",
+      "highSignal": true,
+      "whyItIsNotStelz": [
+        "A white slim can held in a mirror selfie. At native 3024x4032 the",
+        "wordmark reads SAVRY, mirrored, above three cross symbols — a layout",
+        "Stëlz does not use on any product line.",
+        "",
+        "Why it fools the detector: mirrored text defeats OCR, the can silhouette",
+        "and the white-on-slim livery match the reference packshots, and the",
+        "prompt has just shown eight photographs of Stëlz. The model fills the",
+        "unreadable label in from the strongest prior available, which is exactly",
+        "the failure mode a negative exemplar exists to counter.",
+        "",
+        "Not caught by the verifier either: it returned no_readable_brand, which",
+        "decide() correctly treats as 'I cannot tell' rather than 'it is absent',",
+        "so the first pass stood. Nothing in the stored fields separates this row",
+        "from a true positive — hence a human decision, recorded here."
+      ]
+    }
+  ]
+}

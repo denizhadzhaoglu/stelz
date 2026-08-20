@@ -81,6 +81,18 @@ const GATE_NL: Record<string, string> = {
   rejected_by_verifier: 'afgekeurd door de tweede controle',
   rejected_wordmark_mismatch: 'afgekeurd: het gelezen merk is niet Stëlz',
   demoted_wordmark_only: 'alleen een merknaam gelezen, geen product gezien',
+  rejected_fabricated_fine_print:
+    'de kleine lettertjes waren volgens het model niet leesbaar op deze afstand',
+  verified_off_container: 'bevestigd door de tweede controle — niet op een blikje',
+  verified_upgraded: 'bevestigd door de tweede controle op hogere resolutie',
+}
+
+// Where the wordmark sat, when it was not on a can (verifier.PLACEMENTS).
+const PLACEMENT_NL: Record<string, string> = {
+  signage: 'een bord, banner, parasol of bar',
+  merchandise: 'merchandise — denk aan een dienblad, koelbox of opblaasbaar blik',
+  clothing: 'kleding van iemand in beeld',
+  other: 'iets anders dan een blikje',
 }
 
 export function StoryDetail({ row, onClose }: { row: DetailRow | null; onClose: () => void }) {
@@ -177,6 +189,15 @@ export function StoryDetail({ row, onClose }: { row: DetailRow | null; onClose: 
             {d?.gate && (
               <p className="mt-1.5 text-[12px] text-[var(--color-warn)] leading-relaxed">
                 {GATE_NL[d.gate] ?? d.gate}
+              </p>
+            )}
+            {/* Where the wordmark was, when it was not on a can. A branded bar
+                front or parasol is a placement the brand paid for, and a report
+                that flattens it into "hit" loses the distinction the client
+                cares about most. */}
+            {d?.verify_placement && (
+              <p className="mt-1.5 text-[12px] text-[var(--color-good)] leading-relaxed">
+                Stëlz stond hier niet op een blikje maar op {PLACEMENT_NL[d.verify_placement]}.
               </p>
             )}
             {d?.verify_verdict && (

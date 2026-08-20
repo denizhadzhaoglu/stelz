@@ -53,7 +53,11 @@ log = logging.getLogger(__name__)
 # bumping it invalidates the whole corpus and re-bills every image ever scanned.
 # Versioning in the payload lets a stale verdict be re-verified lazily, one
 # image at a time, on the next cache hit.
-VERIFY_VERSION = 1
+#
+# v2: the verifier can now report the brand OFF a container, and a crop that
+# resolves nothing no longer overrules the full frame. Both change what a
+# "rejected" verdict means, so v1 verdicts are not comparable.
+VERIFY_VERSION = 2
 
 # Resolution for the second look. 4x the pixel area of the first pass, which is
 # the entire point — see the module docstring.
@@ -100,9 +104,24 @@ the reference photos beyond reasonable doubt. Choose "no_readable_brand" when
 something is clearly there but you cannot read it — that is a normal, useful
 answer, not a failure. Choose "other_brand" for a readable brand not in the list.
 
+STEP 4 — Look for the brand away from the container. A drinks brand at an event
+appears on things that are not drinks: a bar front, a parasol, a tent, a banner,
+a fridge, a cooler, a tray, an inflatable, a T-shirt, a cap, a coaster, a truck.
+This step is INDEPENDENT of steps 1-3 — answer it even when there is no
+container at all, and even when the container turns out to be a rival's.
+
+Set "brand_elsewhere" to where you see the {brand} wordmark, or null:
+  - "signage"      a sign, banner, menu board, bar front, parasol, tent, fridge
+  - "merchandise"  an object carrying the brand: tray, cooler, inflatable, cup
+  - "clothing"     worn by someone in the photo
+  - "other"        none of the above
+Only set it if you can actually READ the wordmark there — put what you read in
+"visible_text". A colour that resembles the brand's is not the brand.
+
 Return STRICT JSON ONLY (no prose, no markdown fences):
 {{
   "brand": "<exactly one value from the list above>",
+  "brand_elsewhere": "signage" | "merchandise" | "clothing" | "other" | null,
   "visible_text": "<what you actually read, or null>",
   "confidence": 0.0-1.0,
   "box_2d": [y1, x1, y2, x2] or null,
@@ -112,6 +131,11 @@ Return STRICT JSON ONLY (no prose, no markdown fences):
 box_2d: normalized 0-1000, origin TOP-LEFT, y before x, tight to the container.
 Return null rather than a guess if you cannot localize it confidently.
 """
+
+# Values `brand_elsewhere` may take. Anything else the model invents is treated
+# as "other" rather than discarded — the useful claim is that the wordmark was
+# read somewhere off-container, not which noun was picked for it.
+PLACEMENTS = ("signage", "merchandise", "clothing", "other")
 
 
 def build_prompt(brand_name: str = "STELZ") -> str:
@@ -123,17 +147,39 @@ def build_prompt(brand_name: str = "STELZ") -> str:
     )
 
 
+# The ONE hard rejection the second look is allowed to re-open. See
+# should_verify — narrow on purpose, and named here so the reason travels with
+# the rule instead of living in a string literal in three files.
+REOPENABLE_GATE = "rejected_fabricated_fine_print"
+
+
 def should_verify(result: dict[str, Any]) -> bool:
     """Is this detection in the population the verifier exists for?
 
-    Only demoted hits. A clean read of a large can (>=0.85, ungated) is not where
-    the errors are — measured 8/8 correct on the golden set — and verifying it
-    would multiply cost for no precision gain. A non-detection is not verified
-    either: this pass exists to remove false positives and rescue capped true
-    ones, not to re-open everything the gate rejected.
+    Demoted hits, plus exactly one class of hard rejection. A clean read of a
+    large can (>=0.85, ungated) is not where the errors are — measured 8/8
+    correct on the golden set — and verifying it would multiply cost for no
+    precision gain.
+
+    WHY ONE REJECTION IS RE-OPENED. detect_image's fabricated-fine-print rule
+    rejects a row that lists calories, millilitres and ABV off a can the model
+    itself called less than legible, on the premise that nobody resolves 8pt
+    print at that distance. That premise is about apparent size, and it breaks
+    on the objects a drinks brand actually deploys at an event: a two-metre
+    inflatable can, a parasol, a bar front. Measured case — booijagency's TikTok
+    cover, the brand's own agency, a giant STELZ Hard Lemonade inflatable across
+    the deck with "NATURAL FLAVOURING 63 CALORIES 250 ml e ALC. 4.5% VOL"
+    printed a hand's width tall. `size_in_frame` said medium, legibility said
+    not clear, and the row was deleted without a second look.
+
+    The rule's own comment already records this failure mode: an earlier
+    unconditional version "rejected 2 genuine Stelz cans ... and caught zero
+    actual fabrications". So rather than tuning the threshold on single images,
+    the rejection stands but stops being final — the pass built to settle
+    exactly this question gets to look, at four times the pixels, and decide().
     """
     if not result.get("detected"):
-        return False
+        return result.get("gate") == REOPENABLE_GATE
     if result.get("gate") in ("capped_small_object", "accepted_partial_wordmark"):
         return True
     return float(result.get("confidence") or 0) < 0.85
@@ -220,6 +266,42 @@ def crop_to_box(image_bytes: bytes, box: list, padding: float = CROP_PADDING) ->
         return None
 
 
+def placement_of(verdict: dict[str, Any]) -> str | None:
+    """Where the verifier says it read the wordmark, when not on a container.
+
+    Normalized to PLACEMENTS, with anything unrecognised folded to "other"
+    rather than dropped: the load-bearing claim is that the wordmark was read
+    off-container at all, not which noun the model reached for.
+    """
+    raw = verdict.get("brand_elsewhere")
+    if not isinstance(raw, str):
+        return None
+    v = raw.strip().lower()
+    if not v or v in ("null", "none", "no", "false"):
+        return None
+    return v if v in PLACEMENTS else "other"
+
+
+def crop_supersedes(refined: dict[str, Any]) -> bool:
+    """May a crop's verdict replace the full-frame one?
+
+    Only when the crop RESOLVED something. The crop is taken from a box the
+    model proposed for itself, so "no container here" and "cannot read it" are
+    statements about the crop — and the box can simply be wrong, in which case
+    the second call is looking at a patch of sky. Letting either answer
+    supersede turns added detail into lost signal, and then decide() rejects on
+    a verdict about the wrong pixels.
+
+    "not_a_container" was missing from this guard: it is a non-empty string that
+    isn't the brand, so a crop that landed on empty deck planking overruled a
+    full frame that had read the wordmark, and the detection was deleted.
+    """
+    brand = (refined.get("brand") or "").strip()
+    if placement_of(refined):
+        return True
+    return bool(brand) and brand not in ("no_readable_brand", "not_a_container")
+
+
 def decide(result: dict[str, Any], verdict: dict[str, Any], brand_slug: str = "stelz") -> dict[str, Any]:
     """Merge a verifier verdict into a detection result.
 
@@ -235,16 +317,61 @@ def decide(result: dict[str, Any], verdict: dict[str, Any], brand_slug: str = "s
     out["verify_version"] = VERIFY_VERSION
     out["verify_brand"] = brand or None
     out["verify_reason"] = (verdict.get("reason") or "")[:300] or None
+    out["verify_placement"] = placement_of(verdict)
+    off_container = bool(
+        out["verify_placement"] and (verdict.get("visible_text") or "").strip()
+    )
+
+    # A row that arrived hard-rejected may only be restored on POSITIVE
+    # evidence, and only from the one gate should_verify re-opens. Silence, an
+    # unreadable label or a failed call all leave it exactly as the gate left
+    # it — re-opening a rejection must never mean defaulting to detected.
+    reopened = (not result.get("detected")) and result.get("gate") == REOPENABLE_GATE
 
     if brand.lower() == brand_slug.lower():
         # Only promote on a confident, clean read. A hesitant "probably STELZ"
         # leaves the row exactly where it was — visible, but still flagged.
         if vconf >= 0.85:
+            out["detected"] = True
             out["confidence"] = max(float(out.get("confidence") or 0), 0.90)
             out["verify_verdict"] = "upgraded"
             out["gate"] = "verified_upgraded"
+        elif reopened:
+            # Hesitant, and the gate had already thrown this out. Not enough to
+            # overturn a rejection — but the disagreement is worth recording.
+            out["verify_verdict"] = "inconclusive"
         else:
             out["verify_verdict"] = "confirmed"
+        return out
+
+    # THE BRAND, NOT ON A CAN.
+    #
+    # Sits ahead of every rejection branch below, and that order is the point.
+    # Steps 1-3 ask which brand is on the CONTAINER, so a sponsored post whose
+    # Stelz is a bar front, a parasol, a branded tray or an inflatable ring has
+    # no honest answer there except "not_a_container" — which used to fall
+    # through into a rejection. Measured on the Lowlands archive: 22 of 41
+    # verifier rejections were "not_a_container", and the first three inspected
+    # by eye were a STELZ swim ring on a yacht, a STELZ festival bar with the
+    # wordmark across the front, and a hand raising a can to a mouth. Deleting
+    # those is not precision — off-container visibility is a large part of what
+    # a drinks brand pays a festival roster for.
+    #
+    # Below the container branch, not above it: when the can itself reads STELZ
+    # that is the stronger evidence and it should still be able to upgrade.
+    #
+    # Requires a transcript on purpose. "The wordmark is on the banner" is a
+    # positive claim about pixels, so it has to arrive with what was read; an
+    # orange object at a festival is not a brand.
+    if off_container:
+        # Restores a detection only where should_verify would have sent the row
+        # here in the first place — a live hit, or the one re-opened gate. This
+        # function is public and a caller that skipped should_verify must not be
+        # able to resurrect an arbitrary rejection through it.
+        if result.get("detected") or reopened:
+            out["detected"] = True
+        out["verify_verdict"] = "confirmed"
+        out["gate"] = "verified_off_container"
         return out
 
     # LEGIBILITY CONTRADICTION.

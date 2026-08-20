@@ -184,6 +184,15 @@ def to_detection(e: dict, v: dict, archive: str, surface: str, platform: str,
         "verify_verdict": v.get("verify_verdict"),
         "verify_brand": v.get("verify_brand"),
         "verify_reason": v.get("verify_reason"),
+        # Signage / merchandise / clothing, when the wordmark was not on a can.
+        "verify_placement": v.get("verify_placement"),
+        # The resolution this verdict was reached at, and whether the DEPLOYED
+        # function — which downscales every image to 512px — still finds it.
+        # False here means the dashboard is showing a sighting the live backend
+        # would currently miss, which is a fact about the deploy, not about the
+        # photo, and belongs on screen rather than in a note somewhere.
+        "max_dim": v.get("max_dim"),
+        "found_at_prod_res": v.get("found_at_prod_res"),
         "sentiment": None, "sentiment_score": None, "sentiment_rationale": None,
         "brand_id": "stelz",
         "detected": bool(v.get("detected")),
