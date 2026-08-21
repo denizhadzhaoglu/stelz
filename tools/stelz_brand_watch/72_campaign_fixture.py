@@ -144,15 +144,27 @@ def person(e: dict, ids: dict[str, str], roster: set[str], source: str) -> str:
     return handle
 
 
+def resolve_surface(e: dict, surface: str, platform: str) -> tuple[str, str]:
+    """What this row actually is, as opposed to what its archive mostly holds.
+
+    A brand hashtag search returns Instagram posts into an archive that is
+    otherwise TikTok, and the row records its own platform. Resolved ONCE and
+    handed to both builders: to_item and to_detection each derive the joining
+    id from the surface, so a surface decided twice is a post id that does not
+    match its own detection. Three Instagram discovery rows shipped exactly
+    that — "tiktok_videoigDcOwPojMxIM" against "instagram_postigDcOwPojMxIM" —
+    and the page reads an unjoined detection as "nog niet geanalyseerd".
+    """
+    platform = e.get("platform") or platform
+    if platform == "instagram" and surface == "tiktok":
+        surface = "post"
+    return surface, platform
+
+
 def to_item(e: dict, v: dict | None, event_id: str, kind: str, surface: str,
             platform: str, ids: dict[str, str], roster: set[str], source: str) -> dict:
     raw_id = str(e.get("story_id") or e.get("item_id") or e.get("video_id"))
     is_video = bool(e.get("video_file")) or e.get("media_type") == "video"
-    # The row's own platform wins over the archive's default: a hashtag search
-    # for a brand tag returns Instagram posts into a mostly-TikTok archive.
-    platform = e.get("platform") or platform
-    if platform == "instagram" and surface == "tiktok":
-        surface = "post"
     handle = (e.get("handle") or "").lower()
     return {
         "itemId": item_id(surface, raw_id),
@@ -281,11 +293,12 @@ def main() -> int:
         for raw_id, e in index.items():
             v = verdicts.get(raw_id)
             src = source_of(e, roster)
-            items.append(to_item(e, v, ev["id"], kind, surface, platform, ids, roster, src))
+            surf, plat = resolve_surface(e, surface, platform)
+            items.append(to_item(e, v, ev["id"], kind, surf, plat, ids, roster, src))
             # Only judged items get a detection row. An absent row is what makes
             # the UI say "nog niet geanalyseerd" instead of inventing a miss.
             if v is not None:
-                dets.append(to_detection(e, v, ev["id"], kind, surface, platform,
+                dets.append(to_detection(e, v, ev["id"], kind, surf, plat,
                                          ids, roster, src))
                 hits += bool(v.get("detected"))
                 near += bool(v.get("near_miss"))
