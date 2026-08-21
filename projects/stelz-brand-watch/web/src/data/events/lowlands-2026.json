@@ -1,0 +1,62 @@
+{
+  "id": "lowlands-2026",
+  "name": "Lowlands 2026",
+  "projectId": "stelz lowlands",
+  "venue": "Walibi Holland, Biddinghuizen",
+  "window": {
+    "start": "2026-08-20",
+    "end": "2026-08-23",
+    "preDays": 3,
+    "postDays": 7
+  },
+  "roster": [
+    { "name": "Stefan de Vries", "instagram": "stefandevries", "tiktok": "stefandevries" },
+    { "name": "Malith Yalage", "instagram": "heymalith", "tiktok": "heymalith" },
+    { "name": "Rein van Duivenboden", "instagram": "rvdofficial", "tiktok": "rinnavandoffoe" },
+    { "name": "Annekee", "instagram": "annekeemolenaar", "tiktok": null },
+    { "name": "Diego Bossers", "instagram": "diego.bossers", "tiktok": "diegobossers" },
+    { "name": "Frank Slotta", "instagram": "frankslotta", "tiktok": "slottafrank" },
+    { "name": "Lize Booij", "instagram": "lizebooij", "tiktok": "booijagency" },
+    { "name": "Daan Hoogervorst", "instagram": "daanhoogervorst", "tiktok": "daandraaitdoorpodcast" },
+    { "name": "Josh Bram", "instagram": "joshbram_", "tiktok": "joshbram_" },
+    { "name": "Pleun Bierbooms", "instagram": "pleunbierbooms", "tiktok": "pleun.bierbooms" },
+    { "name": "Sjoerd Kist", "instagram": "sjoerdkist", "tiktok": "sjoerdkist" },
+    { "name": "Karen Smit", "instagram": "karensmittt", "tiktok": "karen.smit" },
+    { "name": "Lizzy van der Ligt", "instagram": "lizzyvdligt", "tiktok": "lizzyvdligt" },
+    { "name": "Niek Roozen", "instagram": "niekroozen", "tiktok": "niekroozen" },
+    { "name": "Jitske Schaap", "instagram": "jitskeschaap", "tiktok": "jitskeschaap" },
+    { "name": "André Feulner", "instagram": "andref3000", "tiktok": null },
+    { "name": "Isadee Jansen", "instagram": "isadeejansen", "tiktok": "isadeejans" },
+    { "name": "Guusje Willemse", "instagram": "guusjewm", "tiktok": "guusje.willemse" },
+    { "name": "Sterre de Goede", "instagram": "sterredegoedex", "tiktok": "sterredegoede" },
+    { "name": "Noor Omrani", "instagram": "nooromrani", "tiktok": "nooromrani" },
+    { "name": "Daelorian", "instagram": "daelostylo", "tiktok": "daelostylo" },
+    { "name": "Talisia Misiedjan", "instagram": "talisia90", "tiktok": "talisiamisiedjan" },
+    { "name": "Eloise van Oranje", "instagram": "eloisevanoranje", "tiktok": "eloisevoranje" },
+    { "name": "Britt Messing", "instagram": "brittmessing", "tiktok": "brittmessing" },
+    { "name": "Tess Scholten", "instagram": "tessscholten", "tiktok": "tessscholten" },
+    { "name": "David Scholten", "instagram": "davidscholten", "tiktok": null },
+    { "name": "Jort Runia", "instagram": "jort_runia", "tiktok": "jortruniajr" },
+    { "name": "Gotu Jim", "instagram": "gotu_jim", "tiktok": "gotu_jim" }
+  ],
+  "hashtags": [
+    { "tag": "stelz", "family": "brand" },
+    { "tag": "drinkstelz", "family": "brand" },
+    { "tag": "stelzhardlemonade", "family": "brand" },
+    { "tag": "stelzhardseltzer", "family": "brand" },
+    { "tag": "stelzhardicedtea", "family": "brand" },
+    { "tag": "stelzmixedclassics", "family": "brand" },
+    { "tag": "stelzlowlands", "family": "brand" },
+    { "tag": "lowlandsstelz", "family": "brand" },
+    { "tag": "lowlands", "family": "event" },
+    { "tag": "lowlands2026", "family": "event" },
+    { "tag": "lowlandsfestival", "family": "event" },
+    { "tag": "llowlands", "family": "event" },
+    { "tag": "lowlandsparadise", "family": "event" }
+  ],
+  "discovery": {
+    "perTag": 40,
+    "perBrandTag": 200,
+    "instagramEventTags": false
+  }
+}

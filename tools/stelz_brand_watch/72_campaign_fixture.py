@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Merge the three archives into one campaign fixture for the dev server.
+"""Merge an event's archives into one campaign fixture for the dev server.
 
     ./firebase/functions/venv/bin/python \\
-        tools/stelz_brand_watch/72_campaign_fixture.py
+        tools/stelz_brand_watch/72_campaign_fixture.py --event lowlands-2026
 
-Reads .tmp/{stories,ig-posts,tiktok}-archive — index + verdicts — and writes
-two files next to them:
+Reads .tmp/events/<event>/{stories,ig-posts,tiktok,discovery} — index +
+verdicts — and writes two files:
 
     preview-campaign.json             CampaignItem[]   (lib/campaign.ts)
     preview-campaign-detections.json  DetectionRow[]   (lib/types.ts)
@@ -28,6 +28,8 @@ that may already have expired.
 """
 from __future__ import annotations
 
+import argparse
+import importlib.util
 import json
 from pathlib import Path
 
@@ -36,43 +38,26 @@ TMP = ROOT / ".tmp"
 OUT_ITEMS = TMP / "preview-campaign.json"
 OUT_DETS = TMP / "preview-campaign-detections.json"
 
-# (archive dir, id field, surface, platform, source)
+_espec = importlib.util.spec_from_file_location(
+    "_events", Path(__file__).with_name("_events.py"))
+E = importlib.util.module_from_spec(_espec)
+_espec.loader.exec_module(E)
+
+# (archive kind, id field, default surface, default platform)
 #
-# `source` is the split the dashboard shows: roster content was posted by
-# someone Stëlz is paying, discovery content by anyone else at the same
-# festival. They answer a contract question and a marketing question
-# respectively, and merging them would count strangers as deliverables.
-SOURCES = [
-    ("stories-archive", "story_id", "story", "instagram", "roster"),
-    ("ig-posts-archive", "item_id", "post", "instagram", "roster"),
-    ("tiktok-archive", "video_id", "tiktok", "tiktok", "roster"),
-    ("lowlands-discovery-archive", "video_id", "tiktok", "tiktok", "discovery"),
+# Note what is NOT in this table any more: `source`. It used to be a property of
+# the ARCHIVE — everything in the discovery archive was organic, everything in
+# the roster archives was paid. That is wrong in both directions. A hashtag
+# search returns roster creators, and a roster profile scrape returns collab
+# posts published from a co-author's account: 44 rows across 15 accounts that
+# are not on the roster and are not strangers either. Source is a property of
+# the ACCOUNT, so it is decided per row, from the roster.
+KINDS = [
+    ("stories", "story_id", "story", "instagram"),
+    ("ig-posts", "item_id", "post", "instagram"),
+    ("tiktok", "video_id", "tiktok", "tiktok"),
+    ("discovery", "video_id", "tiktok", "tiktok"),
 ]
-
-
-SEED = ROOT / "projects" / "stelz-brand-watch" / "web" / "src" / "data" / "lowlandsSeed.ts"
-
-
-def identity_map() -> dict[str, str]:
-    """TikTok handle -> the person's Instagram handle.
-
-    Rein van Duivenboden is @rvdofficial on Instagram and @rinnavandoffoe on
-    TikTok. Keyed on the raw handle, the campaign table shows him twice and
-    reports 42 creators for a roster of 28 — which makes "wie leverde er niets"
-    unanswerable, and that column is the reason the page exists.
-
-    The Instagram handle wins because that is what creator ids and project
-    rosters are already built from (splitCreatorId in lib/projects.ts).
-    """
-    if not SEED.exists():
-        return {}
-    tsv = SEED.read_text().split("`", 1)[1].rsplit("`", 1)[0]
-    out: dict[str, str] = {}
-    for line in tsv.strip().splitlines()[1:]:
-        cols = [c.strip().lstrip("@").lower() for c in line.split("\t")]
-        if len(cols) > 2 and cols[1] and cols[2] and cols[2] != "geen":
-            out[cols[2]] = cols[1]
-    return out
 
 
 def read_jsonl(path: Path, key: str) -> dict[str, dict]:
@@ -91,8 +76,13 @@ def read_jsonl(path: Path, key: str) -> dict[str, dict]:
     return out
 
 
-def media_url(archive: str, filename: str | None) -> str | None:
-    return f"/preview-media/{archive}/{filename}" if filename else None
+def media_url(event_id: str, kind: str, filename: str | None) -> str | None:
+    """Where the dev server serves the archived bytes from.
+
+    Per event and per kind, matching the directory layout. web/vite.config.ts
+    validates both segments against an allow-list before joining them onto a
+    path — this string is a URL a browser asks for, not a trusted value."""
+    return f"/preview-media/{event_id}/{kind}/{filename}" if filename else None
 
 
 def item_id(surface: str, raw_id: str) -> str:
@@ -108,30 +98,87 @@ def item_id(surface: str, raw_id: str) -> str:
             "tiktok": f"tiktok_video{raw_id}"}[surface]
 
 
-def to_item(e: dict, v: dict | None, archive: str, surface: str, platform: str,
-            ids: dict[str, str], source: str = "roster") -> dict:
+def source_of(e: dict, roster: set[str]) -> str:
+    """Paid or organic, decided by the account rather than by the archive.
+
+    Both handles are checked. `scraped_for` is the profile Apify was reading
+    when it returned the post, which on a collab post is the ONLY link back to
+    the roster — ownerUsername is then the co-author's account. Getting this
+    wrong moves bought reach into the organic column, which is the flattering
+    direction and therefore the one to guard.
+    """
+    for h in ((e.get("handle") or ""), (e.get("scraped_for") or "")):
+        if h.strip().lstrip("@").lower() in roster:
+            return "roster"
+    for c in (e.get("coauthors") or []):
+        if str(c).strip().lstrip("@").lower() in roster:
+            return "roster"
+    return "discovery"
+
+
+def person(e: dict, ids: dict[str, str], roster: set[str], source: str) -> str:
+    """The PERSON this content should be credited to.
+
+    Three cases, in order:
+
+      1. A TikTok handle the roster knows -> that person's Instagram handle.
+         Rein is @rvdofficial on Instagram and @rinnavandoffoe on TikTok; keyed
+         on the account he is two creators and a roster of 28 reports 30.
+      2. A collab post -> whoever's profile it was found on. Instagram
+         publishes it under the co-author's account, so @golfnl, @bnnvara and
+         thirteen others show up as creators nobody booked. They are Britt
+         Messing's post and Jitske Schaap's post.
+      3. Anything else -> the account, unchanged.
+
+    Only for roster content. A discovery hit stays credited to whoever posted
+    it — that is the whole point of the organic column.
+    """
+    handle = (e.get("handle") or "").strip().lower()
+    if handle in ids:
+        return ids[handle]
+    if source == "roster" and handle not in roster:
+        for candidate in [(e.get("scraped_for") or ""), *(e.get("coauthors") or [])]:
+            c = str(candidate).strip().lstrip("@").lower()
+            if c in roster:
+                return ids.get(c, c)
+    return handle
+
+
+def to_item(e: dict, v: dict | None, event_id: str, kind: str, surface: str,
+            platform: str, ids: dict[str, str], roster: set[str], source: str) -> dict:
     raw_id = str(e.get("story_id") or e.get("item_id") or e.get("video_id"))
     is_video = bool(e.get("video_file")) or e.get("media_type") == "video"
-    # A discovery row may be an Instagram post that arrived through a hashtag
-    # search; the row says so and overrides the archive's default.
+    # The row's own platform wins over the archive's default: a hashtag search
+    # for a brand tag returns Instagram posts into a mostly-TikTok archive.
     platform = e.get("platform") or platform
-    if source == "discovery" and platform == "instagram":
+    if platform == "instagram" and surface == "tiktok":
         surface = "post"
+    handle = (e.get("handle") or "").lower()
     return {
         "itemId": item_id(surface, raw_id),
+        "eventId": event_id,
         "source": source,
         "foundVia": e.get("found_via"),
+        # Whose profile this was found on. Kept on the row so lib/events
+        # matchEvent can reach the same verdict in the browser instead of
+        # trusting a label baked in here.
+        "scrapedFor": (e.get("scraped_for") or "").lower() or None,
+        # A carousel is one post shown as several rows. The shortcode is what
+        # says which rows are the same post, so "18 posts · 37 beelden" can be
+        # counted instead of reporting 37 posts.
+        "postKey": e.get("short_code") or raw_id,
+        "slot": e.get("slot"),
+        "slots": e.get("slots"),
         "platform": platform,
         "surface": surface,
         # The PERSON, not the account. See identity_map.
-        "creatorHandle": ids.get((e.get("handle") or "").lower(),
-                                 (e.get("handle") or "").lower()),
-        "platformHandle": (e.get("handle") or "").lower(),
+        "creatorHandle": person(e, ids, roster, source),
+        "platformHandle": handle,
         "url": e.get("url") or (
             f"https://www.instagram.com/stories/{e.get('handle')}/{raw_id}/"
             if surface == "story" else None),
-        "coverUrl": media_url(archive, e.get("image_file")),
-        "videoUrl": media_url(archive, e.get("video_file")),
+        "coverUrl": media_url(event_id, kind, e.get("image_file")),
+        "videoUrl": media_url(event_id, kind, e.get("video_file")),
         "mediaType": "video" if is_video else "image",
         "postedAt": e.get("posted_at"),
         "caption": e.get("caption") or None,
@@ -151,21 +198,21 @@ def to_item(e: dict, v: dict | None, archive: str, surface: str, platform: str,
     }
 
 
-def to_detection(e: dict, v: dict, archive: str, surface: str, platform: str,
-                 ids: dict[str, str]) -> dict:
+def to_detection(e: dict, v: dict, event_id: str, kind: str, surface: str,
+                 platform: str, ids: dict[str, str], roster: set[str],
+                 source: str) -> dict:
     raw_id = str(e.get("story_id") or e.get("item_id") or e.get("video_id"))
     return {
         "detection_id": f"preview_{surface}_{raw_id}",
         "creator_id": None,
-        "creator_handle": ids.get((e.get("handle") or "").lower(),
-                                  (e.get("handle") or "").lower()),
+        "creator_handle": person(e, ids, roster, source),
         "creator_category": None,
         "platform": platform,
         "product_line": v.get("product_line"),
         "confidence": v.get("confidence"),
         "size_in_frame": v.get("size_in_frame"),
         "is_primary_subject": v.get("is_primary_subject"),
-        "image_url": media_url(archive, e.get("image_file")),
+        "image_url": media_url(event_id, kind, e.get("image_file")),
         "stored_path": None,
         "post_url": e.get("url"),
         "post_caption": e.get("caption") or None,
@@ -214,55 +261,78 @@ def to_detection(e: dict, v: dict, archive: str, surface: str, platform: str,
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--event", default="lowlands-2026", choices=E.available())
+    args = ap.parse_args()
+
+    ev = E.load(args.event)
+    ids = E.identity_map(ev)
+    roster = E.roster_accounts(ev)
     items: list[dict] = []
     dets: list[dict] = []
     report: list[str] = []
-    ids = identity_map()
 
-    for archive, id_field, surface, platform, source in SOURCES:
-        base = TMP / archive
-        index = read_jsonl(base / "index.jsonl", id_field)
-        verdicts = read_jsonl(base / "verdicts.jsonl", "item_id")
+    for kind, id_field, surface, platform in KINDS:
+        P = E.paths(ev, kind)
+        index = read_jsonl(P.index, id_field)
+        verdicts = read_jsonl(P.dir / "verdicts.jsonl", "item_id")
         hits = near = 0
         for raw_id, e in index.items():
             v = verdicts.get(raw_id)
-            items.append(to_item(e, v, archive, surface, platform, ids, source))
+            src = source_of(e, roster)
+            items.append(to_item(e, v, ev["id"], kind, surface, platform, ids, roster, src))
             # Only judged items get a detection row. An absent row is what makes
             # the UI say "nog niet geanalyseerd" instead of inventing a miss.
             if v is not None:
-                dets.append(to_detection(e, v, archive, surface, platform, ids))
+                dets.append(to_detection(e, v, ev["id"], kind, surface, platform,
+                                         ids, roster, src))
                 hits += bool(v.get("detected"))
                 near += bool(v.get("near_miss"))
-        label = surface if source == "roster" else f"{surface}*"
-        report.append(f"  {label:<8} {len(index):>4} items · {len(verdicts):>4} judged · "
-                      f"{hits} with Stëlz · {near} near"
-                      + ("   (los gevonden)" if source == "discovery" else ""))
+        report.append(f"  {kind:<10} {len(index):>4} rijen · {len(verdicts):>4} beoordeeld · "
+                      f"{hits} met Stëlz · {near} bijna")
 
     if not items:
-        print("No archives found under .tmp/ — harvest first "
-              "(62_stories_archive.py, 70_tiktok_archive.py, 71_ig_posts_archive.py)")
+        print(f"No archives under {E.paths(ev, 'stories').dir.parent} — harvest first "
+              "(62_stories_archive.py, 70, 71, 73)")
         return 1
 
     OUT_ITEMS.write_text(json.dumps(items, indent=1))
     OUT_DETS.write_text(json.dumps(dets, indent=1))
 
+    print(f"{ev['name']} · {ev['venue']}")
     print("\n".join(report))
-    handles = sorted({i["creatorHandle"] for i in items if i["creatorHandle"]})
-    tt_views = sum(i["views"] or 0 for i in items if i["surface"] == "tiktok")
-    accounts = sorted({i["platformHandle"] for i in items if i["platformHandle"]})
-    print(f"\n  {len(items)} items · {len(dets)} judged · {len(handles)} people "
-          f"across {len(accounts)} accounts")
-    print(f"  TikTok views: {tt_views:,}  (the only published viewing figure here)")
-    disc = [i for i in items if i.get("source") == "discovery"]
-    if disc:
-        # Distinct accounts, not posts. Nine sightings from one enthusiast and
-        # nine from nine strangers are very different findings.
-        print(f"  {len(disc)} los gevonden, van "
-              f"{len({i['platformHandle'] for i in disc if i['platformHandle']})} accounts "
-              f"buiten de roster")
-    print(f"  wrote {OUT_ITEMS.relative_to(ROOT)}")
+
+    # ---- what actually falls inside the event -------------------------------
+    # Everything above counts the ARCHIVE, which reaches back years. These
+    # numbers count the EVENT. Printing only the first set is how a festival
+    # page came to report 50 sightings for a weekend that had 8.
+    start, end = E.window(ev)
+    judged = {d["post_id"] for d in dets}
+    hit_ids = {d["post_id"] for d in dets if d.get("detected")}
+    inside = [i for i in items if E.in_window(ev, i.get("postedAt"))]
+
+    def posts(rows: list[dict]) -> int:
+        """Unique posts, not rows. A ten-slide carousel is one post."""
+        return len({(r["platformHandle"], r["postKey"]) for r in rows})
+
+    for src in ("roster", "discovery"):
+        rows = [i for i in inside if i["source"] == src]
+        seen = [r for r in rows if r["itemId"] in judged]
+        hit = [r for r in rows if r["itemId"] in hit_ids]
+        views = sum(r["views"] or 0 for r in rows if r["surface"] == "tiktok")
+        label = "roster   " if src == "roster" else "los      "
+        print(f"\n  {label} {posts(rows)} posts ({len(rows)} beelden) · "
+              f"{len(seen)} beoordeeld · {posts(hit)} met Stëlz")
+        print(f"            {len({r['platformHandle'] for r in rows if r['platformHandle']})} "
+              f"accounts · {views:,} TikTok-weergaven")
+
+    print(f"\n  venster {start} t/m {end}: {len(inside)} van {len(items)} beelden")
+    print(f"  {len(items) - len(inside)} beelden vallen erbuiten — ouder of nieuwer dan "
+          f"het evenement, en dus geen {ev['name']}")
+    print(f"\n  wrote {OUT_ITEMS.relative_to(ROOT)}")
     print(f"        {OUT_DETS.relative_to(ROOT)}")
-    print("\n  open http://localhost:5180/campagne?preview=campaign")
+    print(f"\n  open http://localhost:5173/evenementen/{ev['id']}?preview=campaign")
     return 0
 
 

@@ -94,6 +94,22 @@ export type CampaignItem = {
    *  which was found by handle. Kept so a tag's real yield can be measured
    *  rather than assumed. */
   foundVia?: string | null
+  /** Which event's harvest produced this row. Provenance, not attribution —
+   *  whether a row BELONGS to an event is decided by lib/events.matchEvent,
+   *  which reads the date, the roster and the tags. */
+  eventId?: string | null
+  /** Whose profile the scraper was reading when it found this. On a collab post
+   *  it is the only link back to the roster: Instagram publishes the post on
+   *  both authors' profiles, so `platformHandle` is the co-author's account.
+   *  44 rows across 15 accounts read as strangers without it. */
+  scrapedFor?: string | null
+  /** What makes several rows ONE post. A carousel is archived per slide — the
+   *  can is rarely on slide one — so 37 sightings can be 18 posts, and both
+   *  numbers are worth having as long as neither is labelled the other. */
+  postKey?: string | null
+  /** Position in a carousel, and how many slides it has. Null off Instagram. */
+  slot?: number | null
+  slots?: number | null
 }
 
 export type CampaignRow = CampaignItem & {
@@ -114,6 +130,9 @@ export type CampaignRow = CampaignItem & {
    *  downscale. Not a doubt about the photo — a gap between what was measured
    *  here and what the live function currently sees. */
   missedByDeploy: boolean
+  /** Always set, unlike the optional field on the item: falls back to the item
+   *  id, which makes a row with no carousel exactly one post. */
+  postKey: string
 }
 
 /** Same join as joinStories, over items instead of story posts. Pass RAW
@@ -140,6 +159,11 @@ export function joinCampaign(items: CampaignItem[], detections: DetectionRow[]):
       placement: best?.verify_placement ?? null,
       source: it.source ?? 'roster',
       missedByDeploy: best?.detected === true && best?.found_at_prod_res === false,
+      // Scoped by account: two people can post carousels whose shortcodes are
+      // unrelated, but nothing guarantees the ids never collide across
+      // archives, and a collision here would silently merge two posts into one.
+      postKey: `${(it.platformHandle || it.creatorHandle || '').toLowerCase()}/${
+        it.postKey || it.itemId}`,
     }
   })
 }
@@ -171,7 +195,15 @@ function framesJudgedIn(group: DetectionRow[]): number {
 // ─────────────────────────── rollup ───────────────────────────
 
 export type SurfaceStats = {
+  /** Rows: one per image or video actually looked at. A ten-slide carousel is
+   *  ten of these, which is right for "how much did we examine" and wrong for
+   *  "how much did they post". */
   items: number
+  /** Posts: what a person would count. The same carousel is one. On the real
+   *  fixture the gap is 1150 rows to 210 posts, and 37 sightings to 18. */
+  posts: number
+  /** Posts with Stëlz in at least one slide. Never larger than `posts`. */
+  postsWithStelz: number
   judged: number
   imagesSeen: number
   withStelz: number
@@ -188,8 +220,9 @@ export type SurfaceStats = {
 }
 
 const EMPTY: SurfaceStats = {
-  items: 0, judged: 0, imagesSeen: 0, withStelz: 0, near: 0,
-  unanalysed: 0, coverOnly: 0, offContainer: 0, metric: null, lastPostedAt: null,
+  items: 0, posts: 0, postsWithStelz: 0, judged: 0, imagesSeen: 0, withStelz: 0,
+  near: 0, unanalysed: 0, coverOnly: 0, offContainer: 0, metric: null,
+  lastPostedAt: null,
 }
 
 export type CampaignCreator = {
@@ -215,6 +248,9 @@ export type CampaignCreator = {
  *  to prevent, and the per-surface figures already live on `bySurface`. */
 export type SourceStats = {
   items: number
+  /** Posts, not rows. See SurfaceStats.posts. */
+  posts: number
+  postsWithStelz: number
   judged: number
   withStelz: number
   near: number
@@ -230,6 +266,9 @@ export type CampaignRollup = {
   delivered: number       // creators with at least one item
   silent: number
   items: number
+  /** Posts, not rows. See SurfaceStats.posts. */
+  posts: number
+  postsWithStelz: number
   judged: number
   imagesSeen: number
   withStelz: number
@@ -287,20 +326,41 @@ export function campaignRollup(
   })
   for (const h of roster) byCreator.set(h.toLowerCase(), blank(h.toLowerCase()))
 
+  const blankSource = (): SourceStats => ({
+    items: 0, posts: 0, postsWithStelz: 0, judged: 0, withStelz: 0, near: 0,
+    accounts: 0, tiktokViews: 0,
+  })
+
   const out: CampaignRollup = {
     creators: [], rosterSize: roster.length, delivered: 0, silent: 0,
-    items: 0, judged: 0, imagesSeen: 0, withStelz: 0, near: 0, unanalysed: 0,
+    items: 0, posts: 0, postsWithStelz: 0, judged: 0, imagesSeen: 0,
+    withStelz: 0, near: 0, unanalysed: 0,
     offContainer: 0, missedByDeploy: 0,
     bySurface: blankSurfaces(),
-    bySource: {
-      roster: { items: 0, judged: 0, withStelz: 0, near: 0, accounts: 0, tiktokViews: 0 },
-      discovery: { items: 0, judged: 0, withStelz: 0, near: 0, accounts: 0, tiktokViews: 0 },
-    },
+    bySource: { roster: blankSource(), discovery: blankSource() },
     tiktokViews: 0, pollVotes: 0, postLikes: 0,
+  }
+
+  // Counting posts means counting distinct keys per bucket, and a bucket only
+  // knows its own total. The sets are kept beside the stats objects and folded
+  // in once at the end, so `posts` can never drift from the rows that produced
+  // it the way a hand-maintained counter would.
+  const keys = new WeakMap<object, { all: Set<string>; hit: Set<string> }>()
+  const track = (bucket: object, r: CampaignRow) => {
+    let k = keys.get(bucket)
+    if (!k) keys.set(bucket, (k = { all: new Set(), hit: new Set() }))
+    k.all.add(r.postKey)
+    if (isStelzStory(r.verdict)) k.hit.add(r.postKey)
+  }
+  const settle = (bucket: { posts: number; postsWithStelz: number }) => {
+    const k = keys.get(bucket)
+    bucket.posts = k?.all.size ?? 0
+    bucket.postsWithStelz = k?.hit.size ?? 0
   }
 
   const bump = (s: SurfaceStats, r: CampaignRow) => {
     s.items += 1
+    track(s, r)
     s.imagesSeen += r.framesJudged
     if (r.verdict === 'unanalysed') s.unanalysed += 1
     else s.judged += 1
@@ -334,6 +394,7 @@ export function campaignRollup(
     bump(out.bySurface[r.surface], r)
 
     out.items += 1
+    track(out, r)
     out.imagesSeen += r.framesJudged
     if (r.verdict === 'unanalysed') out.unanalysed += 1
     else out.judged += 1
@@ -344,6 +405,7 @@ export function campaignRollup(
 
     const src = out.bySource[r.source]
     src.items += 1
+    track(src, r)
     if (r.verdict === 'unanalysed') { /* not judged; counted in items only */ }
     else src.judged += 1
     if (isStelzStory(r.verdict)) src.withStelz += 1
@@ -358,10 +420,14 @@ export function campaignRollup(
     if (r.surface === 'post') out.postLikes += r.likes ?? 0
   }
 
+  settle(out)
+  for (const s of SURFACES) settle(out.bySurface[s])
   for (const c of byCreator.values()) {
+    for (const s of SURFACES) settle(c.bySurface[s])
     if (c.silent) out.silent += 1
     else out.delivered += 1
   }
+  for (const s of ['roster', 'discovery'] as Source[]) settle(out.bySource[s])
   out.bySource.roster.accounts = accounts.roster.size
   out.bySource.discovery.accounts = accounts.discovery.size
 

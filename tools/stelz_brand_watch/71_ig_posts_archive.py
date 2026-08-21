@@ -6,7 +6,7 @@ a carousel's third slide, or in a reel, is invisible to this tool today: the
 creator-scan that would find it runs in a Cloud Function that is not deployed.
 
     ./firebase/functions/venv/bin/python \\
-        tools/stelz_brand_watch/71_ig_posts_archive.py --roster lowlands
+        tools/stelz_brand_watch/71_ig_posts_archive.py --event lowlands-2026
         ... --per-handle 12        # posts per creator (default 12)
         ... --since 2026-08-01     # ignore anything older
         ... --no-video             # covers and stills only
@@ -21,13 +21,23 @@ EVERY SLIDE, NOT JUST THE FIRST. A carousel arrives as one item with
 one. Each child is archived as its own row with a `slot` index, which is also
 how the backend persists them (scan_hashtags._persist_sidecar_child) — so the
 post id keeps the two-segment shape the frontend groups on.
+
+WHOSE PROFILE IT CAME FROM. Every row records `scraped_for`: the handle whose
+profile Apify was reading when it returned this post, taken from `inputUrl`.
+Instagram publishes a collab post on both authors' profiles, so 44 rows across
+15 accounts that are not on the roster — @golfnl, agencies, brand accounts —
+are in fact roster deliveries with a co-author. Without this field they read as
+strangers, and filing them as organic reach would credit the campaign with
+pickup it actually paid for.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -36,15 +46,17 @@ import requests
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "firebase" / "functions"))
 
-ARCHIVE = ROOT / ".tmp" / "ig-posts-archive"
-INDEX = ARCHIVE / "index.jsonl"
-MEDIA = ARCHIVE / "media"
-RAW = ARCHIVE / "raw"
+_spec = importlib.util.spec_from_file_location(
+    "_events", Path(__file__).with_name("_events.py"))
+E = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(E)
+
+# Assigned in main() from --event. See the note in 70_tiktok_archive.py.
+P: "E.Paths" = None  # type: ignore[assignment]
 
 APIFY = "https://api.apify.com/v2"
 ACTOR = "apify/instagram-scraper"
 COST_PER_RESULT = 0.0023
-ROSTERS = {"lowlands": ROOT / "projects" / "stelz-brand-watch" / "web" / "src" / "data" / "lowlandsSeed.ts"}
 BATCH = 10   # the cap scrape_profile_ig documents; large batches time out
 
 
@@ -58,19 +70,6 @@ def token() -> str | None:
             if line.startswith("APIFY_API_TOKEN="):
                 return line.split("=", 1)[1].strip()
     return None
-
-
-def roster_handles(name: str) -> list[str]:
-    """Instagram handles — column 2, same parse as 62_stories_archive.py."""
-    tsv = ROSTERS[name].read_text().split("`", 1)[1].rsplit("`", 1)[0]
-    rows = [l.split("\t") for l in tsv.strip().splitlines()[1:] if l.strip()]
-    out = []
-    for r in rows:
-        if len(r) > 1:
-            h = r[1].strip().lstrip("@").lower()
-            if h and h != "geen":
-                out.append(h)
-    return out
 
 
 def scrape(handles: list[str], per_handle: int, tok: str) -> list[dict]:
@@ -87,6 +86,19 @@ def scrape(handles: list[str], per_handle: int, tok: str) -> list[dict]:
     return items if isinstance(items, list) else []
 
 
+def scraped_for(item: dict) -> str | None:
+    """Whose profile Apify was reading when it returned this post.
+
+    `inputUrl` is the request, not the result: it is the profile URL this run
+    asked for, and it survives on every item the actor emits. On a collab post
+    it is the ONLY link back to the roster, because ownerUsername is then the
+    co-author's account. All 211 archived payloads carry it.
+    """
+    url = item.get("inputUrl") or ""
+    m = re.search(r"instagram\.com/([^/?#]+)", str(url))
+    return m.group(1).strip().lower() or None if m else None
+
+
 def rows_for(item: dict) -> list[dict]:
     """One post -> one row per image/video to analyse.
 
@@ -100,6 +112,12 @@ def rows_for(item: dict) -> list[dict]:
         return []
     base = {
         "handle": handle,
+        "scraped_for": scraped_for(item),
+        # Instagram's own list of co-authors, when it gives one. Kept beside
+        # scraped_for rather than instead of it: this field is present on 36 of
+        # 211 payloads, inputUrl on all of them.
+        "coauthors": [c.get("username") for c in (item.get("coauthorProducers") or [])
+                      if isinstance(c, dict) and c.get("username")],
         "short_code": code,
         "url": item.get("url") or f"https://www.instagram.com/p/{code}/",
         "posted_at": item.get("timestamp"),
@@ -147,10 +165,10 @@ def download(url: str | None, dest: Path) -> int:
 
 
 def known_ids() -> set[str]:
-    if not INDEX.exists():
+    if not P.index.exists():
         return set()
     out = set()
-    for line in INDEX.read_text().splitlines():
+    for line in P.index.read_text().splitlines():
         if line.strip():
             try:
                 out.add(json.loads(line)["item_id"])
@@ -160,11 +178,13 @@ def known_ids() -> set[str]:
 
 
 def main() -> int:
+    global P
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--roster", choices=sorted(ROSTERS))
-    src.add_argument("--handles", nargs="+", metavar="HANDLE")
+    ap.add_argument("--event", default="lowlands-2026", choices=E.available(),
+                    help="which event's roster and archive (default lowlands-2026)")
+    ap.add_argument("--handles", nargs="+", metavar="HANDLE",
+                    help="scrape these instead of the event roster")
     ap.add_argument("--per-handle", type=int, default=12)
     ap.add_argument("--since", help="ISO date; skip posts older than this")
     ap.add_argument("--no-video", action="store_true")
@@ -175,13 +195,14 @@ def main() -> int:
         print("APIFY_API_TOKEN not set (and not in firebase/functions/.env)")
         return 2
 
-    handles = [h.lstrip("@").lower() for h in (args.handles or roster_handles(args.roster))]
+    ev = E.load(args.event)
+    P = E.paths(ev, "ig-posts")
+    handles = [h.lstrip("@").lower() for h in (args.handles or E.roster_ig(ev))]
     est = len(handles) * args.per_handle * COST_PER_RESULT
-    print(f"{len(handles)} handles x {args.per_handle} posts = "
+    print(f"{ev['name']} · {len(handles)} handles x {args.per_handle} posts = "
           f"{len(handles) * args.per_handle} results ≈ ${est:.2f} at Apify\n")
 
-    for d in (ARCHIVE, MEDIA, RAW):
-        d.mkdir(parents=True, exist_ok=True)
+    P.mkdirs()
 
     items: list[dict] = []
     for i in range(0, len(handles), BATCH):
@@ -202,7 +223,7 @@ def main() -> int:
     already = known_ids()
     added = skipped = old = 0
     bytes_saved = 0
-    with INDEX.open("a") as idx:
+    with P.index.open("a") as idx:
         for item in items:
             rows = rows_for(item)
             if not rows:
@@ -217,22 +238,23 @@ def main() -> int:
                 except Exception:
                     pass
             code = rows[0]["short_code"]
-            (RAW / f"{code}.json").write_text(json.dumps(item, indent=1))
+            (P.raw / f"{code}.json").write_text(json.dumps(item, indent=1))
             for e in rows:
                 if e["item_id"] in already:
                     skipped += 1
                     continue
                 iid = e["item_id"]
                 e["raw_file"] = f"{code}.json"
+                e["event"] = ev["id"]
                 e["image_file"] = None
-                n = download(e["cover_url"], MEDIA / f"{iid}.jpg")
+                n = download(e["cover_url"], P.media / f"{iid}.jpg")
                 if n:
                     e["image_file"] = f"{iid}.jpg"
                     bytes_saved += n
                 e["video_file"] = None
                 e["video_unavailable"] = False
                 if e["media_type"] == "video" and not args.no_video:
-                    n = download(e["video_url"], MEDIA / f"{iid}.mp4")
+                    n = download(e["video_url"], P.media / f"{iid}.mp4")
                     if n:
                         e["video_file"] = f"{iid}.mp4"
                         bytes_saved += n
@@ -245,9 +267,9 @@ def main() -> int:
                 added += 1
 
     print(f"\n  +{added} new · {skipped} already archived · {old} older than --since")
-    print(f"  +{bytes_saved / 1e6:.1f} MB · {len(known_ids())} in {ARCHIVE.relative_to(ROOT)}")
+    print(f"  +{bytes_saved / 1e6:.1f} MB · {len(known_ids())} in {P.label()}")
     print(f"  Apify: {len(items)} results ≈ ${len(items) * COST_PER_RESULT:.2f}")
-    print("\n  Next: 74_tiktok_analyse.py --archive ig-posts")
+    print(f"\n  Next: 74_analyse.py --event {ev['id']} --archive ig-posts --max-dim 0")
     return 0
 
 

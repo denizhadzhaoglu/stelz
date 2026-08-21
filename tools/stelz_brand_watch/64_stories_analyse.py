@@ -37,7 +37,13 @@ _spec = importlib.util.spec_from_file_location(
 D = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(D)
 
-ARCHIVE = ROOT / ".tmp" / "stories-archive"
+_espec = importlib.util.spec_from_file_location(
+    "_events", Path(__file__).with_name("_events.py"))
+E = importlib.util.module_from_spec(_espec)
+_espec.loader.exec_module(E)
+
+EVENT = E.load("lowlands-2026")
+ARCHIVE = E.archive_dir(EVENT, "stories")
 INDEX = ARCHIVE / "index.jsonl"
 MEDIA = ARCHIVE / "media"
 VERDICTS = ARCHIVE / "verdicts.jsonl"
@@ -104,7 +110,7 @@ def main() -> int:
         print("No Gemini key (GOOGLE_AI_API_KEY / GEMINI_API_KEY)")
         return 2
     if not INDEX.exists():
-        print(f"No archive at {ARCHIVE.relative_to(ROOT)} — run 62_stories_archive.py first")
+        print(f"No archive at {ARCHIVE} — run 62_stories_archive.py first")
         return 2
 
     entries = [json.loads(l) for l in INDEX.read_text().splitlines() if l.strip()]
@@ -173,7 +179,7 @@ def main() -> int:
         print(f"Frames: {stats['frames_extracted']} sampled · {stats['frames_flagged']} flagged "
               f"by the screen · {stats['frames_analysed']} given a full look")
     print("\nNow run 61_stories_preview_fixture.py and open")
-    print("http://localhost:5180/stories?preview=stories")
+    print("http://localhost:5173/stories?preview=stories")
     return 0
 
 

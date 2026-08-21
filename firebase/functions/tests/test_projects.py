@@ -510,3 +510,88 @@ class TestNames(ProjectsBase):
         with self.assertRaises(projects.ProjectError):
             projects.run("stelz", "uid1", "addCreators",
                          {"projectId": pid, "creatorIds": ["instagram_anna"], "names": ["Anna"]})
+
+
+class TestEventFields(ProjectsBase):
+    """A project that is an EVENT also has a period and a set of tags.
+
+    The period is the load-bearing half. Without it a festival page counts
+    whatever the archive happens to hold: on the real Lowlands fixture that was
+    50 sightings for a weekend that had 8, and 100.9M TikTok views where 1.2M
+    fell inside the festival. Both errors ran in the flattering direction.
+    """
+
+    def test_defaults_are_absent_not_invented(self):
+        # No dates means "not an event", and that must be distinguishable from
+        # "an event starting at the epoch".
+        p = self.create()["project"]
+        self.assertIsNone(p["startsAt"])
+        self.assertIsNone(p["endsAt"])
+        self.assertEqual(p["hashtags"], [])
+
+    def test_create_with_a_period_and_tags(self):
+        p = self.create(startsAt="2026-08-20", endsAt="2026-08-23",
+                        hashtags=["#Stelz", "lowlands"])["project"]
+        self.assertEqual((p["startsAt"], p["endsAt"]), ("2026-08-20", "2026-08-23"))
+        # As the platforms spell them: no '#', lowercase.
+        self.assertEqual(p["hashtags"], ["stelz", "lowlands"])
+
+    def test_a_day_is_a_day_not_an_instant(self):
+        # A timestamp is accepted and stored as the calendar day it names. A
+        # festival day has no timezone of its own, and every comparison
+        # downstream is lexicographic on ISO text.
+        p = self.create(startsAt="2026-08-20T22:00:00Z")["project"]
+        self.assertEqual(p["startsAt"], "2026-08-20")
+
+    def test_nonsense_dates_rejected(self):
+        for bad in ("20-08-2026", "yesterday", "2026-13-01"):
+            with self.assertRaises(projects.ProjectError):
+                self.create(name=f"P {bad}", startsAt=bad)
+
+    def test_end_before_start_rejected(self):
+        with self.assertRaises(projects.ProjectError):
+            self.create(startsAt="2026-08-23", endsAt="2026-08-20")
+
+    def test_end_cannot_be_moved_before_an_untouched_start(self):
+        # The check has to run against what the doc will HOLD, not only against
+        # what this call sent — otherwise one field at a time walks the period
+        # into an impossible shape.
+        pid = self.create(startsAt="2026-08-20", endsAt="2026-08-23")["project"]["id"]
+        with self.assertRaises(projects.ProjectError):
+            projects.run("stelz", "uid1", "rename",
+                         {"projectId": pid, "endsAt": "2026-08-19"})
+
+    def test_rename_leaves_dates_alone_but_can_clear_them(self):
+        pid = self.create(startsAt="2026-08-20", endsAt="2026-08-23",
+                          hashtags=["stelz"])["project"]["id"]
+        # Renaming is not "forget when this happened".
+        p = projects.run("stelz", "uid1", "rename",
+                         {"projectId": pid, "name": "Lowlands 2026"})["project"]
+        self.assertEqual(p["startsAt"], "2026-08-20")
+        self.assertEqual(p["hashtags"], ["stelz"])
+        # An explicit null does clear — that is how a project stops being one.
+        p = projects.run("stelz", "uid1", "rename",
+                         {"projectId": pid, "startsAt": None, "endsAt": None})["project"]
+        self.assertIsNone(p["startsAt"])
+
+    def test_dates_alone_are_enough_to_edit(self):
+        # Before this, "rename" with only dates raised "nothing to rename".
+        pid = self.create()["project"]["id"]
+        p = projects.run("stelz", "uid1", "rename",
+                         {"projectId": pid, "startsAt": "2026-08-20"})["project"]
+        self.assertEqual(p["startsAt"], "2026-08-20")
+
+    def test_hashtags_are_deduped_and_bounded(self):
+        p = self.create(hashtags=["stelz", "#STELZ", " stelz "])["project"]
+        self.assertEqual(p["hashtags"], ["stelz"])
+        with self.assertRaises(projects.ProjectError):
+            self.create(name="Too many", hashtags=[f"t{i}" for i in range(200)])
+        with self.assertRaises(projects.ProjectError):
+            self.create(name="Not a list", hashtags="stelz")
+
+    def test_a_doc_written_before_this_existed_still_serializes(self):
+        # No migration was run. An old doc has none of these keys.
+        self.projects_store["oud"] = {"name": "Oud", "creatorIds": []}
+        out = projects._serialize("oud", self.projects_store["oud"])
+        self.assertIsNone(out["startsAt"])
+        self.assertEqual(out["hashtags"], [])

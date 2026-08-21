@@ -768,6 +768,14 @@ export type Project = {
   createdBy: string | null
   createdAt: string | null
   updatedAt: string | null
+  /** Set when this project is an EVENT: 'YYYY-MM-DD', or null when it is just a
+   *  shortlist. A calendar day, not an instant — a festival day has no timezone
+   *  of its own, and every comparison here is lexicographic on ISO text. */
+  startsAt: string | null
+  endsAt: string | null
+  /** Tags that find this event's content, as the platforms spell them: no '#',
+   *  lowercase. Empty on a project that is not an event. */
+  hashtags: string[]
 }
 
 function mapProject(id: string, x: Record<string, unknown>): Project {
@@ -785,6 +793,12 @@ function mapProject(id: string, x: Record<string, unknown>): Project {
     createdBy: (x.createdBy as string | null) ?? null,
     createdAt: ts(x.createdAt),
     updatedAt: ts(x.updatedAt),
+    // Already strings server-side. Sliced anyway: a doc written by hand, or by
+    // an older client that stored a Timestamp here, must not put an instant
+    // where the rest of the app compares calendar days.
+    startsAt: (x.startsAt as string | null)?.slice(0, 10) || null,
+    endsAt: (x.endsAt as string | null)?.slice(0, 10) || null,
+    hashtags: (x.hashtags as string[] | undefined) ?? [],
   }
 }
 
@@ -802,6 +816,8 @@ export async function fbProjectsAction(
   params: {
     projectId?: string; name?: string; note?: string; trackingTier?: string
     creatorIds?: string[]
+    // Event fields. Omit to leave alone; pass null to clear. 'YYYY-MM-DD'.
+    startsAt?: string | null; endsAt?: string | null; hashtags?: string[]
     // addCreators only: {compositeId: displayName} from list imports, so a
     // roster shows real names before the first profile refresh.
     names?: Record<string, string>

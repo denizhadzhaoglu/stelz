@@ -24,6 +24,7 @@ same way bootstrap_brand is: against an in-memory Firestore double, no emulator.
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 
 from google.cloud.firestore import SERVER_TIMESTAMP, ArrayRemove, ArrayUnion
@@ -45,6 +46,11 @@ ALLOWED_TIERS = ("tier_1", "tier_2")
 MAX_NAME_LEN = 80
 MAX_NOTE_LEN = 500
 MAX_FULLNAME_LEN = 120
+# A project that is an EVENT also has a period and a set of tags. Both optional:
+# a project can still be a plain shortlist with no dates at all, and every doc
+# written before this existed keeps working without a migration.
+MAX_HASHTAGS = 40
+MAX_HASHTAG_LEN = 60
 # One call must fit a whole campaign roster (the Lowlands list is 53 ids): the
 # post-write rollback makes a single call all-or-nothing, while client-side
 # chunking could strand a half-imported project when a later chunk trips a cap.
@@ -72,7 +78,71 @@ def _serialize(doc_id: str, d: dict) -> dict:
         "createdBy": d.get("createdBy"),
         "createdAt": created.isoformat() if hasattr(created, "isoformat") else None,
         "updatedAt": updated.isoformat() if hasattr(updated, "isoformat") else None,
+        # When this project is an event. None on every project that predates
+        # the field, which is what the client reads as "not an event".
+        "startsAt": d.get("startsAt"),
+        "endsAt": d.get("endsAt"),
+        "hashtags": list(d.get("hashtags") or []),
     }
+
+
+def _clean_date(value: Any, field: str) -> str | None:
+    """A calendar day as 'YYYY-MM-DD', or None.
+
+    A string, not a timestamp. Every date comparison downstream is already
+    lexicographic on ISO text, and a festival day has no timezone of its own —
+    storing an instant would force a conversion at both ends to answer a
+    question that was never about instants.
+    """
+    if value in (None, ""):
+        return None
+    text = str(value).strip()[:10]
+    try:
+        date.fromisoformat(text)
+    except ValueError:
+        raise ProjectError(f"{field} must be YYYY-MM-DD, got {value!r}")
+    return text
+
+
+def _clean_hashtags(value: Any) -> list[str]:
+    """Tags as the platforms spell them: lowercase, no '#', no duplicates."""
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ProjectError("hashtags must be a list")
+    if len(value) > MAX_HASHTAGS:
+        raise ProjectError(f"too many hashtags (max {MAX_HASHTAGS})")
+    out: list[str] = []
+    for t in value:
+        tag = str(t).strip().lstrip("#").lower()[:MAX_HASHTAG_LEN]
+        if tag and tag not in out:
+            out.append(tag)
+    return out
+
+
+def _event_patch(body: dict, existing: dict | None = None) -> dict:
+    """The event fields present in `body`, validated.
+
+    Absent keys are left alone rather than cleared: a rename that does not
+    mention dates must not wipe them. An explicit null does clear — that is how
+    a project stops being an event.
+    """
+    patch: dict[str, Any] = {}
+    if "startsAt" in body:
+        patch["startsAt"] = _clean_date(body.get("startsAt"), "startsAt")
+    if "endsAt" in body:
+        patch["endsAt"] = _clean_date(body.get("endsAt"), "endsAt")
+    if "hashtags" in body:
+        patch["hashtags"] = _clean_hashtags(body.get("hashtags"))
+
+    # Checked against what the doc will actually hold, not only against what
+    # this call sent: moving `endsAt` earlier than a `startsAt` the caller never
+    # mentioned is the same mistake as sending both the wrong way round.
+    start = patch.get("startsAt", (existing or {}).get("startsAt"))
+    end = patch.get("endsAt", (existing or {}).get("endsAt"))
+    if start and end and end < start:
+        raise ProjectError("endsAt cannot be before startsAt")
+    return patch
 
 
 def _live_projects(brand_id: str) -> list[tuple[str, dict]]:
@@ -177,6 +247,7 @@ def run(brand_id: str, uid: str, action: str, body: dict[str, Any]) -> dict[str,
         tier = body.get("trackingTier") or "tier_1"
         if tier not in ALLOWED_TIERS:
             raise ProjectError(f"trackingTier must be one of {ALLOWED_TIERS}")
+        event = _event_patch(body)
         doc_id = fs.composite_id(name)[:60] or "project"
         if col.document(doc_id).get().exists:
             raise ProjectError(f'A project named "{name}" already exists', status=409)
@@ -189,6 +260,12 @@ def run(brand_id: str, uid: str, action: str, body: dict[str, Any]) -> dict[str,
             "createdBy": uid,
             "createdAt": SERVER_TIMESTAMP,
             "updatedAt": SERVER_TIMESTAMP,
+            # Written explicitly, even when absent from the body, so every doc
+            # created from here on has the same shape and a reader never has to
+            # tell "no dates" apart from "created before dates existed".
+            "startsAt": event.get("startsAt"),
+            "endsAt": event.get("endsAt"),
+            "hashtags": event.get("hashtags") or [],
         })
         return {"ok": True, "project": _serialize(doc_id, col.document(doc_id).get().to_dict() or {})}
 
@@ -212,8 +289,10 @@ def run(brand_id: str, uid: str, action: str, body: dict[str, Any]) -> dict[str,
             patch["name"] = name
         if "note" in body:
             patch["note"] = (body.get("note") or "")[:MAX_NOTE_LEN]
+        patch.update(_event_patch(body, project))
         if not patch:
-            raise ProjectError("nothing to rename — pass name and/or note")
+            raise ProjectError(
+                "nothing to rename — pass name, note, startsAt, endsAt and/or hashtags")
         patch["updatedAt"] = SERVER_TIMESTAMP
         col.document(project_id).set(patch, merge=True)
         return {"ok": True, "project": _serialize(project_id, col.document(project_id).get().to_dict() or {})}

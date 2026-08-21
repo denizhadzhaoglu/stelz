@@ -335,3 +335,64 @@ describe('the creator table stays a roster table', () => {
     expect(r.bySurface.tiktok.items).toBe(1)
   })
 })
+
+describe('carousels are one post, not ten', () => {
+  // An Instagram carousel is archived per slide, because the can is rarely on
+  // slide one and judging a ten-slide post by its cover is how a
+  // brand-visibility tool reports zero forever. Counting those slides as posts
+  // is a different mistake: on the real fixture it turned 210 posts into 1150
+  // "items" and 18 sightings into 37.
+  const slide = (n: number) => item({
+    itemId: `instagram_postABCs${n}`, creatorHandle: 'lize', platformHandle: 'lize',
+    surface: 'post', postKey: 'ABC', slot: n, slots: 3,
+  })
+
+  const rows = joinCampaign(
+    [0, 1, 2].map(slide),
+    [det({ post_id: 'instagram_postABCs1', detected: true, confidence: 0.95 }),
+     det({ post_id: 'instagram_postABCs0', detected: false, confidence: 0.1 }),
+     det({ post_id: 'instagram_postABCs2', detected: false, confidence: 0.1 })],
+  )
+
+  it('counts three images and one post', () => {
+    const r = campaignRollup(rows, {}, ['lize'])
+    expect(r.items).toBe(3)
+    expect(r.posts).toBe(1)
+    expect(r.bySurface.post.items).toBe(3)
+    expect(r.bySurface.post.posts).toBe(1)
+  })
+
+  it('counts a post once however many of its slides show the can', () => {
+    const r = campaignRollup(rows, {}, ['lize'])
+    expect(r.withStelz).toBe(1)          // one slide had it
+    expect(r.postsWithStelz).toBe(1)     // and that is one post
+    expect(r.bySource.roster.posts).toBe(1)
+    expect(r.bySource.roster.postsWithStelz).toBe(1)
+  })
+
+  it('never reports more posts with Stëlz than posts', () => {
+    const r = campaignRollup(rows, {}, ['lize'])
+    expect(r.postsWithStelz).toBeLessThanOrEqual(r.posts)
+    for (const s of SURFACES) {
+      expect(r.bySurface[s].postsWithStelz).toBeLessThanOrEqual(r.bySurface[s].posts)
+      expect(r.bySurface[s].posts).toBeLessThanOrEqual(r.bySurface[s].items)
+    }
+  })
+
+  it('keeps two people apart when their shortcodes collide', () => {
+    // postKey is scoped by account on purpose: nothing guarantees ids are
+    // unique across archives, and a collision would silently merge two posts.
+    const two = joinCampaign([
+      { ...item({ itemId: 'a', creatorHandle: 'lize', platformHandle: 'lize', surface: 'post' }), postKey: 'X' },
+      { ...item({ itemId: 'b', creatorHandle: 'daan', platformHandle: 'daan', surface: 'post' }), postKey: 'X' },
+    ], [])
+    expect(campaignRollup(two, {}, ['lize', 'daan']).posts).toBe(2)
+  })
+
+  it('treats a row with no carousel as exactly one post', () => {
+    const one = joinCampaign(
+      [item({ itemId: 'tiktok_video1', creatorHandle: 'lize', platformHandle: 'lize', surface: 'tiktok' })],
+      [])
+    expect(campaignRollup(one, {}, ['lize']).posts).toBe(1)
+  })
+})
