@@ -240,3 +240,60 @@ describe.skipIf(!present)('an event with nothing in it', () => {
     expect(rollup.silent).toBe(0)
   })
 })
+
+describe.skipIf(!present)('every surface brings the one figure it publishes', () => {
+  const items = present ? read<CampaignItem>(ITEMS) : []
+  const dets = present ? read<DetectionRow>(DETS) : []
+  const rows = joinCampaign(items, dets)
+  const rollup = campaignRollup(rows)
+
+  it('carries story poll votes through to the page', () => {
+    // 62 wrote eight fields per story and left the rest in the raw payload, so
+    // this column was blank for months while the stories page — reading the
+    // SAME payloads — showed 86,718 votes. A story publishes no view count at
+    // all; poll votes are the only hard figure it produces, and a surface whose
+    // one number never arrives looks like a surface that produced nothing.
+    const stories = rows.filter((r) => r.surface === 'story')
+    if (stories.length === 0) return
+    expect(rollup.pollVotes).toBeGreaterThan(0)
+    expect(rollup.bySurface.story.metric).toBe(rollup.pollVotes)
+  })
+
+  it('gives Instagram posts their likes', () => {
+    const posts = rows.filter((r) => r.surface === 'post')
+    if (posts.length === 0) return
+    expect(rollup.postLikes).toBeGreaterThan(0)
+    expect(posts.some((r) => (r.likes ?? 0) > 0)).toBe(true)
+  })
+
+  it('never lets one surface borrow another\'s metric', () => {
+    for (const r of rows) {
+      if (r.surface === 'story') {
+        // Instagram shows story views to the account holder and nobody else.
+        expect(r.views, `story ${r.itemId} has views`).toBeNull()
+      }
+      if (r.surface !== 'story') {
+        expect(r.pollVotes, `${r.surface} ${r.itemId} has poll votes`).toBeFalsy()
+      }
+    }
+  })
+
+  it('keeps the three totals as three numbers', () => {
+    // The one figure a client always asks for and that nothing here computes:
+    // plays, likes and votes are three different events. If some field ever
+    // equals their sum, a "total reach" has been invented.
+    const sum = rollup.tiktokViews + rollup.postLikes + rollup.pollVotes
+    const nonZero = [rollup.tiktokViews, rollup.postLikes, rollup.pollVotes]
+      .filter((v) => v > 0).length
+    if (nonZero > 1) {
+      expect(Object.values(rollup).includes(sum)).toBe(false)
+    }
+  })
+
+  it('splits TikTok views by who earned them and adds up', () => {
+    // Paid delivery and organic pickup are worth different things. Kept apart
+    // at every level, and the two halves must still account for the whole.
+    expect(rollup.bySource.roster.tiktokViews + rollup.bySource.discovery.tiktokViews)
+      .toBe(rollup.tiktokViews)
+  })
+})

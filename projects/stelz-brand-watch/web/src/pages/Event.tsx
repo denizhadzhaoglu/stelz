@@ -362,6 +362,25 @@ function EventBody({ ev, params, setParams }: {
             )}
           </Card>
 
+          {/* WHY THERE IS NO "TOTAAL BEREIK" ANYWHERE ON THIS PAGE. The three
+              surfaces publish three different things, and the one number a
+              client always asks for would describe none of them. Said here
+              rather than left as an absence, because an absence reads like an
+              oversight. */}
+          <Card className="mb-6 px-4 py-3 text-[12px] text-[var(--color-ink-muted)] leading-relaxed">
+            <strong className="font-medium text-[var(--color-ink)]">Over deze cijfers.</strong>{' '}
+            De drie oppervlakken publiceren verschillende dingen, dus ze worden hier nooit bij
+            elkaar opgeteld. <strong>TikTok</strong> geeft echte weergaven —
+            {scoped.tiktokViews > 0 ? ` ${fmtNum(scoped.tiktokViews)} in deze selectie` : ' geen'}.
+            <strong> Instagram-stories</strong> geven aan niemand behalve de accounthouder een
+            kijkcijfer; poll-stemmen
+            {scoped.pollVotes > 0 ? ` (${fmtNum(scoped.pollVotes)})` : ''} zijn de enige harde
+            ondergrens — elke stem is iemand die keek én tikte, dus het echte kijkcijfer ligt
+            hoger. <strong>Instagram-posts</strong> geven likes
+            {scoped.postLikes > 0 ? ` (${fmtNum(scoped.postLikes)})` : ''}, en alleen reels een
+            afspeelteller. Eén opgeteld &ldquo;bereik&rdquo; zou geen van deze dingen betekenen.
+          </Card>
+
           {rollup.missedByDeploy > 0 && (
             <Card className="mb-6 px-4 py-3 text-[12px] text-[var(--color-ink-muted)] leading-relaxed border-l-2 border-[var(--color-warn)]">
               <strong className="font-medium text-[var(--color-ink)]">
