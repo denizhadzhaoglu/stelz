@@ -194,6 +194,44 @@ class TestLocalPriceParity(unittest.TestCase):
         self.assertAlmostEqual(got, want, places=6)
 
 
+class TestTrackingCapParity(unittest.TestCase):
+    """The caps exist twice, for the same reason the prices do.
+
+    handlers/projects.py enforces them; the event-creation screen shows the
+    remaining room BEFORE the first write, because the server's answer to a
+    roster that breaches the cap is an error after the button. A client that
+    believes the ceiling is higher than it is promises room that does not exist;
+    lower, and it refuses an import the server would have accepted.
+    """
+
+    def _ts_const(self, name: str) -> int:
+        src = (ROOT / "projects" / "stelz-brand-watch" / "web" / "src" / "lib"
+               / "projects.ts").read_text()
+        m = re.search(rf"^export const {name} = (\d+)", src, re.M)
+        self.assertIsNotNone(m, f"projects.ts no longer exports {name}")
+        return int(m.group(1))
+
+    def _py_const(self, name: str) -> int:
+        src = (ROOT / "firebase" / "functions" / "handlers" / "projects.py").read_text()
+        m = re.search(rf"^{name} = (\d+)", src, re.M)
+        self.assertIsNotNone(m, f"projects.py no longer declares {name}")
+        return int(m.group(1))
+
+    def test_the_total_cap_matches(self):
+        self.assertEqual(self._ts_const("TOTAL_TRACKED_CAP"),
+                         self._py_const("TOTAL_TRACKED_CAP"))
+
+    def test_the_tier1_cap_matches(self):
+        self.assertEqual(self._ts_const("TIER1_TRACKED_CAP"),
+                         self._py_const("TIER1_TRACKED_CAP"))
+
+    def test_tier1_is_the_tighter_of_the_two(self):
+        # The 6h cadence costs up to 8x the default, so its ceiling has to sit
+        # below the overall one. Reversed, the tier_1 cap would never bind.
+        self.assertLess(self._py_const("TIER1_TRACKED_CAP"),
+                        self._py_const("TOTAL_TRACKED_CAP"))
+
+
 def _arith(expr: str) -> float:
     """Evaluate a numeric literal expression — numbers, + and * and nothing else.
 

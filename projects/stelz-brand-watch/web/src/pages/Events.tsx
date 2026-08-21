@@ -21,6 +21,7 @@ import { eventStatus, formatWindow, matchEvent } from '../lib/events'
 import { joinCampaign, type CampaignItem, type CampaignRow } from '../lib/campaign'
 import { isStelzStory } from '../lib/storyStats'
 import { fetchProjects, type Project } from '../lib/data'
+import { TOTAL_TRACKED_CAP, trackedCreators } from '../lib/projects'
 import { useMembership } from '../lib/membership'
 import { useCampaignPreview, useCampaignDetectionsPreview } from '../lib/devPreview'
 import type { DetectionRow } from '../lib/types'
@@ -63,7 +64,7 @@ export default function EventsPage() {
         </button>
       ) : undefined}
     >
-      {adding && <NewEvent />}
+      {adding && <NewEvent projects={projects ?? []} />}
 
       <div className="space-y-3">
         {EVENTS.map((ev) => (
@@ -162,7 +163,7 @@ function Figure({ value, label }: { value: number; label: string }) {
  *  a file in the repo. A button that appeared to work and silently did neither
  *  would be worse than no button — so this shows exactly what to write and
  *  where, and stops pretending. */
-function NewEvent() {
+function NewEvent({ projects }: { projects: Project[] }) {
   const [name, setName] = useState('')
   const [venue, setVenue] = useState('')
   const [start, setStart] = useState('')
@@ -171,6 +172,13 @@ function NewEvent() {
 
   const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
   const invalid = start && end && end < start
+
+  // The tracking caps are GLOBAL — 150 distinct creators across every live
+  // project, any tier, and 25 on tier_1. Four events of 28 people is 112; the
+  // sixth fails at import with a server error and no warning beforehand. Better
+  // to see the remaining room while deciding how many creators to book.
+  const tracked = trackedCreators(projects)
+  const room = TOTAL_TRACKED_CAP - tracked.size
 
   const json = JSON.stringify({
     id: slug || 'nieuw-evenement',
@@ -211,6 +219,17 @@ function NewEvent() {
           De einddatum ligt vóór de begindatum.
         </p>
       )}
+      <p className={`text-[12px] leading-relaxed max-w-2xl mb-3 ${
+        room <= 0 ? 'text-[var(--color-bad)]'
+          : room < 30 ? 'text-[var(--color-warn)]' : 'text-[var(--color-ink-subtle)]'
+      }`}>
+        {room > 0
+          ? `Nog ruimte voor ${fmtNum(room)} creators. `
+          : 'Geen ruimte meer. '}
+        Er worden nu {fmtNum(tracked.size)} van maximaal {fmtNum(TOTAL_TRACKED_CAP)} creators
+        gevolgd, over alle actieve projecten heen — de grens is een uitgavenplafond en geldt
+        niet per evenement. Een evenement archiveren geeft de ruimte terug.
+      </p>
       <pre className="text-[11px] bg-[var(--color-surface-2)] p-3 overflow-x-auto leading-relaxed">
         {json}
       </pre>
