@@ -10,6 +10,9 @@
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    /* src/data/events/*.json is the single definition of an event, read by both
+       this app and tools/stelz_brand_watch/_events.py. */
+    "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,

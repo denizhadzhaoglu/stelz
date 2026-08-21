@@ -324,7 +324,7 @@ export function StoryDetail({ row, onClose }: { row: DetailRow | null; onClose: 
               {(row.pollQuestions ?? []).length > 0 && (
                 <>
                   <dt className="text-[var(--color-ink-subtle)] text-[11px] uppercase tracking-widest pt-0.5">Vraag</dt>
-                  <dd className="text-[var(--color-ink-muted)]">{row.pollQuestions.join(' · ')}</dd>
+                  <dd className="text-[var(--color-ink-muted)]">{(row.pollQuestions ?? []).join(' · ')}</dd>
                 </>
               )}
               {row.mentions.length > 0 && (

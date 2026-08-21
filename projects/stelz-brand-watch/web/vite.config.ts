@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import fs from 'node:fs'
 import path from 'node:path'
+import { resolvePreviewMedia } from './preview-paths'
 
 /**
  * Serves the story preview — the fixtures and the archived media — on the dev
@@ -24,11 +25,10 @@ import path from 'node:path'
  */
 function storyPreview() {
   const tmp = path.resolve(__dirname, '../../../.tmp')
-  const STORIES = path.join(tmp, 'stories-archive')
-  const TYPES: Record<string, string> = {
-    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
-    '.webp': 'image/webp', '.mp4': 'video/mp4', '.json': 'application/json',
-  }
+  const EVENTS_TMP = path.join(tmp, 'events')
+  const EVENTS_DIR = path.resolve(__dirname, 'src/data/events')
+  // The one event whose stories fixture 61_stories_preview_fixture.py writes.
+  const STORIES = path.join(EVENTS_TMP, 'lowlands-2026', 'stories')
   // Where each fixture lives. Explicit map, not a path join on user input:
   // this middleware answers requests from a browser, and "serve whatever the
   // URL names" is how a dev server ends up handing out .env.
@@ -38,21 +38,31 @@ function storyPreview() {
     '/preview-campaign.json': path.join(tmp, 'preview-campaign.json'),
     '/preview-campaign-detections.json': path.join(tmp, 'preview-campaign-detections.json'),
   }
-  // Only these directories can be read from, by name. An allow-list rather
-  // than a prefix check: this middleware turns a URL segment into a filesystem
-  // path, and the whole point is that no segment outside this set can ever
-  // become one.
-  const ARCHIVES = new Set([
-    'stories-archive', 'ig-posts-archive', 'tiktok-archive',
-    'lowlands-discovery-archive',
-  ])
+  // Media lives at .tmp/events/<event>/<kind>/media/<file>, so a URL names TWO
+  // directories. Resolving that safely is preview-paths.ts, which is a pure
+  // function precisely so it can be tested — see preview-paths.test.ts.
+  //
+  // The event list is read from the definitions directory at startup rather
+  // than hard-coded, so adding an event does not mean remembering a second
+  // list — but it is still a fixed set computed HERE, not the segment the
+  // browser sent.
+  const roots = {
+    eventsTmp: EVENTS_TMP,
+    defaultEvent: 'lowlands-2026',
+    eventIds: new Set<string>(
+      fs.existsSync(EVENTS_DIR)
+        ? fs.readdirSync(EVENTS_DIR).filter((f) => f.endsWith('.json'))
+            .map((f) => path.basename(f, '.json'))
+        : [],
+    ),
+  }
 
-  function send(res: any, file: string, ext: string) {
-    if (!TYPES[ext] || !fs.existsSync(file)) {
+  function send(res: any, file: string, type: string) {
+    if (!fs.existsSync(file)) {
       res.statusCode = 404
       return res.end('not found')
     }
-    res.setHeader('Content-Type', TYPES[ext])
+    res.setHeader('Content-Type', type)
     res.setHeader('Cache-Control', 'no-store')
     fs.createReadStream(file).pipe(res)
   }
@@ -64,22 +74,15 @@ function storyPreview() {
       server.middlewares.use((req, res, next) => {
         const url: string = (req.url || '').split('?')[0]
         const fixture = FIXTURES[url]
-        if (fixture) return send(res, fixture, '.json')
+        if (fixture) return send(res, fixture, 'application/json')
         if (!url.startsWith('/preview-media/')) return next()
 
-        // /preview-media/<archive>/<file>, or /preview-media/<file> for the
-        // stories archive (the shape the stories fixture already emits).
-        const parts = decodeURIComponent(url)
-          .slice('/preview-media/'.length)
-          .split('/')
-          .filter(Boolean)
-        // basename on every segment: a raw or encoded ../../.env must not
-        // escape, and neither must an archive name that is not on the list.
-        const name = path.basename(parts[parts.length - 1] ?? '')
-        const dir = parts.length > 1 && ARCHIVES.has(path.basename(parts[0]))
-          ? path.join(tmp, path.basename(parts[0]), 'media')
-          : path.join(STORIES, 'media')
-        return send(res, path.join(dir, name), path.extname(name).toLowerCase())
+        const hit = resolvePreviewMedia(url, roots)
+        if (!hit) {
+          res.statusCode = 404
+          return res.end('not found')
+        }
+        return send(res, hit.file, hit.type)
       })
     },
   }

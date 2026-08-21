@@ -31,6 +31,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -40,7 +41,16 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "firebase" / "functions"))
 from handlers.scan_stories import STORIES_ACTOR, STORY_TTL_HOURS, _normalize_item  # noqa: E402
 
-ARCHIVE = ROOT / ".tmp" / "stories-archive"
+_espec = importlib.util.spec_from_file_location(
+    "_events", Path(__file__).with_name("_events.py"))
+E = importlib.util.module_from_spec(_espec)
+_espec.loader.exec_module(E)
+
+# The stories archive of the one event this fixture previews. A module-level
+# path again — but derived from the event definition, so it moves when the
+# event's archive moves instead of silently pointing at an empty directory.
+EVENT = E.load("lowlands-2026")
+ARCHIVE = E.archive_dir(EVENT, "stories")
 VERDICTS = ARCHIVE / "verdicts.jsonl"
 INDEX = ARCHIVE / "index.jsonl"
 MEDIA = ARCHIVE / "media"
@@ -103,7 +113,7 @@ def load_archive() -> dict[str, dict]:
 
 
 def have_media() -> bool:
-    """Can the dev server serve the archived files at /preview-media/<file>?
+    """Can the dev server serve the archived files at /preview-media/<event>/stories/<file>?
 
     Two reasons to prefer them, and the second matters more. Instagram's story
     URLs are signed and expire within hours, so a fixture built on them is a
@@ -146,9 +156,9 @@ def resolve_media(norm: dict, arch: dict | None, local: bool) -> tuple[str | Non
     img, vid = norm["image_url"], norm["video_url"]
     if local and arch:
         if arch.get("image_file"):
-            img = f"/preview-media/stories-archive/{arch['image_file']}"
+            img = f"/preview-media/{EVENT['id']}/stories/{arch['image_file']}"
         if arch.get("video_file"):
-            vid = f"/preview-media/stories-archive/{arch['video_file']}"
+            vid = f"/preview-media/{EVENT['id']}/stories/{arch['video_file']}"
     return img, vid
 
 
@@ -340,7 +350,7 @@ def main() -> int:
         print(f"  ({len(posts) - from_archive} on signed CDN links — re-run 62_stories_archive.py)")
     if judged < len(posts):
         print(f"  ({len(posts) - judged} unjudged — run 64_stories_analyse.py)")
-    print("  open http://localhost:5180/stories?preview=stories")
+    print("  open http://localhost:5173/stories?preview=stories")
     return 0
 
 

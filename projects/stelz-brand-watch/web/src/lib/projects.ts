@@ -11,6 +11,27 @@
 import type { DetectionRow } from './types'
 import type { Project } from './firestore'
 
+/** How many distinct creators may be tracked across ALL live projects at once.
+ *
+ *  Mirrors handlers/projects.TOTAL_TRACKED_CAP, and test_events.py fails if the
+ *  two drift. Mirrored rather than fetched because it is needed before the
+ *  first write: the server enforces it at import time and returns an error, so
+ *  a roster of 28 that would breach it should say so while it is still being
+ *  planned rather than after the button.
+ *
+ *  It is a SPEND ceiling, not a per-project one. Tracking flips a creator to a
+ *  6h/12h scan cadence — up to 8x the default, drawn from the same daily
+ *  budget as every hashtag scan — so four events of 28 people is 112 of it. */
+export const TOTAL_TRACKED_CAP = 150
+
+/** The same, for the expensive 6h cadence. Mirrors TIER1_TRACKED_CAP. */
+export const TIER1_TRACKED_CAP = 25
+
+/** Distinct creators currently tracked, across every live project. */
+export function trackedCreators(projects: Project[]): Set<string> {
+  return new Set(projects.filter((p) => !p.archived).flatMap((p) => p.creatorIds))
+}
+
 /** Creator doc ids are composite `${platform}_${handle}` (fs.composite_id).
  * Handles can themselves contain underscores, so split on the FIRST one only:
  * "instagram_de_bierman" → platform "instagram", handle "de_bierman". */

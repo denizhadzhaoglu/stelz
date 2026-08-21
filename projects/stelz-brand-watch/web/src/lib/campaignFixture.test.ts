@@ -1,3 +1,7 @@
+/// <reference types="node" />
+// This file reads the generated fixture off disk, so it needs the Node
+// globals the app config deliberately leaves out — browser code has no
+// business with fs. Scoped here rather than widened in tsconfig.app.json.
 // The generated campaign data, joined the way the page joins it.
 //
 // Unit tests pin the rules; this pins the actual bytes the dev server serves.
@@ -11,7 +15,9 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { joinCampaign, campaignRollup, metricFor, SURFACES } from './campaign'
+import { joinCampaign, campaignRollup, metricFor, stelzShare, SURFACES } from './campaign'
+import { matchEvent, inWindow } from './events'
+import { getEvent, type StelzEvent } from '../data/events'
 import type { CampaignItem } from './campaign'
 import type { DetectionRow } from './types'
 
@@ -140,5 +146,97 @@ describe.skipIf(!present)('the roster / discovery split in the real fixture', ()
   it('keeps the two view counts separate and adding up', () => {
     expect(rollup.bySource.roster.tiktokViews + rollup.bySource.discovery.tiktokViews)
       .toBe(rollup.tiktokViews)
+  })
+})
+
+describe.skipIf(!present)('the event window and the roster, in the real fixture', () => {
+  const items = present ? read<CampaignItem>(ITEMS) : []
+  const dets = present ? read<DetectionRow>(DETS) : []
+  const all = joinCampaign(items, dets)
+  const ev = getEvent('lowlands-2026') as StelzEvent
+  // The page's own attribution pass, applied here so the fixture is checked
+  // against what a reader actually sees rather than what it happens to hold.
+  const inEvent = all.flatMap((r) => {
+    const m = matchEvent(ev, r)
+    return m ? [{ ...r, source: m.source }] : []
+  })
+  const roster = new Set(ev.roster.map((m) => m.instagram.toLowerCase()))
+
+  it('drops everything outside the period', () => {
+    // The bug this exists for: no date filter anywhere, so a festival page
+    // reported 50 sightings for a weekend that had 8, and fifteen of them were
+    // from July.
+    for (const r of inEvent) expect(inWindow(ev, r.postedAt)).toBe(true)
+    expect(inEvent.length).toBeLessThan(all.length)
+  })
+
+  it('counts only in-window views', () => {
+    // 100.928.763 was the number on screen; 1.167.605 fell inside the festival.
+    // Eighty-six times over, in the flattering direction.
+    const scoped = campaignRollup(inEvent)
+    const everything = campaignRollup(all)
+    expect(scoped.tiktokViews).toBeLessThanOrEqual(everything.tiktokViews)
+    for (const r of inEvent.filter((r) => r.surface === 'tiktok')) {
+      expect(inWindow(ev, r.postedAt)).toBe(true)
+    }
+  })
+
+  it('credits every roster row to somebody on the roster', () => {
+    // Collab posts arrive under a co-author's account — @golfnl, @bnnvara,
+    // thirteen more. Left as themselves they became creators nobody booked and
+    // the table reported 42 people for a roster of 28.
+    for (const r of inEvent.filter((r) => r.source === 'roster')) {
+      expect(roster.has(r.creatorHandle.toLowerCase()),
+        `${r.creatorHandle} (posted by @${r.platformHandle}) is not on the roster`).toBe(true)
+    }
+  })
+
+  it('never reports more creators than were booked', () => {
+    const rollup = campaignRollup(inEvent.filter((r) => r.source === 'roster'), {}, [...roster])
+    expect(rollup.creators.length).toBeLessThanOrEqual(ev.roster.length)
+    expect(rollup.delivered).toBeLessThanOrEqual(rollup.rosterSize)
+  })
+
+  it('keeps discovery clear of the roster', () => {
+    for (const r of inEvent.filter((r) => r.source === 'discovery')) {
+      const acct = (r.platformHandle ?? r.creatorHandle).toLowerCase()
+      expect(roster.has(acct), `${acct} is booked and counted as organic`).toBe(false)
+    }
+  })
+
+  it('counts carousels as posts, not as slides', () => {
+    const rollup = campaignRollup(inEvent)
+    expect(rollup.posts).toBeLessThanOrEqual(rollup.items)
+    expect(rollup.postsWithStelz).toBeLessThanOrEqual(rollup.posts)
+    // The Instagram archive stores one row per slide, so if these are ever
+    // equal the carousel grouping has stopped working.
+    const igRows = inEvent.filter((r) => r.surface === 'post')
+    if (igRows.some((r) => (r.slots ?? 1) > 1)) {
+      expect(rollup.bySurface.post.posts).toBeLessThan(rollup.bySurface.post.items)
+    }
+  })
+
+  it('stamps every row with the event that harvested it', () => {
+    expect(items.every((i) => i.eventId === 'lowlands-2026')).toBe(true)
+  })
+})
+
+describe.skipIf(!present)('an event with nothing in it', () => {
+  it('reports blanks, not NaN or x/0', () => {
+    const rollup = campaignRollup([], {}, [])
+    expect(rollup.items).toBe(0)
+    expect(rollup.posts).toBe(0)
+    expect(rollup.rosterSize).toBe(0)
+    expect(stelzShare(rollup)).toBeNull()      // not 0%, which claims we looked
+    for (const s of SURFACES) {
+      expect(rollup.bySurface[s].metric).toBeNull()
+      expect(Number.isNaN(rollup.bySurface[s].posts)).toBe(false)
+    }
+  })
+
+  it('does not invent silent creators for a set nobody booked', () => {
+    const rollup = campaignRollup([], {}, [])
+    expect(rollup.creators).toHaveLength(0)
+    expect(rollup.silent).toBe(0)
   })
 })

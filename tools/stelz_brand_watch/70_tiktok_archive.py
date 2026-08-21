@@ -8,10 +8,15 @@ and calls the same actor), it has simply never been run, and it cannot be run
 here because the Cloud Functions are not deployed.
 
     ./firebase/functions/venv/bin/python \\
-        tools/stelz_brand_watch/70_tiktok_archive.py --roster lowlands
+        tools/stelz_brand_watch/70_tiktok_archive.py --event lowlands-2026
         ... --handles stefandevries joshbram_        # a couple by hand
-        ... --per-handle 12                          # how deep (default 12)
+        ... --per-handle 30                          # how deep (default 12)
         ... --no-video                               # covers only, faster
+
+ON --per-handle: the default of 12 is a profile depth, not a date range. Every
+handle in the first archive had exactly 12 videos, which looked like a roster
+fact and was the flag value. For a festival, ask for more than the creator is
+likely to have posted since it started.
 
 WHAT IT COSTS: nothing at Apify. `clockworks/free-tiktok-scraper` is priced at
 $0.0000 per result in BOTH cost tables (lib/usage.COST_PER_UNIT and
@@ -39,19 +44,25 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import importlib.util
+
 import requests
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "firebase" / "functions"))
 
-ARCHIVE = ROOT / ".tmp" / "tiktok-archive"
-INDEX = ARCHIVE / "index.jsonl"
-MEDIA = ARCHIVE / "media"
-RAW = ARCHIVE / "raw"
+_spec = importlib.util.spec_from_file_location(
+    "_events", Path(__file__).with_name("_events.py"))
+E = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(E)
+
+# Assigned once, in main(), from --event. Not a module-level constant: an
+# archive path that is fixed at import time says an event is a singleton, which
+# is the assumption this whole change exists to remove.
+P: "E.Paths" = None  # type: ignore[assignment]
 
 APIFY = "https://api.apify.com/v2"
 ACTOR = "clockworks/free-tiktok-scraper"
-ROSTERS = {"lowlands": ROOT / "projects" / "stelz-brand-watch" / "web" / "src" / "data" / "lowlandsSeed.ts"}
 
 
 def token() -> str | None:
@@ -64,21 +75,6 @@ def token() -> str | None:
             if line.startswith("APIFY_API_TOKEN="):
                 return line.split("=", 1)[1].strip()
     return None
-
-
-def roster_handles(name: str) -> list[str]:
-    """TikTok handles from the seed TSV — column 3, where 62_stories_archive.py
-    reads column 2. "Geen" is three real people with no TikTok, not a parse
-    failure, and it must not become a handle."""
-    tsv = ROSTERS[name].read_text().split("`", 1)[1].rsplit("`", 1)[0]
-    rows = [l.split("\t") for l in tsv.strip().splitlines()[1:] if l.strip()]
-    out = []
-    for r in rows:
-        if len(r) > 2:
-            h = r[2].strip().lstrip("@").lower()
-            if h and h != "geen":
-                out.append(h)
-    return out
 
 
 def scrape(handle: str, per_handle: int, tok: str) -> list[dict]:
@@ -216,10 +212,10 @@ def download_video(entry: dict, dest: Path) -> int:
 
 
 def known_ids() -> set[str]:
-    if not INDEX.exists():
+    if not P.index.exists():
         return set()
     out = set()
-    for line in INDEX.read_text().splitlines():
+    for line in P.index.read_text().splitlines():
         if line.strip():
             try:
                 out.add(json.loads(line)["video_id"])
@@ -229,11 +225,13 @@ def known_ids() -> set[str]:
 
 
 def main() -> int:
+    global P
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--roster", choices=sorted(ROSTERS))
-    src.add_argument("--handles", nargs="+", metavar="HANDLE")
+    ap.add_argument("--event", default="lowlands-2026", choices=E.available(),
+                    help="which event's roster and archive (default lowlands-2026)")
+    ap.add_argument("--handles", nargs="+", metavar="HANDLE",
+                    help="scrape these instead of the event roster")
     ap.add_argument("--per-handle", type=int, default=12)
     ap.add_argument("--no-video", action="store_true", help="archive covers only")
     ap.add_argument("--concurrency", type=int, default=5)
@@ -244,13 +242,15 @@ def main() -> int:
         print("APIFY_API_TOKEN not set (and not in firebase/functions/.env)")
         return 2
 
-    handles = args.handles or roster_handles(args.roster)
+    ev = E.load(args.event)
+    P = E.paths(ev, "tiktok")
+    handles = args.handles or E.roster_tt(ev)
     handles = [h.lstrip("@").lower() for h in handles]
-    print(f"{len(handles)} TikTok handles · {args.per_handle} most recent each")
+    print(f"{ev['name']} · {len(handles)} TikTok handles · "
+          f"{args.per_handle} most recent each")
     print(f"Apify: {ACTOR} — $0.00 per result, {len(handles)} runs\n")
 
-    for d in (ARCHIVE, MEDIA, RAW):
-        d.mkdir(parents=True, exist_ok=True)
+    P.mkdirs()
 
     all_items: list[tuple[str, dict]] = []
     with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
@@ -264,7 +264,7 @@ def main() -> int:
     already = known_ids()
     added = skipped = no_video = 0
     bytes_saved = 0
-    with INDEX.open("a") as idx:
+    with P.index.open("a") as idx:
         for fallback, item in all_items:
             e = normalise(item, fallback)
             if e is None:
@@ -273,12 +273,17 @@ def main() -> int:
                 skipped += 1
                 continue
             vid = e["video_id"]
-            (RAW / f"{vid}.json").write_text(json.dumps(item, indent=1))
+            (P.raw / f"{vid}.json").write_text(json.dumps(item, indent=1))
             e["raw_file"] = f"{vid}.json"
+            # Which event this row belongs to, written where the analyser and
+            # the fixture builder both read it. Attribution is still DERIVED on
+            # the client (lib/events.matchEvent) — this is provenance: which
+            # event's harvest paid for this row.
+            e["event"] = ev["id"]
 
             e["image_file"] = None
             if e["cover_url"]:
-                n = download(e["cover_url"], MEDIA / f"{vid}.jpg")
+                n = download(e["cover_url"], P.media / f"{vid}.jpg")
                 if n:
                     e["image_file"] = f"{vid}.jpg"
                     bytes_saved += n
@@ -286,7 +291,7 @@ def main() -> int:
             e["video_file"] = None
             e["video_unavailable"] = False
             if not args.no_video and not e["is_slideshow"]:
-                n = download_video(e, MEDIA / f"{vid}.mp4")
+                n = download_video(e, P.media / f"{vid}.mp4")
                 if n:
                     e["video_file"] = f"{vid}.mp4"
                     bytes_saved += n
@@ -304,13 +309,12 @@ def main() -> int:
             added += 1
 
     total = len(known_ids())
-    print(f"\n  +{added} new · {skipped} already archived · {total} in "
-          f"{ARCHIVE.relative_to(ROOT)}")
+    print(f"\n  +{added} new · {skipped} already archived · {total} in {P.label()}")
     print(f"  +{bytes_saved / 1e6:.1f} MB")
     if no_video:
         print(f"  {no_video} video{'' if no_video == 1 else 's'} could not be downloaded "
               f"(TikTok throttling) — cover archived, marked video_unavailable")
-    print("\n  Next: 74_tiktok_analyse.py")
+    print(f"\n  Next: 74_analyse.py --event {ev['id']} --archive tiktok --max-dim 0")
     return 0
 
 

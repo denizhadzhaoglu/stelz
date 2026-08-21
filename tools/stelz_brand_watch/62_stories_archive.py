@@ -18,7 +18,7 @@ backfill.py replays the archive into Firestore once the deploy lands.
     ./firebase/functions/venv/bin/python \\
         tools/stelz_brand_watch/62_stories_archive.py --handles anna bob
     ./firebase/functions/venv/bin/python \\
-        tools/stelz_brand_watch/62_stories_archive.py --roster lowlands
+        tools/stelz_brand_watch/62_stories_archive.py --event lowlands-2026
 
 Re-runnable and idempotent: stories already archived are skipped by id, so
 running it every few hours through a festival weekend accumulates rather than
@@ -28,6 +28,7 @@ never re-fetched even if a later sweep returns it again.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
@@ -39,17 +40,15 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "firebase" / "functions"))
 from handlers.scan_stories import STORIES_ACTOR, _actor_payload, _normalize_item  # noqa: E402
 
-ARCHIVE = ROOT / ".tmp" / "stories-archive"
-INDEX = ARCHIVE / "index.jsonl"
-MEDIA = ARCHIVE / "media"
-RAW = ARCHIVE / "raw"
 APIFY = "https://api.apify.com/v2"
 
-ROSTERS = {
-    # Mirrors projects/stelz-brand-watch/web/src/data/lowlandsSeed.ts. Parsed
-    # from that file rather than copied, so the two cannot drift.
-    "lowlands": ROOT / "projects" / "stelz-brand-watch" / "web" / "src" / "data" / "lowlandsSeed.ts",
-}
+_spec = importlib.util.spec_from_file_location(
+    "_events", Path(__file__).with_name("_events.py"))
+E = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(E)
+
+# Assigned in main() from --event. See the note in 70_tiktok_archive.py.
+P: "E.Paths" = None  # type: ignore[assignment]
 
 
 def token() -> str | None:
@@ -63,20 +62,6 @@ def token() -> str | None:
             if line.startswith("APIFY_API_TOKEN="):
                 return line.split("=", 1)[1].strip()
     return None
-
-
-def roster_handles(name: str) -> list[str]:
-    """Instagram handles from the seed TSV — the same text the import screen parses."""
-    path = ROSTERS[name]
-    tsv = path.read_text().split("`", 1)[1].rsplit("`", 1)[0]
-    rows = [l.split("\t") for l in tsv.strip().splitlines()[1:] if l.strip()]
-    out = []
-    for r in rows:
-        if len(r) > 1:
-            h = r[1].strip().lstrip("@").lower()
-            if h and h != "geen":
-                out.append(h)
-    return out
 
 
 def fetch_items(tok: str, handles: list[str] | None, from_last_run: bool) -> list[dict]:
@@ -110,10 +95,10 @@ def fetch_items(tok: str, handles: list[str] | None, from_last_run: bool) -> lis
 
 
 def known_ids() -> set[str]:
-    if not INDEX.exists():
+    if not P.index.exists():
         return set()
     out = set()
-    for line in INDEX.read_text().splitlines():
+    for line in P.index.read_text().splitlines():
         if line.strip():
             try:
                 out.add(json.loads(line)["story_id"])
@@ -138,12 +123,15 @@ def download(url: str, dest: Path) -> int:
 
 
 def main() -> int:
+    global P
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    src = ap.add_mutually_exclusive_group(required=True)
+    ap.add_argument("--event", default="lowlands-2026", choices=E.available(),
+                    help="which event's roster and archive (default lowlands-2026)")
+    src = ap.add_mutually_exclusive_group()
     src.add_argument("--from-last-run", action="store_true",
                      help="re-read the dataset of the most recent run (free, no new scrape)")
-    src.add_argument("--handles", nargs="+", metavar="HANDLE")
-    src.add_argument("--roster", choices=sorted(ROSTERS))
+    src.add_argument("--handles", nargs="+", metavar="HANDLE",
+                     help="sweep these instead of the event roster")
     ap.add_argument("--no-video", action="store_true",
                     help="skip story videos; covers are still archived")
     args = ap.parse_args()
@@ -153,12 +141,14 @@ def main() -> int:
         print("APIFY_API_TOKEN not set (and not in firebase/functions/.env)")
         return 2
 
-    handles = args.handles or (roster_handles(args.roster) if args.roster else None)
+    ev = E.load(args.event)
+    P = E.paths(ev, "stories")
+    handles = None if args.from_last_run else (args.handles or E.roster_ig(ev))
     if handles:
         handles = [h.strip().lstrip("@").lower() for h in handles if h.strip()]
+    print(f"  {ev['name']}")
 
-    MEDIA.mkdir(parents=True, exist_ok=True)
-    RAW.mkdir(parents=True, exist_ok=True)
+    P.mkdirs()
 
     items = fetch_items(tok, handles, args.from_last_run)
     print(f"  raw items: {len(items)}")
@@ -167,7 +157,7 @@ def main() -> int:
 
     seen = known_ids()
     added, skipped, leaked, bytes_saved, dead = 0, 0, 0, 0, 0
-    with INDEX.open("a") as idx:
+    with P.index.open("a") as idx:
         for item in items:
             norm = _normalize_item(item)
             if norm is None:
@@ -182,16 +172,16 @@ def main() -> int:
             # whatever _normalize_item looks like THEN, so a later fix to the
             # parser can be applied to stories already archived. A pre-digested
             # archive would freeze today's bugs into the record.
-            (RAW / f"{sid}.json").write_text(json.dumps(item))
+            (P.raw / f"{sid}.json").write_text(json.dumps(item))
 
-            img = MEDIA / f"{sid}.jpg"
+            img = P.media / f"{sid}.jpg"
             n = download(norm["image_url"], img) if norm["image_url"] else 0
             if not n:
                 dead += 1
             bytes_saved += n
             vid_name = None
             if norm["video_url"] and not args.no_video:
-                vid = MEDIA / f"{sid}.mp4"
+                vid = P.media / f"{sid}.mp4"
                 vn = download(norm["video_url"], vid)
                 if vn:
                     bytes_saved += vn
@@ -205,6 +195,7 @@ def main() -> int:
                 "image_file": img.name if n else None,
                 "video_file": vid_name,
                 "raw_file": f"{sid}.json",
+                "event": ev["id"],
             }) + "\n")
             seen.add(sid)
             added += 1
@@ -213,7 +204,7 @@ def main() -> int:
     print(f"\n  archived {added} new · {skipped} already had · {leaked} not stories")
     if dead:
         print(f"  {dead} image link(s) already dead — metadata kept, picture lost")
-    print(f"  +{bytes_saved / 1e6:.1f} MB · {total} stories in {ARCHIVE.relative_to(ROOT)}")
+    print(f"  +{bytes_saved / 1e6:.1f} MB · {total} stories in {P.label()}")
     print("\n  Re-run every few hours while the campaign runs; already-archived")
     print("  stories are skipped. Load into the tool with 63_stories_backfill.py")
     print("  once api_ingest_stories is deployed.")

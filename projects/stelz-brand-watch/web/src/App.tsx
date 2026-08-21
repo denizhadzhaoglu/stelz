@@ -9,11 +9,12 @@ import Home from './pages/Home'
 import Creator from './pages/Creator'
 import Sounds from './pages/Sounds'
 import StoriesPage from './pages/Stories'
-import CampaignPage from './pages/Campaign'
 import { useMembership } from './lib/membership'
+import { ABSORBED_ROUTES, absorbedTarget, type AbsorbedRoute } from './lib/absorbedRoutes'
 import Costs from './pages/Costs'
 import ProjectPage from './pages/Project'
-import LowlandsPage from './pages/Lowlands'
+import EventsPage from './pages/Events'
+import EventPage from './pages/Event'
 import Settings from './pages/Settings'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
@@ -23,8 +24,11 @@ import Privacy from './pages/Privacy'
 
 // Primary routes:
 //   /              Home (tabs: Dashboard · Feed · Review · Creators)
-//   /lowlands      Client roster tab — import screen until the project
-//                  exists, then a redirect to its project page
+//   /evenementen   Festivals and activations: the list, and adding one
+//   /evenementen/:eventId
+//                  One event — roster, organic pickup, stories, settings.
+//                  Absorbed /campagne, which showed the same three surfaces
+//                  with no period at all.
 //   /sounds(/:key) Sound leaderboard + drill-down
 //   /creators/:id  Creator detail
 //   /projects/:id  Project detail (tracked creator groups)
@@ -36,11 +40,14 @@ import Privacy from './pages/Privacy'
 // rather than access control — firestore.rules is what actually closes the
 // usage collection (see the `usage` match there).
 const NAV: { to: string; label: string; matchPrefix?: string; adminOnly?: boolean }[] = [
-  { to: '/', label: 'Home' },
-  // matchPrefix '/projects': the Lowlands tab stays lit while reading any
-  // project roster — the tab redirects there once the roster exists.
-  { to: '/lowlands', label: 'Lowlands', matchPrefix: '/projects' },
-  { to: '/campagne', label: 'Campagne', matchPrefix: '/campagne' },
+  // matchPrefix '/projects': a project roster is reached from an event's
+  // settings, so Home keeps the lamp on rather than leaving it nowhere. It sat
+  // on the Lowlands tab, which no longer exists.
+  { to: '/', label: 'Home', matchPrefix: '/projects' },
+  // Two tabs became one. "Lowlands" named a single festival in a route, and
+  // "Campagne" was the same three surfaces with no event attached — so the
+  // event page is both.
+  { to: '/evenementen', label: 'Evenementen', matchPrefix: '/evenementen' },
   { to: '/stories', label: 'Stories', matchPrefix: '/stories' },
   { to: '/sounds', label: 'Sounds', matchPrefix: '/sounds' },
   { to: '/kosten', label: 'Kosten', matchPrefix: '/kosten', adminOnly: true },
@@ -61,6 +68,11 @@ const OLD_ROUTE_REDIRECTS: Record<string, string> = {
   '/onboarding': '/settings',
 }
 
+function KeepQuery({ route }: { route: AbsorbedRoute }) {
+  const { search } = useLocation()
+  return <Navigate to={absorbedTarget(route, search)} replace />
+}
+
 export default function App() {
   return (
     <Routes>
@@ -75,17 +87,22 @@ export default function App() {
       {Object.entries(OLD_ROUTE_REDIRECTS).map(([from, to]) => (
         <Route key={from} path={from} element={<Navigate to={to} replace />} />
       ))}
+      {/* Absorbed tabs. Separate from the table above because these keep their
+          querystring — see lib/absorbedRoutes. */}
+      {ABSORBED_ROUTES.map((r) => (
+        <Route key={r.path} path={r.path} element={<KeepQuery route={r} />} />
+      ))}
 
       {/* App (protected) */}
       <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
         <Route path="/" element={<Home />} />
         <Route path="/creators/:handle" element={<Creator />} />
-        <Route path="/campagne" element={<CampaignPage />} />
         <Route path="/stories" element={<StoriesPage />} />
         <Route path="/kosten" element={<Costs />} />
         <Route path="/sounds" element={<Sounds />} />
         <Route path="/sounds/:soundKey" element={<Sounds />} />
-        <Route path="/lowlands" element={<LowlandsPage />} />
+        <Route path="/evenementen" element={<EventsPage />} />
+        <Route path="/evenementen/:eventId" element={<EventPage />} />
         <Route path="/projects/:projectId" element={<ProjectPage />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

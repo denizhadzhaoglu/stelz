@@ -6,8 +6,9 @@ three surfaces cannot drift into three different opinions about what counts as
 a sighting.
 
     ./firebase/functions/venv/bin/python \\
-        tools/stelz_brand_watch/74_analyse.py --archive tiktok
-        ... --archive ig-posts
+        tools/stelz_brand_watch/74_analyse.py --event lowlands-2026 \\
+                                              --archive tiktok --max-dim 0
+        ... --archive ig-posts   # or stories, or discovery
         ... --limit 5            # try a few first
         ... --covers-only        # skip video frames (cheap, and says so)
         ... --redo               # re-judge everything
@@ -35,15 +36,20 @@ _spec = importlib.util.spec_from_file_location(
     "_local_detect", Path(__file__).with_name("_local_detect.py"))
 D = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(D)
+_espec = importlib.util.spec_from_file_location(
+    "_events", Path(__file__).with_name("_events.py"))
+E = importlib.util.module_from_spec(_espec)
+_espec.loader.exec_module(E)
 
-ARCHIVES = {
-    "tiktok": (ROOT / ".tmp" / "tiktok-archive", "video_id"),
-    "ig-posts": (ROOT / ".tmp" / "ig-posts-archive", "item_id"),
-    "stories": (ROOT / ".tmp" / "stories-archive", "story_id"),
-    # Everyone at the festival who is NOT on the roster, found by hashtag
-    # (73_lowlands_discovery.py). Same cascade, separate archive: paid delivery
-    # and organic pickup are different claims and must not share a total.
-    "lowlands": (ROOT / ".tmp" / "lowlands-discovery-archive", "video_id"),
+# Which field holds the id, per surface. "discovery" is everyone at the event
+# who is NOT on the roster, found by hashtag (73). Same cascade, separate
+# archive: paid delivery and organic pickup are different claims and must not
+# share a total.
+ID_FIELD = {
+    "tiktok": "video_id",
+    "ig-posts": "item_id",
+    "stories": "story_id",
+    "discovery": "video_id",
 }
 
 
@@ -90,7 +96,9 @@ def analyse(entry: dict, media: Path, refs: list[bytes], covers_only: bool,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--archive", required=True, choices=sorted(ARCHIVES))
+    ap.add_argument("--event", default="lowlands-2026", choices=E.available(),
+                    help="which event's archives (default lowlands-2026)")
+    ap.add_argument("--archive", required=True, choices=sorted(ID_FIELD))
     ap.add_argument("--limit", type=int)
     ap.add_argument("--covers-only", action="store_true")
     ap.add_argument("--redo", action="store_true")
@@ -122,15 +130,17 @@ def main() -> int:
     ap.add_argument("--concurrency", type=int, default=6)
     args = ap.parse_args()
 
-    base, id_field = ARCHIVES[args.archive]
-    index, media, vpath = base / "index.jsonl", base / "media", base / "verdicts.jsonl"
+    ev = E.load(args.event)
+    P = E.paths(ev, args.archive)
+    id_field = ID_FIELD[args.archive]
+    index, media, vpath = P.index, P.media, P.dir / "verdicts.jsonl"
 
     D.load_env()
     if not D.have_key():
         print("No Gemini key (GOOGLE_AI_API_KEY / GEMINI_API_KEY)")
         return 2
     if not index.exists():
-        print(f"No archive at {base.relative_to(ROOT)} — harvest it first")
+        print(f"No archive at {P.label()} — harvest it first")
         return 2
 
     entries = [json.loads(l) for l in index.read_text().splitlines() if l.strip()]
@@ -150,11 +160,27 @@ def main() -> int:
     if args.limit:
         todo = todo[: args.limit]
 
-    print(f"{len(entries)} archived · {len(verdicts)} already judged · {len(todo)} to analyse")
+    print(f"{ev['name']} / {args.archive} — {len(entries)} archived · "
+          f"{len(verdicts)} already judged · {len(todo)} to analyse")
     print("First pass at "
           + (f"{args.max_dim}px (as production)" if args.max_dim == D.PROD_MAX_DIM
              else f"{args.max_dim}px" if args.max_dim > 0
              else "the archived resolution — MORE than production sees"))
+
+    # An archive judged at two resolutions is an archive whose totals mean
+    # nothing. The three roster archives were built at the archived resolution
+    # (max_dim 0); re-running at the 512px default turns 37 Instagram hits into
+    # 27 and 8 TikTok hits into 5, and the drop looks exactly like "the brand
+    # was less visible this week". Mixing the two inside ONE file is worse
+    # still: the difference is then invisible even in principle.
+    existing = {v.get("max_dim") for v in verdicts.values() if "max_dim" in v}
+    if len(existing) == 1 and (settled := existing.pop()) != args.max_dim and not args.redo:
+        print(f"\n  ✕ REFUSED. {len(verdicts)} verdicts in this archive were judged at "
+              f"max_dim={settled}, and this run would add rows at {args.max_dim}.")
+        print(f"    Pass --max-dim {settled} to extend the archive, or --redo to "
+              f"re-judge all of it at {args.max_dim} (which re-bills every row).")
+        return 2
+
     if not todo:
         print("Nothing to do.")
         return 0

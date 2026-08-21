@@ -1,3 +1,7 @@
+/// <reference types="node" />
+// This file reads the generated fixture off disk, so it needs the Node
+// globals the app config deliberately leaves out — browser code has no
+// business with fs. Scoped here rather than widened in tsconfig.app.json.
 // The preview data, joined the way the page joins it.
 //
 // Unit tests pin the rules; this pins the actual bytes the dev server will
@@ -17,7 +21,7 @@ import { joinStories, storyRollup, storySource, stelzShare } from './storyStats'
 import type { StoryPost } from './firestore'
 import type { DetectionRow } from './types'
 
-const ARCHIVE = resolve(__dirname, '../../../../../.tmp/stories-archive')
+const ARCHIVE = resolve(__dirname, '../../../../../.tmp/events/lowlands-2026/stories')
 const POSTS = resolve(ARCHIVE, 'preview-story-posts.json')
 const DETS = resolve(ARCHIVE, 'preview-stories.json')
 const present = existsSync(POSTS) && existsSync(DETS)

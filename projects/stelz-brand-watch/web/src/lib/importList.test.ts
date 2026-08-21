@@ -4,7 +4,13 @@
 // transcription typo fails CI instead of a live import.
 import { describe, expect, it } from 'vitest'
 import { buildSelection, extractHandle, parseCreatorList, toEditableRows } from './importList'
-import { LOWLANDS_SEED } from '../data/lowlandsSeed'
+// The roster now lives in the event definition, and seedTsv renders it in the
+// paste format this parser takes. Same 28 rows and 53 ids as the hand-written
+// data/lowlandsSeed.ts it replaced — that equality is what this file checks.
+import { getEvent, type StelzEvent } from '../data/events'
+import { seedTsv } from './events'
+
+const LOWLANDS_SEED = seedTsv(getEvent('lowlands-2026') as StelzEvent)
 import { splitCreatorId } from './projects'
 
 describe('extractHandle', () => {
@@ -150,7 +156,7 @@ describe('editable-table helpers', () => {
   })
 })
 
-describe('LOWLANDS_SEED pre-flight', () => {
+describe('the Lowlands roster, pre-flight', () => {
   it('parses clean: 28 people, 53 platform ids, zero warnings', () => {
     const out = parseCreatorList(LOWLANDS_SEED)
     expect(out.rows).toHaveLength(28)
