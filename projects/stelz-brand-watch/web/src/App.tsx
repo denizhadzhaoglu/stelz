@@ -9,11 +9,11 @@ import Home from './pages/Home'
 import Creator from './pages/Creator'
 import Sounds from './pages/Sounds'
 import StoriesPage from './pages/Stories'
-import CampaignPage from './pages/Campaign'
 import { useMembership } from './lib/membership'
 import Costs from './pages/Costs'
 import ProjectPage from './pages/Project'
-import LowlandsPage from './pages/Lowlands'
+import EventsPage from './pages/Events'
+import EventPage from './pages/Event'
 import Settings from './pages/Settings'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
@@ -23,8 +23,11 @@ import Privacy from './pages/Privacy'
 
 // Primary routes:
 //   /              Home (tabs: Dashboard · Feed · Review · Creators)
-//   /lowlands      Client roster tab — import screen until the project
-//                  exists, then a redirect to its project page
+//   /evenementen   Festivals and activations: the list, and adding one
+//   /evenementen/:eventId
+//                  One event — roster, organic pickup, stories, settings.
+//                  Absorbed /campagne, which showed the same three surfaces
+//                  with no period at all.
 //   /sounds(/:key) Sound leaderboard + drill-down
 //   /creators/:id  Creator detail
 //   /projects/:id  Project detail (tracked creator groups)
@@ -36,11 +39,14 @@ import Privacy from './pages/Privacy'
 // rather than access control — firestore.rules is what actually closes the
 // usage collection (see the `usage` match there).
 const NAV: { to: string; label: string; matchPrefix?: string; adminOnly?: boolean }[] = [
-  { to: '/', label: 'Home' },
-  // matchPrefix '/projects': the Lowlands tab stays lit while reading any
-  // project roster — the tab redirects there once the roster exists.
-  { to: '/lowlands', label: 'Lowlands', matchPrefix: '/projects' },
-  { to: '/campagne', label: 'Campagne', matchPrefix: '/campagne' },
+  // matchPrefix '/projects': a project roster is reached from an event's
+  // settings, so Home keeps the lamp on rather than leaving it nowhere. It sat
+  // on the Lowlands tab, which no longer exists.
+  { to: '/', label: 'Home', matchPrefix: '/projects' },
+  // Two tabs became one. "Lowlands" named a single festival in a route, and
+  // "Campagne" was the same three surfaces with no event attached — so the
+  // event page is both.
+  { to: '/evenementen', label: 'Evenementen', matchPrefix: '/evenementen' },
   { to: '/stories', label: 'Stories', matchPrefix: '/stories' },
   { to: '/sounds', label: 'Sounds', matchPrefix: '/sounds' },
   { to: '/kosten', label: 'Kosten', matchPrefix: '/kosten', adminOnly: true },
@@ -61,6 +67,36 @@ const OLD_ROUTE_REDIRECTS: Record<string, string> = {
   '/onboarding': '/settings',
 }
 
+/** The two routes the event page absorbed.
+ *
+ *  Kept out of OLD_ROUTE_REDIRECTS because that map drops the querystring, and
+ *  these two carry state worth keeping: `?preview=campaign` is the only way to
+ *  open the local fixture, and `?bron=discovery` is a bookmark someone made to
+ *  a specific half of the data. A redirect that silently discards them looks
+ *  like the page lost its contents. */
+const ABSORBED: { path: string; to: string; map?: (p: URLSearchParams) => void }[] = [
+  { path: '/lowlands', to: '/evenementen/lowlands-2026' },
+  {
+    path: '/campagne',
+    to: '/evenementen/lowlands-2026',
+    // ?bron=roster|discovery became ?tab=roster|discovery; 'all' has no
+    // equivalent, because an event's two halves are never one total.
+    map: (p) => {
+      const bron = p.get('bron')
+      p.delete('bron')
+      if (bron === 'roster' || bron === 'discovery') p.set('tab', bron)
+    },
+  },
+]
+
+function KeepQuery({ to, map }: { to: string; map?: (p: URLSearchParams) => void }) {
+  const { search } = useLocation()
+  const next = new URLSearchParams(search)
+  map?.(next)
+  const qs = next.toString()
+  return <Navigate to={qs ? `${to}?${qs}` : to} replace />
+}
+
 export default function App() {
   return (
     <Routes>
@@ -75,17 +111,20 @@ export default function App() {
       {Object.entries(OLD_ROUTE_REDIRECTS).map(([from, to]) => (
         <Route key={from} path={from} element={<Navigate to={to} replace />} />
       ))}
+      {ABSORBED.map((r) => (
+        <Route key={r.path} path={r.path} element={<KeepQuery to={r.to} map={r.map} />} />
+      ))}
 
       {/* App (protected) */}
       <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
         <Route path="/" element={<Home />} />
         <Route path="/creators/:handle" element={<Creator />} />
-        <Route path="/campagne" element={<CampaignPage />} />
         <Route path="/stories" element={<StoriesPage />} />
         <Route path="/kosten" element={<Costs />} />
         <Route path="/sounds" element={<Sounds />} />
         <Route path="/sounds/:soundKey" element={<Sounds />} />
-        <Route path="/lowlands" element={<LowlandsPage />} />
+        <Route path="/evenementen" element={<EventsPage />} />
+        <Route path="/evenementen/:eventId" element={<EventPage />} />
         <Route path="/projects/:projectId" element={<ProjectPage />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
