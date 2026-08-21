@@ -10,6 +10,7 @@ import Creator from './pages/Creator'
 import Sounds from './pages/Sounds'
 import StoriesPage from './pages/Stories'
 import { useMembership } from './lib/membership'
+import { ABSORBED_ROUTES, absorbedTarget, type AbsorbedRoute } from './lib/absorbedRoutes'
 import Costs from './pages/Costs'
 import ProjectPage from './pages/Project'
 import EventsPage from './pages/Events'
@@ -67,34 +68,9 @@ const OLD_ROUTE_REDIRECTS: Record<string, string> = {
   '/onboarding': '/settings',
 }
 
-/** The two routes the event page absorbed.
- *
- *  Kept out of OLD_ROUTE_REDIRECTS because that map drops the querystring, and
- *  these two carry state worth keeping: `?preview=campaign` is the only way to
- *  open the local fixture, and `?bron=discovery` is a bookmark someone made to
- *  a specific half of the data. A redirect that silently discards them looks
- *  like the page lost its contents. */
-const ABSORBED: { path: string; to: string; map?: (p: URLSearchParams) => void }[] = [
-  { path: '/lowlands', to: '/evenementen/lowlands-2026' },
-  {
-    path: '/campagne',
-    to: '/evenementen/lowlands-2026',
-    // ?bron=roster|discovery became ?tab=roster|discovery; 'all' has no
-    // equivalent, because an event's two halves are never one total.
-    map: (p) => {
-      const bron = p.get('bron')
-      p.delete('bron')
-      if (bron === 'roster' || bron === 'discovery') p.set('tab', bron)
-    },
-  },
-]
-
-function KeepQuery({ to, map }: { to: string; map?: (p: URLSearchParams) => void }) {
+function KeepQuery({ route }: { route: AbsorbedRoute }) {
   const { search } = useLocation()
-  const next = new URLSearchParams(search)
-  map?.(next)
-  const qs = next.toString()
-  return <Navigate to={qs ? `${to}?${qs}` : to} replace />
+  return <Navigate to={absorbedTarget(route, search)} replace />
 }
 
 export default function App() {
@@ -111,8 +87,10 @@ export default function App() {
       {Object.entries(OLD_ROUTE_REDIRECTS).map(([from, to]) => (
         <Route key={from} path={from} element={<Navigate to={to} replace />} />
       ))}
-      {ABSORBED.map((r) => (
-        <Route key={r.path} path={r.path} element={<KeepQuery to={r.to} map={r.map} />} />
+      {/* Absorbed tabs. Separate from the table above because these keep their
+          querystring — see lib/absorbedRoutes. */}
+      {ABSORBED_ROUTES.map((r) => (
+        <Route key={r.path} path={r.path} element={<KeepQuery route={r} />} />
       ))}
 
       {/* App (protected) */}
