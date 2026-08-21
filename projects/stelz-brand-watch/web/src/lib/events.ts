@@ -40,6 +40,18 @@ export type Attributable = {
    *  appears on both authors' profiles; Apify records the one it asked for. */
   scrapedFor?: string | null
   hashtags?: string[] | null
+  /** The tag whose search returned this row, recorded by the harvest.
+   *
+   *  Stronger evidence than `hashtags`, and needed because they disagree far
+   *  more often than you would expect: 82 of 176 archived discovery rows carry
+   *  no event tag in their caption at all. Some of those are TikTok's search
+   *  being fuzzy — a hotel in Tobago under #lowlandstobago, a country singer
+   *  called @lowland2026, a hair salon called Stelz — and some are genuine
+   *  festival content whose caption simply did not repeat the tag. Trusting
+   *  only the caption drops both kinds; trusting the recorded search keeps
+   *  both. Keeping them is the right error: they enter the DENOMINATOR, and a
+   *  denominator that is too large understates the hit rate. */
+  foundVia?: string | null
 }
 
 const clean = (h: string | null | undefined): string =>
@@ -192,8 +204,14 @@ export function matchEvent(ev: StelzEvent, item: Attributable): EventMatch | nul
   if (onRoster) return { eventId: ev.id, source: 'roster', foundVia: null }
   if (!dated) return null
 
+  const ordered = orderedTags(ev)
+  // What the harvest actually searched for, first. See Attributable.foundVia.
+  const recorded = (item.foundVia ?? '').replace(/^#/, '').toLowerCase()
+  if (recorded && ordered.includes(recorded)) {
+    return { eventId: ev.id, source: 'discovery', foundVia: recorded }
+  }
   const tags = new Set((item.hashtags ?? []).map((t) => t.replace(/^#/, '').toLowerCase()))
-  const hit = orderedTags(ev).find((t) => tags.has(t))
+  const hit = ordered.find((t) => tags.has(t))
   return hit ? { eventId: ev.id, source: 'discovery', foundVia: hit } : null
 }
 

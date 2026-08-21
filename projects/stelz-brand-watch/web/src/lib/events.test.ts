@@ -180,3 +180,41 @@ describe('matchEvent', () => {
     expect(lastBrand).toBeLessThan(firstEvent)
   })
 })
+
+describe('foundVia, the tag the harvest actually searched', () => {
+  const item = (over: Attributable): Attributable => ({
+    postedAt: '2026-08-21T12:00:00Z', platformHandle: 'vreemde', ...over,
+  })
+
+  it('keeps a find whose caption never repeated the tag', () => {
+    // 82 of 176 archived discovery rows are like this. Some are TikTok's search
+    // being fuzzy, some are real festival content with a bare caption — and the
+    // caption alone cannot tell them apart, so both are kept and both land in
+    // the denominator.
+    const m = matchEvent(LL, item({ foundVia: 'lowlands2026', hashtags: [] }))
+    expect(m).toEqual({ eventId: 'lowlands-2026', source: 'discovery', foundVia: 'lowlands2026' })
+  })
+
+  it('still rejects a tag this event never searched for', () => {
+    // foundVia is trusted, not obeyed. A row harvested for another event does
+    // not become this one's because it carries a tag.
+    expect(matchEvent(LL, item({ foundVia: 'tomorrowland', hashtags: [] }))).toBeNull()
+  })
+
+  it('does not let foundVia smuggle a row past the window', () => {
+    expect(matchEvent(LL, item({ foundVia: 'stelz', postedAt: '2025-08-20T12:00:00Z' })))
+      .toBeNull()
+  })
+
+  it('never overrides the roster', () => {
+    // A roster creator's post found by hashtag is still a delivery. Paid reach
+    // must not cross into the organic column.
+    const m = matchEvent(LL, item({ platformHandle: 'brittmessing', foundVia: 'stelz' }))
+    expect(m?.source).toBe('roster')
+    expect(m?.foundVia).toBeNull()
+  })
+
+  it('falls back to the caption when nothing was recorded', () => {
+    expect(matchEvent(LL, item({ hashtags: ['lowlands'] }))?.foundVia).toBe('lowlands')
+  })
+})
