@@ -79,6 +79,18 @@ export type DetectionRow = {
   // and by any path that batches frames into a single call, where the documents
   // would otherwise under-report what was examined.
   frames_judged?: number | null
+  // The model called this a hit and the gate or the verifier overturned it.
+  // Set explicitly by the local analyser; in production it is derived from
+  // `gate` / `verify_verdict` (see storyStats.isNearMiss), because those two
+  // already carry the same fact. Worth its own state on screen: a picture the
+  // detector argued about is not the same as one it had nothing to say about,
+  // and collapsing the two hides every disagreement the system ever had.
+  near_miss?: boolean | null
+  near_miss_reason?: string | null
+  // True when a video's clip could not be obtained and only its cover was
+  // judged. A thumbnail is a chosen frame, so "nothing found" on a cover is a
+  // much weaker claim than "nothing found" across the whole clip.
+  cover_only?: boolean | null
   post_id?: string | null    // groups multiple frame-hits of the same post
   frame_hits?: number        // UI-only: how many detections were collapsed into this row
   // UI-only, same as frame_hits: attached by signal.withSignal() after dedupe.
@@ -104,6 +116,20 @@ export type DetectionRow = {
   verify_verdict: string | null
   verify_brand: string | null
   verify_reason: string | null
+  // Where the wordmark was, when it was NOT on a can: a bar front, a parasol, a
+  // branded tray, an inflatable, a shirt. Null on an ordinary can sighting.
+  // Worth showing: a festival bar carrying the logo is a placement the brand
+  // paid for, and it reads very differently in a report from "someone is
+  // holding one".
+  verify_placement?: 'signage' | 'merchandise' | 'clothing' | 'other' | null
+  // Whether the DEPLOYED backend would still find this. It downscales every
+  // image to 512px (detect_image.MAX_IMAGE_DIM) before the model looks, and a
+  // video frame arrives at the clip's own resolution — so a 1080x1920 frame
+  // loses ~93% of its pixels and a 40px wordmark becomes 19. Measured on the
+  // Lowlands archive: 13 of 46 sightings vanish, several of them confirmed by
+  // eye. False here is a fact about the deploy, not about the photo.
+  found_at_prod_res?: boolean | null
+  max_dim?: number | null
   // How the post talks about the brand, scored from the CAPTION after the fact
   // (handlers/analyze_sentiment.py) — never from the image, and never inside
   // the detection call. Null on any hit the sentiment pass hasn't reached yet,

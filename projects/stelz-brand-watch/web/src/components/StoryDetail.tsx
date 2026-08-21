@@ -14,9 +14,54 @@ import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge, PRODUCT_LINE_LABEL } from './ui'
 import { MediaTile } from './MediaTile'
-import { storyImage, VERDICT_LABEL, type StoryRow } from '../lib/storyStats'
+import { VERDICT_LABEL, type StoryVerdict } from '../lib/storyStats'
+import type { DetectionRow } from '../lib/types'
 import { storyExpiry, storyChip } from '../lib/stories'
 import { fmtNum, compactNum } from '../lib/format'
+
+/**
+ * What this panel needs, and nothing more.
+ *
+ * Structural, so an IG story row and a TikTok row both satisfy it without a
+ * conversion step and without a second copy of this component. The optional
+ * fields are the ones that genuinely exist on one surface and not another: a
+ * TikTok has no 24-hour expiry and no poll, an IG story has no view count.
+ * Optional here means "this surface does not have one", never "we lost it".
+ */
+export type DetailRow = {
+  creatorHandle: string
+  url: string | null
+  coverUrl: string | null
+  videoUrl: string | null
+  mediaType: 'image' | 'video'
+  videoDuration: number | null
+  postedAt: string | null
+  hashtags: string[]
+  mentions: string[]
+  isPaidPartnership: boolean
+  verdict: StoryVerdict
+  detection: DetectionRow | null
+  confidence: number | null
+  framesJudged: number
+  postedAtEstimated?: boolean
+  expiresAt?: string | null
+  pollVotes?: number | null
+  pollQuestions?: string[]
+  linkUrls?: string[]
+  music?: { title: string | null; artist: string | null } | null
+  caption?: string | null
+  surfaceLabel?: string
+  views?: number | null
+  likes?: number | null
+  comments?: number | null
+  shares?: number | null
+}
+
+/** Mirrored copy first: a story's own coverUrl is a signed link that dies
+ *  within hours, and the detection carries the copy that outlives it. */
+function detailImage(row: DetailRow): string | null {
+  return row.detection?.stored_path || row.detection?.image_url || row.coverUrl || null
+}
 
 const SETTING_NL: Record<string, string> = {
   indoor: 'binnen',
@@ -36,9 +81,21 @@ const GATE_NL: Record<string, string> = {
   rejected_by_verifier: 'afgekeurd door de tweede controle',
   rejected_wordmark_mismatch: 'afgekeurd: het gelezen merk is niet Stëlz',
   demoted_wordmark_only: 'alleen een merknaam gelezen, geen product gezien',
+  rejected_fabricated_fine_print:
+    'de kleine lettertjes waren volgens het model niet leesbaar op deze afstand',
+  verified_off_container: 'bevestigd door de tweede controle — niet op een blikje',
+  verified_upgraded: 'bevestigd door de tweede controle op hogere resolutie',
 }
 
-export function StoryDetail({ row, onClose }: { row: StoryRow | null; onClose: () => void }) {
+// Where the wordmark sat, when it was not on a can (verifier.PLACEMENTS).
+const PLACEMENT_NL: Record<string, string> = {
+  signage: 'een bord, banner, parasol of bar',
+  merchandise: 'merchandise — denk aan een dienblad, koelbox of opblaasbaar blik',
+  clothing: 'kleding van iemand in beeld',
+  other: 'iets anders dan een blikje',
+}
+
+export function StoryDetail({ row, onClose }: { row: DetailRow | null; onClose: () => void }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
     if (row) window.addEventListener('keydown', onKey)
@@ -57,7 +114,7 @@ export function StoryDetail({ row, onClose }: { row: StoryRow | null; onClose: (
       <aside className="fixed top-0 right-0 h-screen w-full max-w-[560px] bg-[var(--color-surface)] z-50 border-l border-[var(--color-border)] overflow-y-auto">
         <div className="sticky top-0 z-10 bg-[var(--color-surface)] border-b border-[var(--color-border)] px-5 h-12 flex items-center justify-between">
           <div className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)]">
-            Story · @{row.creatorHandle}
+            {row.surfaceLabel ?? 'Story'} · @{row.creatorHandle}
           </div>
           <button
             onClick={onClose}
@@ -73,20 +130,21 @@ export function StoryDetail({ row, onClose }: { row: StoryRow | null; onClose: (
           {row.videoUrl ? (
             <video
               src={row.videoUrl}
-              poster={storyImage(row) ?? undefined}
+              poster={detailImage(row) ?? undefined}
               controls
               playsInline
               className="w-full max-h-[420px] bg-[var(--color-bg)] border border-[var(--color-border)] object-contain"
             />
           ) : (
             <div className="bg-[var(--color-bg)] border border-[var(--color-border)]">
-              <MediaTile src={storyImage(row)} size="hero" fit="contain" priority
+              <MediaTile src={detailImage(row)} size="hero" fit="contain" priority
                 alt={`Story van @${row.creatorHandle}`} />
             </div>
           )}
 
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={row.verdict === 'visible' ? 'good' : row.verdict === 'small' ? 'warn'
+              : row.verdict === 'near' ? 'accent'
               : row.verdict === 'rejected' ? 'bad' : 'muted'}>
               {VERDICT_LABEL[row.verdict]}
             </Badge>
@@ -121,9 +179,25 @@ export function StoryDetail({ row, onClose }: { row: StoryRow | null; onClose: (
                 een mislukte download laat een story bewust ongeoordeeld achter.
               </p>
             )}
+            {d?.cover_only && (
+              <p className="mt-1.5 text-[12px] text-[var(--color-warn)] leading-relaxed">
+                Alleen de cover beoordeeld — de video zelf was niet op te halen. Een cover is
+                één gekozen beeld, dus "niets gevonden" zegt hier veel minder dan bij een
+                clip die helemaal is bekeken.
+              </p>
+            )}
             {d?.gate && (
               <p className="mt-1.5 text-[12px] text-[var(--color-warn)] leading-relaxed">
                 {GATE_NL[d.gate] ?? d.gate}
+              </p>
+            )}
+            {/* Where the wordmark was, when it was not on a can. A branded bar
+                front or parasol is a placement the brand paid for, and a report
+                that flattens it into "hit" loses the distinction the client
+                cares about most. */}
+            {d?.verify_placement && (
+              <p className="mt-1.5 text-[12px] text-[var(--color-good)] leading-relaxed">
+                Stëlz stond hier niet op een blikje maar op {PLACEMENT_NL[d.verify_placement]}.
               </p>
             )}
             {d?.verify_verdict && (
@@ -135,6 +209,30 @@ export function StoryDetail({ row, onClose }: { row: StoryRow | null; onClose: (
             )}
           </div>
 
+          {/* The disagreement, spelled out. This panel exists because a rejected
+              hit used to look exactly like an empty field, and the rejection
+              reason — the thing a person needs in order to overrule it — was
+              never on screen at all. */}
+          {row.verdict === 'near' && (
+            <div className="border-l-2 border-[var(--color-accent)] pl-3 py-1.5">
+              <div className="text-[10px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-1">
+                Waarom "mogelijk"
+              </div>
+              <p className="text-[12px] text-[var(--color-ink)] leading-relaxed">
+                Het model las Stëlz in dit beeld{d?.visible_text ? ` ("${d.visible_text}")` : ''}, en
+                de tweede controle draaide dat terug. Beide kunnen gelijk hebben — daarom staat het
+                hier apart en niet stilzwijgend op "Geen Stëlz".
+              </p>
+              {(d?.near_miss_reason || d?.verify_reason) && (
+                <p className="mt-1.5 text-[12px] text-[var(--color-ink-muted)] leading-relaxed">
+                  Reden van de afwijzing: {d.near_miss_reason || d.verify_reason}
+                </p>
+              )}
+              <p className="mt-1.5 text-[11px] text-[var(--color-ink-subtle)] leading-relaxed">
+                Kijk zelf naar het beeld hierboven en beslis.
+              </p>
+            </div>
+          )}
           {/* The model's own words. This is the part that cannot be faked by an
               empty state, so it stays even when the answer is "niets". */}
           {d && (d.context || d.visible_text || d.setting || d.activity || d.people_count != null) && (
@@ -179,9 +277,30 @@ export function StoryDetail({ row, onClose }: { row: StoryRow | null; onClose: (
 
           <div>
             <div className="text-[10px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">
-              De story zelf
+              De post zelf
             </div>
             <dl className="grid grid-cols-[104px_1fr] gap-y-2 gap-x-4 text-[13px]">
+              {/* TikTok publishes play counts; Instagram publishes story views
+                  to the account holder alone. So this row appears on one
+                  surface and is absent on the other, rather than showing a
+                  zero that would read as "nobody watched". */}
+              {row.views != null && (
+                <>
+                  <dt className="text-[var(--color-ink-subtle)] text-[11px] uppercase tracking-widest pt-0.5">Weergaven</dt>
+                  <dd className="tabular-nums font-medium">{compactNum(row.views)}</dd>
+                </>
+              )}
+              {(row.likes != null || row.comments != null || row.shares != null) && (
+                <>
+                  <dt className="text-[var(--color-ink-subtle)] text-[11px] uppercase tracking-widest pt-0.5">Reacties</dt>
+                  <dd className="tabular-nums">
+                    {[row.likes != null ? `${compactNum(row.likes)} likes` : null,
+                      row.comments != null ? `${compactNum(row.comments)} reacties` : null,
+                      row.shares != null ? `${compactNum(row.shares)} keer gedeeld` : null,
+                    ].filter(Boolean).join(' · ')}
+                  </dd>
+                </>
+              )}
               <dt className="text-[var(--color-ink-subtle)] text-[11px] uppercase tracking-widest pt-0.5">Geplaatst</dt>
               <dd>
                 {row.postedAt
@@ -193,16 +312,16 @@ export function StoryDetail({ row, onClose }: { row: StoryRow | null; onClose: (
                 {exp && <span className="text-[var(--color-ink-subtle)]"> · {storyChip(exp)}</span>}
               </dd>
 
-              {row.pollVotes > 0 && (
+              {(row.pollVotes ?? 0) > 0 && (
                 <>
                   <dt className="text-[var(--color-ink-subtle)] text-[11px] uppercase tracking-widest pt-0.5">Poll-stemmen</dt>
                   <dd className="tabular-nums">
-                    {compactNum(row.pollVotes)}
+                    {compactNum(row.pollVotes ?? 0)}
                     <span className="text-[var(--color-ink-subtle)]"> · elke stem is iemand die keek</span>
                   </dd>
                 </>
               )}
-              {row.pollQuestions.length > 0 && (
+              {(row.pollQuestions ?? []).length > 0 && (
                 <>
                   <dt className="text-[var(--color-ink-subtle)] text-[11px] uppercase tracking-widest pt-0.5">Vraag</dt>
                   <dd className="text-[var(--color-ink-muted)]">{row.pollQuestions.join(' · ')}</dd>
@@ -224,16 +343,22 @@ export function StoryDetail({ row, onClose }: { row: StoryRow | null; onClose: (
                   <dd className="text-[var(--color-ink-muted)]">{row.hashtags.map((h) => `#${h}`).join(' ')}</dd>
                 </>
               )}
+              {row.caption && (
+                <>
+                  <dt className="text-[var(--color-ink-subtle)] text-[11px] uppercase tracking-widest pt-0.5">Bijschrift</dt>
+                  <dd className="text-[var(--color-ink-muted)] leading-relaxed whitespace-pre-wrap">{row.caption}</dd>
+                </>
+              )}
               {row.music && (
                 <>
                   <dt className="text-[var(--color-ink-subtle)] text-[11px] uppercase tracking-widest pt-0.5">Muziek</dt>
                   <dd>{[row.music.title, row.music.artist].filter(Boolean).join(' — ') || 'onbekend'}</dd>
                 </>
               )}
-              {row.linkUrls.length > 0 && (
+              {(row.linkUrls ?? []).length > 0 && (
                 <>
                   <dt className="text-[var(--color-ink-subtle)] text-[11px] uppercase tracking-widest pt-0.5">Link-sticker</dt>
-                  <dd className="break-all text-[var(--color-ink-muted)]">{row.linkUrls.join(' · ')}</dd>
+                  <dd className="break-all text-[var(--color-ink-muted)]">{(row.linkUrls ?? []).join(' · ')}</dd>
                 </>
               )}
             </dl>

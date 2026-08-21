@@ -31,6 +31,7 @@ import { detectionQuality } from './quality'
 export type StoryVerdict =
   | 'visible'      // Stëlz clearly in frame
   | 'small'        // Stëlz found but demoted by the size gate
+  | 'near'         // the model saw Stëlz; the gate or the verifier overruled it
   | 'absent'       // analysed, nothing found
   | 'unanalysed'   // no detection document — includes an expired image link
   | 'rejected'     // a moderator said no
@@ -38,9 +39,32 @@ export type StoryVerdict =
 export const VERDICT_LABEL: Record<StoryVerdict, string> = {
   visible: 'Stëlz zichtbaar',
   small: 'Stëlz klein in beeld',
+  near: 'Mogelijk Stëlz',
   absent: 'Geen Stëlz',
   unanalysed: 'Nog niet geanalyseerd',
   rejected: 'Afgekeurd',
+}
+
+/**
+ * Did the detector argue with itself about this image?
+ *
+ * WHY THIS IS A STATE AND NOT A FOOTNOTE. Every overturned hit used to land in
+ * the same bucket as a photo of an empty field: "Geen Stëlz". In one Lowlands
+ * story the model read STELZ off a can in someone's hand and the verifier threw
+ * it out with "No beverage container is visible in the target photo" — about a
+ * picture containing four cans. That rejection may still be right, but it is a
+ * judgement call the screen was hiding, and hiding it is what makes a brand
+ * team stop believing the number.
+ *
+ * Derived, not stored, for production rows: `gate` and `verify_verdict` already
+ * record the same fact, so nothing has to be backfilled. `near_miss` is the
+ * explicit flag the local analyser writes.
+ */
+export function isNearMiss(d: DetectionRow): boolean {
+  if (d.detected === true) return false
+  if (d.near_miss === true) return true
+  if (d.verify_verdict === 'rejected') return true
+  return (d.gate ?? '').startsWith('rejected') || (d.gate ?? '').startsWith('demoted')
 }
 
 export type StoryRow = StoryPost & {
@@ -128,21 +152,30 @@ function framesJudgedIn(group: DetectionRow[]): number {
   return Math.max(stated, group.length)
 }
 
-/** Strongest evidence in the group: a rejection is decisive, then a hit, then
- *  the highest confidence among whatever is left. */
+/** Strongest evidence in the group: a rejection is decisive, then a hit, then a
+ *  near miss, then the highest confidence among whatever is left.
+ *
+ *  Near misses outrank plain misses on purpose. A video contributes one row per
+ *  frame; without this rule the single frame where the model saw a can would be
+ *  represented by a frame of grass, and the disagreement would vanish exactly
+ *  where it matters most. */
 function pickBest(group: DetectionRow[]): DetectionRow | null {
   if (group.length === 0) return null
   const rejected = group.find((d) => d.is_false_positive === true)
   if (rejected) return rejected
   const hits = group.filter((d) => d.detected === true)
-  const pool = hits.length > 0 ? hits : group
+  if (hits.length > 0) {
+    return hits.reduce((a, b) => ((b.confidence ?? 0) > (a.confidence ?? 0) ? b : a))
+  }
+  const near = group.filter(isNearMiss)
+  const pool = near.length > 0 ? near : group
   return pool.reduce((a, b) => ((b.confidence ?? 0) > (a.confidence ?? 0) ? b : a))
 }
 
 function verdictFor(d: DetectionRow | null): StoryVerdict {
   if (!d) return 'unanalysed'
   if (d.is_false_positive === true) return 'rejected'
-  if (d.detected !== true) return 'absent'
+  if (d.detected !== true) return isNearMiss(d) ? 'near' : 'absent'
   // Reuses the same gate the feed and review queue use, so "zichtbaar" here
   // means what "clear" means everywhere else in the app.
   return detectionQuality(d).quality === 'clear' ? 'visible' : 'small'
@@ -150,7 +183,11 @@ function verdictFor(d: DetectionRow | null): StoryVerdict {
 
 /** Counts Stëlz as present. `small` is a real hit that the size gate demoted —
  *  excluding it would under-report the campaign, including it as "clearly
- *  visible" would over-claim, so the UI shows the split and this shows both. */
+ *  visible" would over-claim, so the UI shows the split and this shows both.
+ *
+ *  `near` is deliberately NOT counted. An overturned hit is a question, not a
+ *  sighting, and putting questions in the headline number is how a dashboard
+ *  starts flattering its owner. It gets its own count instead. */
 export function isStelzStory(v: StoryVerdict): boolean {
   return v === 'visible' || v === 'small'
 }
@@ -164,6 +201,7 @@ export type CreatorStoryStats = {
   withStelz: number
   visible: number
   small: number
+  near: number
   unanalysed: number
   pollVotes: number
   mentions: number
@@ -179,6 +217,7 @@ export type StoryRollup = {
   visible: number
   small: number
   absent: number
+  near: number
   unanalysed: number
   rejected: number
   /** Stories a verdict was actually reached on. */
@@ -216,14 +255,14 @@ export function storyRollup(
     fullName: profiles[handle]?.fullName ?? null,
     avatarUrl: profiles[handle]?.avatarUrl ?? null,
     followers: profiles[handle]?.followerCount ?? null,
-    stories: 0, withStelz: 0, visible: 0, small: 0, unanalysed: 0,
+    stories: 0, withStelz: 0, visible: 0, small: 0, near: 0, unanalysed: 0,
     pollVotes: 0, mentions: 0, links: 0, videoSeconds: 0, lastStoryAt: null,
   })
   for (const h of roster) byCreator.set(h.toLowerCase(), blank(h.toLowerCase()))
 
   const out: StoryRollup = {
     stories: 0, creatorsPosted: 0,
-    withStelz: 0, visible: 0, small: 0, absent: 0, unanalysed: 0, rejected: 0,
+    withStelz: 0, visible: 0, small: 0, absent: 0, near: 0, unanalysed: 0, rejected: 0,
     judged: 0, imagesSeen: 0,
     reach: 0, reachKnownFor: 0, pollVotes: 0, mentions: 0, links: 0,
     videoSeconds: 0, byCreator: [], postedAts: [],
@@ -242,6 +281,7 @@ export function storyRollup(
     if (r.verdict !== 'unanalysed') out.judged += 1
     if (r.verdict === 'visible') c.visible += 1
     if (r.verdict === 'small') c.small += 1
+    if (r.verdict === 'near') c.near += 1
     if (r.verdict === 'unanalysed') c.unanalysed += 1
     if (isStelzStory(r.verdict)) { out.withStelz += 1; c.withStelz += 1 }
 

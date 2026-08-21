@@ -346,11 +346,12 @@ def _verify_pass(
                     model="gemini-2.5-flash",
                 )
                 usage.record(brand_id, gemini_verify_calls=1)
-                # The crop is strictly more information about the same object,
-                # so it supersedes — but only when it actually resolved a brand.
-                # An inconclusive crop must not overwrite a confident full-frame
-                # read; that would turn added detail into lost signal.
-                if refined.get("brand") not in (None, "", "no_readable_brand"):
+                # The crop is more information about the same object, so it
+                # supersedes — but only when it actually resolved something.
+                # See verifier.crop_supersedes: a box the model got wrong sends
+                # this call at a patch of sky, and its "nothing here" must not
+                # overwrite a full frame that read the wordmark.
+                if verifier.crop_supersedes(refined):
                     verdict = refined
                     verdict["from_crop"] = True
     except Exception as e:
@@ -554,6 +555,12 @@ def _persist(brand_id: str, post_id: str, det_id: str, base: dict, result: dict,
         "verifyBrand": result.get("verify_brand"),
         "verifyReason": result.get("verify_reason"),
         "verifyVersion": result.get("verify_version"),
+        # Where the wordmark was when it was NOT on a can: 'signage' |
+        # 'merchandise' | 'clothing' | 'other'. A branded bar front, parasol or
+        # cooler is a placement the brand paid for and reads very differently in
+        # a report from "someone is holding one", so it is stored rather than
+        # collapsed into the boolean.
+        "verifyPlacement": result.get("verify_placement"),
     }}
     # bbox no longer requested from Gemini (prompt v5); the drawer renders
     # text-based findings instead of an SVG overlay.

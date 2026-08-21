@@ -23,12 +23,29 @@ import path from 'node:path'
  * 62_stories_archive.py. Nothing here = 404 = the UI stays on live data.
  */
 function storyPreview() {
-  const archive = path.resolve(__dirname, '../../../.tmp/stories-archive')
+  const tmp = path.resolve(__dirname, '../../../.tmp')
+  const STORIES = path.join(tmp, 'stories-archive')
   const TYPES: Record<string, string> = {
     '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
     '.webp': 'image/webp', '.mp4': 'video/mp4', '.json': 'application/json',
   }
-  const FIXTURES = new Set(['/preview-stories.json', '/preview-story-posts.json'])
+  // Where each fixture lives. Explicit map, not a path join on user input:
+  // this middleware answers requests from a browser, and "serve whatever the
+  // URL names" is how a dev server ends up handing out .env.
+  const FIXTURES: Record<string, string> = {
+    '/preview-stories.json': path.join(STORIES, 'preview-stories.json'),
+    '/preview-story-posts.json': path.join(STORIES, 'preview-story-posts.json'),
+    '/preview-campaign.json': path.join(tmp, 'preview-campaign.json'),
+    '/preview-campaign-detections.json': path.join(tmp, 'preview-campaign-detections.json'),
+  }
+  // Only these directories can be read from, by name. An allow-list rather
+  // than a prefix check: this middleware turns a URL segment into a filesystem
+  // path, and the whole point is that no segment outside this set can ever
+  // become one.
+  const ARCHIVES = new Set([
+    'stories-archive', 'ig-posts-archive', 'tiktok-archive',
+    'lowlands-discovery-archive',
+  ])
 
   function send(res: any, file: string, ext: string) {
     if (!TYPES[ext] || !fs.existsSync(file)) {
@@ -46,13 +63,23 @@ function storyPreview() {
     configureServer(server: { middlewares: { use: (fn: (req: any, res: any, next: () => void) => void) => void } }) {
       server.middlewares.use((req, res, next) => {
         const url: string = (req.url || '').split('?')[0]
-        if (FIXTURES.has(url)) {
-          return send(res, path.join(archive, path.basename(url)), '.json')
-        }
+        const fixture = FIXTURES[url]
+        if (fixture) return send(res, fixture, '.json')
         if (!url.startsWith('/preview-media/')) return next()
-        // basename only: a request for ../../.env must not escape the archive.
-        const name = path.basename(decodeURIComponent(url))
-        return send(res, path.join(archive, 'media', name), path.extname(name).toLowerCase())
+
+        // /preview-media/<archive>/<file>, or /preview-media/<file> for the
+        // stories archive (the shape the stories fixture already emits).
+        const parts = decodeURIComponent(url)
+          .slice('/preview-media/'.length)
+          .split('/')
+          .filter(Boolean)
+        // basename on every segment: a raw or encoded ../../.env must not
+        // escape, and neither must an archive name that is not on the list.
+        const name = path.basename(parts[parts.length - 1] ?? '')
+        const dir = parts.length > 1 && ARCHIVES.has(path.basename(parts[0]))
+          ? path.join(tmp, path.basename(parts[0]), 'media')
+          : path.join(STORIES, 'media')
+        return send(res, path.join(dir, name), path.extname(name).toLowerCase())
       })
     },
   }

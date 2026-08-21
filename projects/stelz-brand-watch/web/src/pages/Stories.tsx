@@ -34,11 +34,12 @@ import { useStoryPostsPreview, useStoryPreview } from '../lib/devPreview'
 /** Hard ceiling on one fetch. Stated on screen when it binds. */
 const FETCH_LIMIT = 2000
 
-type Filter = 'all' | 'stelz' | 'none' | 'pending'
+type Filter = 'all' | 'stelz' | 'near' | 'none' | 'pending'
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'Alle stories' },
   { id: 'stelz', label: 'Met Stëlz' },
+  { id: 'near', label: 'Mogelijk Stëlz' },
   { id: 'none', label: 'Zonder Stëlz' },
   { id: 'pending', label: 'Nog niet geanalyseerd' },
 ]
@@ -46,6 +47,8 @@ const FILTERS: { id: Filter; label: string }[] = [
 const VERDICT_TONE: Record<StoryVerdict, string> = {
   visible: 'bg-[var(--color-good)] text-white',
   small: 'bg-[var(--color-warn)] text-white',
+  // Accent, not warn: a near miss is a question for a human, not a weaker hit.
+  near: 'bg-[var(--color-accent)] text-white',
   absent: 'bg-[var(--color-ink)]/70 text-white',
   unanalysed: 'bg-[var(--color-ink-subtle)] text-white',
   rejected: 'bg-[var(--color-bad)] text-white',
@@ -140,6 +143,7 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
     let out = scoped
     if (creator) out = out.filter((r) => r.creatorHandle === creator)
     if (filter === 'stelz') out = out.filter((r) => isStelzStory(r.verdict))
+    if (filter === 'near') out = out.filter((r) => r.verdict === 'near')
     if (filter === 'none') out = out.filter((r) => r.verdict === 'absent')
     if (filter === 'pending') out = out.filter((r) => r.verdict === 'unanalysed')
     return [...out].sort((a, b) => (b.postedAt ?? '').localeCompare(a.postedAt ?? ''))
@@ -248,26 +252,6 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
             )}
           </Card>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-            <Card className="p-5 lg:col-span-2">
-              <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">
-                Stories per dag
-              </h3>
-              <StackedDayBars series={[trend]} height={150} days={30} />
-            </Card>
-            <Card className="p-5">
-              <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">
-                Wat er in zat
-              </h3>
-              <dl className="space-y-2 text-[12px]">
-                <Row label="Video's" value={`${fmtNum(videoCount)} · ${Math.round(rollup.videoSeconds)}s`} />
-                <Row label="@-vermeldingen" value={fmtNum(rollup.mentions)} />
-                <Row label="Link-stickers" value={fmtNum(rollup.links)} />
-                <Row label="Polls" value={fmtNum(scoped.filter((r) => r.pollCount > 0).length)} />
-              </dl>
-            </Card>
-          </div>
-
           {/* Filters */}
           <div className="flex flex-wrap items-center gap-2 mb-4">
             {FILTERS.map((f) => (
@@ -282,6 +266,7 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
               >
                 {f.label}
                 {f.id === 'stelz' && rollup.withStelz > 0 && ` · ${rollup.withStelz}`}
+                {f.id === 'near' && rollup.near > 0 && ` · ${rollup.near}`}
                 {f.id === 'pending' && rollup.unanalysed > 0 && ` · ${rollup.unanalysed}`}
               </button>
             ))}
@@ -314,6 +299,26 @@ export function StoriesView({ projectId, params, setParams, embedded = false }: 
               {shown.map((r) => <StoryCard key={r.postId} row={r} onOpen={() => setOpen(r)} />)}
             </div>
           )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+            <Card className="p-5 lg:col-span-2">
+              <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">
+                Stories per dag
+              </h3>
+              <StackedDayBars series={[trend]} height={150} days={30} />
+            </Card>
+            <Card className="p-5">
+              <h3 className="text-[11px] uppercase tracking-widest text-[var(--color-ink-subtle)] mb-3">
+                Wat er in zat
+              </h3>
+              <dl className="space-y-2 text-[12px]">
+                <Row label="Video's" value={`${fmtNum(videoCount)} · ${Math.round(rollup.videoSeconds)}s`} />
+                <Row label="@-vermeldingen" value={fmtNum(rollup.mentions)} />
+                <Row label="Link-stickers" value={fmtNum(rollup.links)} />
+                <Row label="Polls" value={fmtNum(scoped.filter((r) => r.pollCount > 0).length)} />
+              </dl>
+            </Card>
+          </div>
 
           <CreatorTable rollup={rollup} onPick={(h) => setParam('c', h === creator ? null : h)} />
         </>
@@ -352,7 +357,9 @@ function StoryCard({ row, onOpen }: { row: StoryRow; onOpen: () => void }) {
     <>
       <MediaTile src={storyImage(row)} size="story" alt={`Story van @${row.creatorHandle}`}>
         <span className={`absolute top-1 left-1 text-[9px] uppercase tracking-wider px-1.5 py-0.5 ${VERDICT_TONE[row.verdict]}`}>
-          {row.verdict === 'visible' ? 'Stëlz' : row.verdict === 'small' ? 'Stëlz klein' : VERDICT_LABEL[row.verdict]}
+          {row.verdict === 'visible' ? 'Stëlz'
+            : row.verdict === 'small' ? 'Stëlz klein'
+            : row.verdict === 'near' ? 'Mogelijk' : VERDICT_LABEL[row.verdict]}
         </span>
         {/* Only when the verdict rests on more than the one image you are
             looking at. For a photo the verdict chip already says it was
@@ -372,6 +379,9 @@ function StoryCard({ row, onOpen }: { row: StoryRow; onOpen: () => void }) {
       <span className="block px-1.5 pt-1 text-[10px] truncate text-[var(--color-ink)]">
         @{row.creatorHandle}
       </span>
+      <span className="block px-1.5 text-[9px] text-[var(--color-ink)] truncate tabular-nums">
+        {row.postedAt ? timeAgo(row.postedAt) : 'datum onbekend'}
+      </span>
       <span className="block px-1.5 pb-1 text-[9px] text-[var(--color-ink-subtle)] truncate">
         {exp ? storyChip(exp) : '—'}
         {row.pollVotes > 0 && ` · ${compactNum(row.pollVotes)} stemmen`}
@@ -383,7 +393,9 @@ function StoryCard({ row, onOpen }: { row: StoryRow; onOpen: () => void }) {
   const cls = `shrink-0 w-[112px] block border text-left transition-colors ${
     isStelzStory(row.verdict)
       ? 'border-[var(--color-good)] hover:border-[var(--color-ink)]'
-      : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)]'
+      : row.verdict === 'near'
+        ? 'border-[var(--color-accent)] hover:border-[var(--color-ink)]'
+        : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)]'
   }`
   // Opens the analysis, not Instagram. The permalink dies with the story — it
   // was the tile's only action, so a day later every tile led nowhere, and the
@@ -470,6 +482,14 @@ function EmptyState({ project }: { project: Project | null }) {
         <Link to="/settings" className="underline hover:text-[var(--color-ink)]">Instellingen</Link>,
         of haal ze handmatig op met de knop bovenaan het overzicht.
       </p>
+      {/* Dev server only; folded out of a production build with its URL. */}
+      {import.meta.env.DEV && (
+        <p className="mt-4">
+          <a href="/stories?preview=stories" className="text-[12px] underline hover:text-[var(--color-ink)]">
+            Lokale preview openen →
+          </a>
+        </p>
+      )}
     </Card>
   )
 }

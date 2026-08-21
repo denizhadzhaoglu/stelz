@@ -5,7 +5,7 @@
 // added up per story instead of per creator.
 import { describe, expect, it } from 'vitest'
 import {
-  joinStories, storySource, storyRollup, stelzShare, isStelzStory, storyImage, VERDICT_LABEL,
+  joinStories, storySource, storyRollup, stelzShare, isStelzStory, isNearMiss, storyImage, VERDICT_LABEL,
 } from './storyStats'
 import type { StoryPost } from './firestore'
 import type { DetectionRow } from './types'
@@ -268,5 +268,64 @@ describe('proof that something looked', () => {
     // 1 photo + 7 video images. Not 2 — the story count hides the video work
     // entirely, which is why the KPI reports images.
     expect(r.imagesSeen).toBe(8)
+  })
+})
+
+describe('a hit the detector overturned', () => {
+  // Before this state existed, the story below and a photo of an empty field
+  // both rendered as "Geen Stëlz". One of them is a picture where the model
+  // read STELZ off a can and a second check disagreed — a judgement call the
+  // screen was hiding from the person paying for the campaign.
+  it('is "near", not "absent"', () => {
+    const rows = joinStories(
+      [post({ postId: 'p1', creatorHandle: 'anna' })],
+      [det({ post_id: 'p1', detected: false, confidence: 0.75,
+             gate: 'rejected_by_verifier', verify_verdict: 'rejected',
+             visible_text: 'STELZ' })],
+    )
+    expect(rows[0].verdict).toBe('near')
+    expect(VERDICT_LABEL.near).toBe('Mogelijk Stëlz')
+  })
+
+  it('is not counted as a sighting', () => {
+    // A question in the headline percentage is how a dashboard starts
+    // flattering its owner.
+    const rows = joinStories(
+      [post({ postId: 'p1', creatorHandle: 'anna' })],
+      [det({ post_id: 'p1', detected: false, near_miss: true })],
+    )
+    expect(isStelzStory(rows[0].verdict)).toBe(false)
+    const r = storyRollup(rows)
+    expect(r.near).toBe(1)
+    expect(r.withStelz).toBe(0)
+    // Still judged: something looked at it and reached an answer.
+    expect(r.judged).toBe(1)
+    expect(stelzShare(r)).toBe(0)
+  })
+
+  it('recognises the production shape without a backfill', () => {
+    // Production stores no near_miss flag; `gate` and `verify_verdict` already
+    // carry the same fact, so old rows light up too.
+    expect(isNearMiss(det({ post_id: 'x', detected: false, verify_verdict: 'rejected' }))).toBe(true)
+    expect(isNearMiss(det({ post_id: 'x', detected: false, gate: 'rejected_wordmark_mismatch' }))).toBe(true)
+    expect(isNearMiss(det({ post_id: 'x', detected: false, gate: 'capped_small_object' }))).toBe(false)
+    expect(isNearMiss(det({ post_id: 'x', detected: false }))).toBe(false)
+    // A confirmed hit is never a near miss, whatever the gate says.
+    expect(isNearMiss(det({ post_id: 'x', detected: true, gate: 'capped_small_object' }))).toBe(false)
+  })
+
+  it('represents a video by the frame the model argued about', () => {
+    // One frame of twelve had a can in it; the other eleven are grass. Picking
+    // the highest-confidence miss would show grass and lose the disagreement.
+    const rows = joinStories(
+      [post({ postId: 'v1', creatorHandle: 'anna', mediaType: 'video' })],
+      [
+        det({ post_id: 'v1', detection_id: 'd0', detected: false, confidence: 0.1 }),
+        det({ post_id: 'v1', detection_id: 'd1', detected: false, confidence: 0.05,
+              near_miss: true, visible_text: 'STELZ' }),
+      ],
+    )
+    expect(rows[0].verdict).toBe('near')
+    expect(rows[0].detection?.detection_id).toBe('d1')
   })
 })

@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import threading
 from typing import Any
 
 import requests
@@ -21,11 +22,29 @@ def _key() -> str:
 
 
 _client = None
+_client_lock = threading.Lock()
+
 
 def client():
+    """One genai.Client per process, built exactly once.
+
+    The lock is not decoration. Unsynchronised lazy init lets two threads both
+    see None, both construct a Client, and only one assignment win — the loser's
+    client is then garbage-collected, which closes the httpx connection pool
+    underneath any request still using it. That surfaces as
+    "Cannot send a request, as the client has been closed", and it did: two of
+    three items failed the moment the local analyser started running items in
+    parallel. The same race is reachable in a Cloud Function, where concurrency
+    is on by default for v2 functions.
+
+    The Client itself is safe to share afterwards — httpx.Client is documented
+    thread-safe — so the lock is only around construction, not around use.
+    """
     global _client
     if _client is None:
-        _client = genai.Client(api_key=_key())
+        with _client_lock:
+            if _client is None:
+                _client = genai.Client(api_key=_key())
     return _client
 
 

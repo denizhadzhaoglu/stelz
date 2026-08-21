@@ -81,6 +81,12 @@ function mapDetection(d: QueryDocumentSnapshot<DocumentData>, brandId: string): 
     verify_verdict: (x.verifyVerdict as string | null) ?? null,
     verify_brand: (x.verifyBrand as string | null) ?? null,
     verify_reason: (x.verifyReason as string | null) ?? null,
+    verify_placement: (x.verifyPlacement as DetectionRow['verify_placement']) ?? null,
+    // Absent in production: a deployed detection IS at production
+    // resolution, so there is no gap to report. Only the local archive,
+    // which can be analysed at a higher one, sets these.
+    found_at_prod_res: (x.foundAtProdRes as boolean | null) ?? null,
+    max_dim: (x.maxDim as number | null) ?? null,
     sentiment: (x.sentiment as DetectionRow['sentiment']) ?? null,
     sentiment_score: (x.sentimentScore as number | null) ?? null,
     sentiment_rationale: (x.sentimentRationale as string | null) ?? null,

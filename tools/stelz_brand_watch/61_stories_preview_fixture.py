@@ -44,6 +44,7 @@ ARCHIVE = ROOT / ".tmp" / "stories-archive"
 VERDICTS = ARCHIVE / "verdicts.jsonl"
 INDEX = ARCHIVE / "index.jsonl"
 MEDIA = ARCHIVE / "media"
+RAW = ARCHIVE / "raw"
 # NOT web/public: everything in public/ is copied into dist/, so a fixture
 # there is published by `vite build && firebase deploy --only hosting`. These
 # hold scraped Instagram data and signed CDN URLs. The dev server reaches them
@@ -145,9 +146,9 @@ def resolve_media(norm: dict, arch: dict | None, local: bool) -> tuple[str | Non
     img, vid = norm["image_url"], norm["video_url"]
     if local and arch:
         if arch.get("image_file"):
-            img = f"/preview-media/{arch['image_file']}"
+            img = f"/preview-media/stories-archive/{arch['image_file']}"
         if arch.get("video_file"):
-            vid = f"/preview-media/{arch['video_file']}"
+            vid = f"/preview-media/stories-archive/{arch['video_file']}"
     return img, vid
 
 
@@ -255,18 +256,42 @@ def to_post(norm: dict, image_url: str | None, video_url: str | None) -> dict:
     }
 
 
-def main() -> int:
-    tok = token()
-    if not tok:
-        print("APIFY_API_TOKEN not set (and not in firebase/functions/.env)")
-        return 2
+def archived_items() -> list[dict]:
+    """The raw payloads 62_stories_archive.py kept, newest first.
 
-    print(f"Reading the last run of {STORIES_ACTOR} (no new run, no cost)")
-    try:
-        items = last_dataset_items(STORIES_ACTOR, tok)
-    except Exception as e:
-        print(f"  ✕ could not read the dataset: {e}")
-        return 1
+    Preferred over re-reading Apify's last dataset, which holds only the MOST
+    RECENT sweep: after two sweeps the archive had 96 stories and the dataset
+    69, so a fixture built from Apify silently dropped 27 already-analysed
+    stories off the page. The archive is the complete record and is free to
+    read. Apify stays as the fallback for a machine with no archive yet.
+    """
+    if not RAW.is_dir():
+        return []
+    out = []
+    for f in sorted(RAW.glob("*.json")):
+        try:
+            out.append(json.loads(f.read_text()))
+        except Exception:
+            continue
+    return out
+
+
+def main() -> int:
+    items = archived_items()
+    if items:
+        print(f"Reading {len(items)} archived payloads from "
+              f"{RAW.relative_to(ROOT)} (free, complete)")
+    else:
+        tok = token()
+        if not tok:
+            print("No archive and no APIFY_API_TOKEN — run 62_stories_archive.py first")
+            return 2
+        print(f"No archive; reading the last run of {STORIES_ACTOR} (no new run, no cost)")
+        try:
+            items = last_dataset_items(STORIES_ACTOR, tok)
+        except Exception as e:
+            print(f"  ✕ could not read the dataset: {e}")
+            return 1
     print(f"  raw items: {len(items)}")
 
     verdicts = load_verdicts()
