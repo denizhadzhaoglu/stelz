@@ -86,11 +86,44 @@ from lib import scan_state  # noqa: E402
 scan_state.Increment = FakeIncrement
 
 
+class FakeShardDoc:
+    def __init__(self, store: dict, key: str):
+        self._store, self._key = store, key
+        self.reference = self
+
+    def set(self, patch: dict, merge=False):
+        cur = self._store.setdefault(self._key, {})
+        if not merge:
+            cur.clear()
+        _deep_merge(cur, patch)
+
+    def delete(self):
+        self._store.pop(self._key, None)
+
+
+class FakeShardCol:
+    """The scanShards subcollection — one document per shard."""
+
+    def __init__(self, store: dict):
+        self.store = store
+
+    def document(self, doc_id: str):
+        return FakeShardDoc(self.store, doc_id)
+
+    def stream(self):
+        return [FakeShardDoc(self.store, k) for k in list(self.store)]
+
+
 class FakeBrandDoc:
     """Applies merges, Increments and dotted-path updates like Firestore."""
 
-    def __init__(self, data: dict):
+    def __init__(self, data: dict, shards: dict | None = None):
         self.data = data
+        self.shards = shards if shards is not None else {}
+
+    def collection(self, name: str):
+        assert name == scan_state.SHARD_COLLECTION, name
+        return FakeShardCol(self.shards)
 
     def set(self, patch: dict, merge=False):
         if not merge:
@@ -122,7 +155,8 @@ def _deep_merge(dst: dict, patch: dict) -> None:
 class ScanStateBase(unittest.TestCase):
     def setUp(self):
         self.brand: dict = {}
-        doc = FakeBrandDoc(self.brand)
+        self.shards: dict = {}
+        doc = FakeBrandDoc(self.brand, self.shards)
         p = mock.patch.object(scan_state, "fs", types.SimpleNamespace(brand_doc=lambda bid: doc))
         p.start()
         self.addCleanup(p.stop)
@@ -169,16 +203,56 @@ class TestStepsMap(ScanStateBase):
 
 
 class TestDetectBump(ScanStateBase):
+    """The detect counters, and why they no longer live on the brand document.
+
+    They were three Increments on /brands/stelz, written once per detect
+    message — ~9.500 per festival scan, from up to 75 containers at once
+    (concurrency=1, max_instances 50 + 25), against a document Firestore
+    sustains roughly one write per second to. bump_detect_progress catches its
+    own failure and only logs it, so every loser of that fight was permanent
+    and invisible. "9290 van 9573" was not 283 dead workers; it was 283 counter
+    writes that lost. And because the same write carried lastActivityAt, the
+    heartbeat then corroborated a story the contention had itself caused.
+    """
+
+    def totals(self) -> dict:
+        out = {"detectionsCompleted": 0, "detectionsHit": 0, "skippedCount": 0}
+        for shard in self.shards.values():
+            for k in out:
+                out[k] += shard.get(k, 0)
+        return out
+
     def test_bump_moves_all_counters_and_the_heartbeat(self):
         scan_state.bump_detect_progress("stelz", hit=True)
         scan_state.bump_detect_progress("stelz", hit=False, skipped=True)
-        scan = self.brand["scan"]
-        self.assertEqual(scan["detectionsCompleted"], 2)
-        self.assertEqual(scan["detectionsHit"], 1)
-        self.assertEqual(scan["skippedCount"], 1)
+        t = self.totals()
+        self.assertEqual(t["detectionsCompleted"], 2)
+        self.assertEqual(t["detectionsHit"], 1)
+        self.assertEqual(t["skippedCount"], 1)
         # Without this the 5-minute stall detector fires during a healthy
-        # detect phase, because nothing else writes lastActivityAt.
-        self.assertEqual(scan["lastActivityAt"], scan_state.SERVER_TIMESTAMP)
+        # detect phase, because nothing else writes lastActivityAt. The client
+        # folds the newest shard timestamp in as the heartbeat.
+        self.assertTrue(any(sh.get("lastActivityAt") == scan_state.SERVER_TIMESTAMP
+                            for sh in self.shards.values()))
+
+    def test_the_brand_document_is_not_touched_at_all(self):
+        # The whole point: 9.500 messages must not contend for one document.
+        scan_state.bump_detect_progress("stelz", hit=True)
+        self.assertEqual(self.brand, {})
+
+    def test_the_load_actually_spreads(self):
+        for _ in range(400):
+            scan_state.bump_detect_progress("stelz", hit=False)
+        self.assertGreater(len(self.shards), 1, "everything landed on one shard")
+        self.assertLessEqual(len(self.shards), scan_state.SHARD_COUNT)
+        self.assertEqual(self.totals()["detectionsCompleted"], 400)
+
+    def test_opening_a_session_clears_the_shards(self):
+        # A leftover shard would inflate the next session's completions.
+        scan_state.bump_detect_progress("stelz", hit=True)
+        self.assertTrue(self.shards)
+        scan_state.session_open("stelz")
+        self.assertEqual(self.shards, {})
 
 
 class TestDetectImageWrapper(unittest.TestCase):
@@ -253,6 +327,85 @@ class TestDetectVideoWrapper(unittest.TestCase):
                                lambda *a, **k: {"status": "skip", "reason": "download_failed"}):
             self.detect_video.run("stelz", "post1", "https://x/v.mp4")
         self.assertEqual(self.bumps, [{"hit": False, "skipped": True}])
+
+
+class TestScanSession(ScanStateBase):
+    """The flat startedAt/finishedAt pair — what the whole UI calls "a scan".
+
+    Until session_open existed, exactly one code path wrote these fields
+    (scan_hashtags.publish_tags). The event button does not call hashtags, so
+    an event scan ran with no session at all: the progress panel never mounted
+    (scanPhase returns 'idle' without startedAt), the page never reloaded when
+    the scan finished, and the button never locked against a second paid press.
+    """
+
+    def test_open_marks_a_scan_running(self):
+        scan_state.session_open("stelz")
+        self.assertEqual(self.brand["scan"]["startedAt"], scan_state.SERVER_TIMESTAMP)
+        self.assertIsNone(self.brand["scan"]["finishedAt"])
+        self.assertTrue(scan_state.session_is_open("stelz"))
+
+    def test_close_ends_it(self):
+        scan_state.session_open("stelz")
+        scan_state.session_close("stelz")
+        self.assertEqual(self.brand["scan"]["finishedAt"], scan_state.SERVER_TIMESTAMP)
+        self.assertFalse(scan_state.session_is_open("stelz"))
+
+    def test_opening_resets_the_previous_run_counters(self):
+        """A session that inherited last week's totals reported this week's
+        completions against a stale denominator, so the panel snapped a
+        finished scan back to 'analysing' with an ETA off the old startedAt."""
+        self.brand["scan"] = {
+            "startedAt": "last week", "finishedAt": "also last week",
+            "detectTasksEnqueued": 1200, "detectionsCompleted": 1200,
+            "detectionsHit": 42, "skippedCount": 7,
+        }
+        scan_state.session_open("stelz")
+        self.assertEqual(self.brand["scan"]["detectTasksEnqueued"], 0)
+        self.assertEqual(self.brand["scan"]["detectionsCompleted"], 0)
+        self.assertEqual(self.brand["scan"]["detectionsHit"], 0)
+        self.assertEqual(self.brand["scan"]["skippedCount"], 0)
+
+    def test_no_session_at_all_is_not_open(self):
+        self.assertFalse(scan_state.session_is_open("stelz"))
+
+    def test_a_session_never_closed_still_counts_as_open(self):
+        # The stall detector, not this function, is what calls time on those.
+        self.brand["scan"] = {"startedAt": "ages ago", "finishedAt": None}
+        self.assertTrue(scan_state.session_is_open("stelz"))
+
+
+class TestStepSkipped(ScanStateBase):
+    """A handler that refused is not a step that succeeded.
+
+    Every skipped return carries a reason (budget_exhausted, budget,
+    no_creators). Painting those green said a scan had run when the budget gate
+    had turned it away — a brand could look scanned all week with not one
+    request having left the building.
+    """
+
+    def test_skipped_is_its_own_state_and_keeps_the_reason(self):
+        scan_state.step_started("stelz", "creators")
+        scan_state.step_skipped("stelz", "creators", "budget_exhausted", {"posts_added": 0})
+        step = self.brand["scan"]["steps"]["creators"]
+        self.assertEqual(step["state"], "skipped")
+        self.assertEqual(step["error"], "budget_exhausted")
+        self.assertEqual(step["finishedAt"], scan_state.SERVER_TIMESTAMP)
+
+    def test_skipped_is_not_done(self):
+        scan_state.step_started("stelz", "creators")
+        scan_state.step_skipped("stelz", "creators", "no_creators")
+        self.assertNotEqual(self.brand["scan"]["steps"]["creators"]["state"], "done")
+
+    def test_a_failing_write_is_swallowed(self):
+        # Same contract as every other function here: progress reporting must
+        # never be the reason a scan fails.
+        with mock.patch.object(scan_state, "fs", types.SimpleNamespace(
+                brand_doc=lambda bid: (_ for _ in ()).throw(RuntimeError("no db")))):
+            scan_state.session_open("stelz")
+            scan_state.session_close("stelz")
+            scan_state.step_skipped("stelz", "creators", "budget")
+            self.assertFalse(scan_state.session_is_open("stelz"))
 
 
 if __name__ == "__main__":

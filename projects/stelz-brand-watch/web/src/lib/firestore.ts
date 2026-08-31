@@ -30,6 +30,7 @@ import { dayBounds } from './events'
 import type { Audience } from './audience'
 import { spendBreakdown, type SpendLine } from './costs'
 import { diagnoseUnreachable, type ProbeOutcome } from './functionsDiagnose'
+import { dedupeKeyOf, postKeyOf, slotOf } from './postIdentity'
 
 // Default brand. Replace once brand switcher reads from auth context.
 export const BRAND_ID = 'stelz'
@@ -652,6 +653,32 @@ export async function fbStepHashtags(
     brandId: BRAND_ID, perTag, maxTags, ...(tags?.length ? { tags } : {}),
   })
 }
+/**
+ * Re-enqueue analysis for media that never produced a verdict.
+ *
+ * The detect triggers deploy with retry=false, so a worker killed by its
+ * container deadline takes its message with it and nothing redelivers — and
+ * scan.detectTasksEnqueued cannot say WHICH images are missing, because it
+ * counts publish attempts. The server finds the gap in the data instead:
+ * posts with no detection document, which is reliable because detect_image
+ * writes one on every completed analysis, misses included.
+ *
+ * No Apify spend at all: this re-analyses media already harvested.
+ */
+export async function fbResumeAnalysis(opts: {
+  sinceDays?: number; maxPosts?: number; dryRun?: boolean
+} = {}) {
+  return authedFetch('api_resume_analysis', { brandId: BRAND_ID, ...opts })
+}
+// Open or close the flat scan session (scan.startedAt/finishedAt). Only
+// publish_tags used to write those, so a scan that skips hashtags — every
+// event scan — ran with no session: no progress panel, no post-scan reload,
+// no lock against a second paid press. See lib/scan_state.session_open.
+export async function fbScanSession(action: 'open' | 'close', endReason?: string) {
+  return authedFetch('api_scan_session', {
+    brandId: BRAND_ID, action, ...(endReason ? { endReason } : {}),
+  })
+}
 // `creatorIds` (platform_handle composites) scans exactly those creators and
 // ignores the due queue. OMITTED, not empty, for the brand-wide scan: the
 // server reads a missing key as "use the due queue" and an empty list as "the
@@ -984,7 +1011,11 @@ export type ScanStepKey =
   | 'hashtags' | 'creators' | 'stories' | 'profiles' | 'subcultures' | 'audience' | 'srs' | 'sentiment'
 
 export type ScanStep = {
-  state: 'running' | 'done' | 'error'
+  // 'skipped' = the handler ran and refused, with `error` carrying the reason
+  // (budget_exhausted, no_creators). Distinct from 'done', which used to
+  // absorb it: a scan the budget gate turned away was painted green, so a
+  // brand could look scanned all week with nothing scraped.
+  state: 'running' | 'done' | 'error' | 'skipped'
   startedAt: string | null
   finishedAt: string | null
   error: string | null
@@ -1015,7 +1046,8 @@ function mapScanSteps(raw: unknown): Partial<Record<ScanStepKey, ScanStep>> {
   for (const [key, v] of Object.entries(raw as Record<string, Record<string, unknown>>)) {
     if (!v || typeof v !== 'object') continue
     const state = v.state
-    if (state !== 'running' && state !== 'done' && state !== 'error') continue
+    if (state !== 'running' && state !== 'done' && state !== 'error'
+        && state !== 'skipped') continue
     out[key as ScanStepKey] = {
       state,
       startedAt: v.startedAt instanceof Timestamp ? v.startedAt.toDate().toISOString() : null,
@@ -1027,15 +1059,61 @@ function mapScanSteps(raw: unknown): Partial<Record<ScanStepKey, ScanStep>> {
   return out
 }
 
+/**
+ * The detect counters live in a SHARDED subcollection — see lib/scan_state.
+ *
+ * They used to be three Increments on the brand document, written once per
+ * detect message: ~9.500 of them for a festival scan, from up to 75 containers
+ * at once, against a document Firestore sustains about one write per second
+ * to. Losers of that fight were swallowed by bump_detect_progress's own
+ * except, which is what "9290 van 9573" really was — not dead workers, but
+ * counter writes that never landed. Twenty shards spread the load.
+ *
+ * The shard sums are ADDED to the flat counters rather than replacing them, so
+ * a session written by the pre-shard backend still reads correctly: its shards
+ * are empty and its flat values stand. That also means this works before the
+ * functions deploy lands.
+ */
+type ShardTotals = {
+  detectionsCompleted: number
+  detectionsHit: number
+  skippedCount: number
+  lastActivityAt: string | null
+}
+
+const NO_SHARDS: ShardTotals = {
+  detectionsCompleted: 0, detectionsHit: 0, skippedCount: 0, lastActivityAt: null,
+}
+
+function sumShards(snap: QuerySnapshot<DocumentData>): ShardTotals {
+  const out: ShardTotals = { ...NO_SHARDS }
+  for (const d of snap.docs) {
+    const x = d.data()
+    out.detectionsCompleted += (x.detectionsCompleted as number) ?? 0
+    out.detectionsHit += (x.detectionsHit as number) ?? 0
+    out.skippedCount += (x.skippedCount as number) ?? 0
+    const t = x.lastActivityAt instanceof Timestamp ? x.lastActivityAt.toDate().toISOString() : null
+    // The most recent shard write IS the heartbeat during the detect phase;
+    // without it the stall detector sees a frozen brand document and calls a
+    // healthy fan-out dead.
+    if (t && (!out.lastActivityAt || t > out.lastActivityAt)) out.lastActivityAt = t
+  }
+  return out
+}
+
 export function fbSubscribeScanState(
   onChange: (state: ScanState | null) => void,
   brandId = BRAND_ID,
 ): Unsubscribe {
   const ref = doc(fbDb, 'brands', brandId)
-  return onSnapshot(ref, (snap) => {
-    const x = snap.data()
-    const s = (x?.scan ?? null) as Record<string, unknown> | null
+  let shards: ShardTotals = NO_SHARDS
+  let latest: Record<string, unknown> | null = null
+
+  const emit = () => {
+    const s = latest
     if (!s) { onChange(null); return }
+    const flatActivity = s.lastActivityAt instanceof Timestamp
+      ? s.lastActivityAt.toDate().toISOString() : null
     onChange({
       startedAt: s.startedAt instanceof Timestamp ? s.startedAt.toDate().toISOString() : null,
       finishedAt: s.finishedAt instanceof Timestamp ? s.finishedAt.toDate().toISOString() : null,
@@ -1044,13 +1122,19 @@ export function fbSubscribeScanState(
       hashtagDone: (s.hashtagDone as number) ?? 0,
       postsWritten: (s.postsWritten as number) ?? 0,
       detectTasksEnqueued: (s.detectTasksEnqueued as number) ?? 0,
-      detectionsCompleted: (s.detectionsCompleted as number) ?? 0,
-      detectionsHit: (s.detectionsHit as number) ?? 0,
+      detectionsCompleted: ((s.detectionsCompleted as number) ?? 0) + shards.detectionsCompleted,
+      detectionsHit: ((s.detectionsHit as number) ?? 0) + shards.detectionsHit,
       tags: (s.tags as string[]) ?? [],
-      lastActivityAt: s.lastActivityAt instanceof Timestamp ? s.lastActivityAt.toDate().toISOString() : null,
-      skippedCount: (s.skippedCount as number) ?? 0,
+      lastActivityAt: [flatActivity, shards.lastActivityAt]
+        .filter((v): v is string => v != null).sort().pop() ?? null,
+      skippedCount: ((s.skippedCount as number) ?? 0) + shards.skippedCount,
       endReason: (s.endReason as string) ?? null,
     })
+  }
+
+  const stopDoc = onSnapshot(ref, (snap) => {
+    latest = (snap.data()?.scan ?? null) as Record<string, unknown> | null
+    emit()
   }, (err) => {
     // Without this callback a rules change or dropped index makes the scan
     // panel silently blank forever — the exact shape of failure the panel
@@ -1058,6 +1142,18 @@ export function fbSubscribeScanState(
     console.error('scan-state subscription failed', err)
     onChange(null)
   })
+
+  // A second subscription rather than a periodic read: the shards move once
+  // per analysed image, and the bar has to follow them. Its failure is NOT
+  // fatal — an old backend has no such collection, and a rules change must
+  // degrade to the flat counters rather than blank the panel.
+  const stopShards = onSnapshot(
+    collection(fbDb, 'brands', brandId, 'scanShards'),
+    (snap) => { shards = sumShards(snap); emit() },
+    (err) => { console.error('scan-shard subscription failed', err) },
+  )
+
+  return () => { stopDoc(); stopShards() }
 }
 
 /**
@@ -1331,7 +1427,18 @@ export async function fbMarkAllInboxRead(items: InboxItem[]) {
 // docs, and the events LIST page and the event DETAIL page would otherwise each
 // pay that read bill on every visit.
 
-export type EventCampaign = { items: CampaignItem[]; detections: DetectionRow[] }
+export type EventCampaign = {
+  items: CampaignItem[]
+  detections: DetectionRow[]
+  /** A query came back exactly at the cap, so there is very probably more that
+   *  did not fit. The page must say so rather than print its total as fact —
+   *  "X van Y stuks content" over a truncated set is a wrong number stated
+   *  confidently, which is worse than an admitted gap. */
+  truncated: boolean
+}
+
+/** Per-query row cap. Reached = we are not looking at everything. */
+const EVENT_QUERY_CAP = 8000
 
 /** Both bounds inclusive, both 'YYYY-MM-DD' — see lib/events.eventWindow. */
 export type EventRange = { start: string; end: string }
@@ -1367,18 +1474,42 @@ function mapEventPost(d: QueryDocumentSnapshot<DocumentData>): CampaignItem {
     foundVia: (x.foundVia as string | null) ?? null,
     eventId: (x.eventId as string | null) ?? null,
     scrapedFor: (x.scrapedFor as string | null) ?? null,
-    postKey: (x.postKey as string | null) ?? null,
-    slot: (x.slot as number | null) ?? null,
+    // A null postKey sends joinCampaign and campaignRollup.track() to the doc
+    // id instead, which is unique PER CAROUSEL SLIDE — so a ten-slide carousel
+    // counted as ten posts and added its parent's likes ten times, because the
+    // sidecar writer copies the parent's metrics onto every slide. See
+    // lib/postIdentity for the rules and why they are pure.
+    postKey: postKeyOf(x),
+    slot: slotOf(x),
     slots: (x.slots as number | null) ?? null,
   }
 }
 
-/** Doc id wins over query, so a row found by BOTH queries is one row. */
+/**
+ * One row per real post, across queries AND across write paths.
+ *
+ * Doc id alone was not enough. The two writers name the same Instagram post
+ * differently and always will: 78_upload_event.post_doc_id builds
+ * `instagram_<shortCode>` from the fixture, while the Cloud Functions build
+ * `instagram_<numeric id>` through fs.composite_id. They cannot collide — the
+ * shortcode carries uppercase and composite_id lowercases — so once an online
+ * scan ran over already-imported rows, every roster post appeared twice, in
+ * the flattering direction, with nothing on screen to show it.
+ *
+ * So we key on the post's PUBLIC identity where the row carries one: postKey
+ * (the shortcode) plus the carousel slot. The slot matters — a ten-slide
+ * carousel shares one postKey, and keying on postKey alone would throw away
+ * nine slides of media. Rows with no postKey (detections, and scanner rows
+ * written before this field existed) fall back to the doc id, which is the
+ * old behaviour exactly.
+ */
 function dedupeDocs(
   ...snaps: (QuerySnapshot<DocumentData> | null)[]
 ): QueryDocumentSnapshot<DocumentData>[] {
   const out = new Map<string, QueryDocumentSnapshot<DocumentData>>()
-  for (const snap of snaps) for (const d of snap?.docs ?? []) out.set(d.id, d)
+  for (const snap of snaps) {
+    for (const d of snap?.docs ?? []) out.set(dedupeKeyOf(d.id, d.data()), d)
+  }
   return [...out.values()]
 }
 
@@ -1413,23 +1544,35 @@ export function fbFetchEventCampaign(
     const bounds = range ? dayBounds(range) : null
 
     const labelled = (c: CollectionReference<DocumentData>) =>
-      getDocs(query(c, where('eventId', '==', eventId), fsLimit(8000)))
+      getDocs(query(c, where('eventId', '==', eventId), fsLimit(EVENT_QUERY_CAP)))
     // A window query that fails — a missing index, a rules change — must not
     // take the labelled rows down with it. Losing half the rows is bad; going
     // from "less than everything" to "Nog geen data" is the failure this whole
     // fetcher exists to prevent.
+    //
+    // orderBy('postedAt','desc') is NOT decoration. Firestore forces the first
+    // ordering onto the inequality field and defaults to ascending, so the cap
+    // was keeping the OLDEST rows in the window and silently dropping the
+    // newest — which is exactly what a scan has just written. Descending makes
+    // the truncation, when it happens, fall on the oldest instead.
     const windowed = (c: CollectionReference<DocumentData>) =>
       bounds
         ? getDocs(query(c,
             where('postedAt', '>=', Timestamp.fromDate(bounds[0])),
             where('postedAt', '<=', Timestamp.fromDate(bounds[1])),
-            fsLimit(8000))).catch(() => null)
+            orderBy('postedAt', 'desc'),
+            fsLimit(EVENT_QUERY_CAP))).catch(() => null)
         : Promise.resolve(null)
 
     const [labelPosts, labelDets, winPosts, winDets] = await Promise.all([
       labelled(postsCol), labelled(detsCol),
       windowed(postsCol), windowed(detsCol),
     ])
+
+    // Exactly at the cap means there is almost certainly more behind it. Say
+    // so; do not let the page print a total it cannot stand behind.
+    const truncated = [labelPosts, labelDets, winPosts, winDets]
+      .some((s) => s != null && s.size >= EVENT_QUERY_CAP)
 
     const items = dedupeDocs(labelPosts, winPosts).map(mapEventPost)
     const detections = dedupeDocs(labelDets, winDets).map((d) => {
@@ -1442,7 +1585,7 @@ export function fbFetchEventCampaign(
       const itemId = (d.data().itemId as string | null) ?? row.post_id
       return { ...row, post_id: itemId }
     })
-    return { items, detections }
+    return { items, detections, truncated }
   })()
   // A failed fetch must not be cached as "the event is empty".
   p.catch(() => eventCampaignCache.delete(key))

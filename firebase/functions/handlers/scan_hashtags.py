@@ -29,7 +29,7 @@ from google.cloud.firestore import SERVER_TIMESTAMP, ArrayUnion, Increment
 # "running" forever, and the dashboard read "Bezig met scannen" for weeks.
 # tests/test_handler_imports.py now fails the suite if any handler references a
 # name it never imports.
-from lib import apify, fs, hashtags, scan_state, usage
+from lib import apify, fanout, fs, hashtags, scan_state, usage
 
 log = logging.getLogger(__name__)
 
@@ -331,17 +331,36 @@ def _mark_tag_done(brand_id: str, posts_written: int = 0, detect_tasks: int = 0)
         scan = (snap.to_dict() or {}).get("scan") or {}
         done = scan.get("hashtagDone", 0)
         queued = scan.get("hashtagQueued", 0)
-        if queued > 0 and done >= queued and not scan.get("finishedAt"):
-            fs.brand_doc(brand_id).set({
-                "scan": {"finishedAt": SERVER_TIMESTAMP, "endReason": "tags_complete"}
-            }, merge=True)
-            # The step closes here rather than in the endpoint: publish_tags
-            # returns as soon as the fan-out is queued, so the HTTP request is
-            # long gone by the time the work is actually finished.
-            scan_state.step_finished(brand_id, "hashtags", {
-                "hashtagDone": done,
-                "postsWritten": scan.get("postsWritten", 0),
-                "detectTasksEnqueued": scan.get("detectTasksEnqueued", 0),
+        step_open = ((scan.get("steps") or {}).get("hashtags") or {}).get("state") == "running"
+        if queued > 0 and done >= queued and (not scan.get("finishedAt") or step_open):
+            # ONE WRITE, not two. This used to stamp scan.finishedAt and then
+            # call scan_state.step_finished separately, and both failures are
+            # swallowed — so a transient Firestore error or the 540s container
+            # deadline landing between them left steps.hashtags on 'running'
+            # with finishedAt already set. The old guard was `not finishedAt`
+            # alone, which made that state PERMANENT: every later worker, and
+            # every Pub/Sub redelivery, found finishedAt set and skipped the
+            # close, and main.py:70 records that scan_watchdog was removed, so
+            # nothing repaired it server-side either. The panel then showed a
+            # step pulsing for six hours before the client relabelled it red.
+            #
+            # A Firestore document write is atomic, so folding both into one
+            # update means the pair can no longer half-land. `step_open` is the
+            # repair path for sessions already in the broken state.
+            fs.brand_doc(brand_id).update({
+                "scan.finishedAt": SERVER_TIMESTAMP,
+                "scan.endReason": "tags_complete",
+                "scan.lastActivityAt": SERVER_TIMESTAMP,
+                # The step closes here rather than in the endpoint: publish_tags
+                # returns as soon as the fan-out is queued, so the HTTP request
+                # is long gone by the time the work is actually finished.
+                "scan.steps.hashtags.state": "done",
+                "scan.steps.hashtags.finishedAt": SERVER_TIMESTAMP,
+                "scan.steps.hashtags.counts": {
+                    "hashtagDone": done,
+                    "postsWritten": scan.get("postsWritten", 0),
+                    "detectTasksEnqueued": scan.get("detectTasksEnqueued", 0),
+                },
             })
     except Exception as e:
         log.error(f"_mark_tag_done failed: {e}")
@@ -448,22 +467,19 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
             payload = {"brandId": brand_id, "postId": wrote}
             if kind == "video":
                 payload["videoUrl"] = url
-                detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
-                videos_enqueued += 1
+                detect_futures.append(("video", publisher.publish(video_topic, json.dumps(payload).encode())))
                 # Also analyse the cover. The video path fails often (TikTok
                 # blocks GCP egress IPs; IG videoUrls are short-lived signed
                 # URLs that expire in the queue) and when it does, this is the
                 # only chance the post has of producing any detection at all.
                 if cover:
-                    detect_futures.append(publisher.publish(
+                    detect_futures.append(("image", publisher.publish(
                         image_topic,
                         json.dumps({"brandId": brand_id, "postId": wrote, "imageUrl": cover}).encode(),
-                    ))
-                    images_enqueued += 1
+                    )))
             else:
                 payload["imageUrl"] = url
-                detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
-                images_enqueued += 1
+                detect_futures.append(("image", publisher.publish(image_topic, json.dumps(payload).encode())))
 
         # IG Sidecar children
         if platform == "instagram" and item.get("type") == "Sidecar":
@@ -475,18 +491,15 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
                     payload = {"brandId": brand_id, "postId": c_wrote}
                     if c_kind == "video":
                         payload["videoUrl"] = c_url
-                        detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
-                        videos_enqueued += 1
+                        detect_futures.append(("video", publisher.publish(video_topic, json.dumps(payload).encode())))
                         if c_cover:
-                            detect_futures.append(publisher.publish(
+                            detect_futures.append(("image", publisher.publish(
                                 image_topic,
                                 json.dumps({"brandId": brand_id, "postId": c_wrote, "imageUrl": c_cover}).encode(),
-                            ))
-                            images_enqueued += 1
+                            )))
                     else:
                         payload["imageUrl"] = c_url
-                        detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
-                        images_enqueued += 1
+                        detect_futures.append(("image", publisher.publish(image_topic, json.dumps(payload).encode())))
 
     candidates_added = 0
     for handle, entry in candidates.items():
@@ -511,9 +524,15 @@ def _do_process_one_tag(brand_id: str, tag: str, platform: str, per_tag: int) ->
         )
         candidates_added += 1
 
-    if detect_futures:
-        from concurrent.futures import wait as _fwait
-        _fwait(detect_futures, timeout=20)
+    # COUNT WHAT LANDED, not what we tried to send. The counters used to be
+    # incremented beside each publish() call while this wait inspected no
+    # future at all — and concurrent.futures.wait() holds a raised exception
+    # silently and abandons anything still pending. Every rejected publish
+    # therefore inflated detectTasksEnqueued with a message that never
+    # existed, leaving the analysis bar short in a way indistinguishable from
+    # dead workers. See lib/fanout.
+    images_enqueued, videos_enqueued, _failed = fanout.count_landed(
+        brand_id, detect_futures, flush_timeout_s=20)
 
     # Promote handles out of the queue into tracked creators. One brand-specific
     # tag is enough; generic lifestyle tags need two distinct ones. Filtering on
@@ -716,18 +735,15 @@ def run(
                     payload = {"brandId": brand_id, "postId": wrote}
                     if kind == "video":
                         payload["videoUrl"] = url
-                        detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
-                        videos_enqueued += 1
+                        detect_futures.append(("video", publisher.publish(video_topic, json.dumps(payload).encode())))
                         if cover:
-                            detect_futures.append(publisher.publish(
+                            detect_futures.append(("image", publisher.publish(
                                 image_topic,
                                 json.dumps({"brandId": brand_id, "postId": wrote, "imageUrl": cover}).encode(),
-                            ))
-                            images_enqueued += 1
+                            )))
                     else:
                         payload["imageUrl"] = url
-                        detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
-                        images_enqueued += 1
+                        detect_futures.append(("image", publisher.publish(image_topic, json.dumps(payload).encode())))
 
                 # IG Sidecar (carousel): also process each child slot. The
                 # parent post above used the cover; child slots may be videos
@@ -743,18 +759,15 @@ def run(
                             payload = {"brandId": brand_id, "postId": c_wrote}
                             if c_kind == "video":
                                 payload["videoUrl"] = c_url
-                                detect_futures.append(publisher.publish(video_topic, json.dumps(payload).encode()))
-                                videos_enqueued += 1
+                                detect_futures.append(("video", publisher.publish(video_topic, json.dumps(payload).encode())))
                                 if c_cover:
-                                    detect_futures.append(publisher.publish(
+                                    detect_futures.append(("image", publisher.publish(
                                         image_topic,
                                         json.dumps({"brandId": brand_id, "postId": c_wrote, "imageUrl": c_cover}).encode(),
-                                    ))
-                                    images_enqueued += 1
+                                    )))
                             else:
                                 payload["imageUrl"] = c_url
-                                detect_futures.append(publisher.publish(image_topic, json.dumps(payload).encode()))
-                                images_enqueued += 1
+                                detect_futures.append(("image", publisher.publish(image_topic, json.dumps(payload).encode())))
 
         if dry_run:
             log.info(f"  DRY #{tag}: {len(candidates)} candidates")
@@ -784,9 +797,9 @@ def run(
     # bulk wait with a hard cap. Any laggards after the cap are abandoned
     # (the publish API has already accepted them locally; Pub/Sub publisher
     # client flushes async on process exit).
-    if detect_futures:
-        from concurrent.futures import wait as _fwait
-        _fwait(detect_futures, timeout=30)
+    # Same rule as the live path above — see lib/fanout.
+    images_enqueued, videos_enqueued, _failed = fanout.count_landed(
+        brand_id, detect_futures, flush_timeout_s=30)
 
     # One brand-specific tag promotes; generic tags need two. See the live path.
     _legacy_aliases = brand_data.get("wordmarkAliases") or []
@@ -1016,6 +1029,19 @@ def _persist_hashtag_post(
     )
 
 
+def _slot_of(child: dict) -> int | None:
+    """A carousel slide's position, where slide ONE is 0.
+
+    Explicit None checks rather than `or`, because 0 is falsy and 0 is a real
+    slot — the first slide of every carousel, and the one the cover comes from.
+    """
+    for key in ("order", "position"):
+        v = child.get(key)
+        if v is not None:
+            return v
+    return None
+
+
 def _persist_sidecar_child(
     brand_id: str,
     parent: dict,
@@ -1053,14 +1079,29 @@ def _persist_sidecar_child(
         "platform": "instagram",
         "externalId": child_id,
         "parentPostId": parent_id,
-        "carouselSlot": child.get("order") or child.get("position"),
+        # `or` was wrong here: slot 0 is falsy, so the FIRST slide of every
+        # carousel was stored with no slot at all. That is the slide the cover
+        # image comes from, and a null slot does not match the imported row's
+        # explicit 0 — so slide one of every carousel deduped against nothing.
+        "carouselSlot": _slot_of(child),
+        # THE PARENT'S key, deliberately shared by every slide of the carousel.
+        # The metrics below are the parent's, copied onto each slide so a slide
+        # can show its post's numbers — which meant a ten-slide carousel with
+        # 500 likes reported 5.000 when the rollup counted per row. Slides that
+        # agree on postKey collapse to one post before any count is taken, the
+        # same rule parentPostKey() already applies to detections. `slot` is
+        # what the web client reads; carouselSlot above stays for the callers
+        # that already read it.
+        "postKey": (parent.get("shortCode") or "").lower() or None,
+        "slot": _slot_of(child),
         "url": parent.get("url"),
         "caption": (parent.get("caption") or "")[:2000],
         "hashtags": [h.lower() for h in (parent.get("hashtags") or [])],
         "postedAt": posted_at,
-        "likesCount": parent.get("likesCount") or 0,
-        "commentsCount": parent.get("commentsCount") or 0,
-        "viewsCount": parent.get("videoViewCount") or 0,
+        # Absent is not zero — see the same note in scan_creators._persist_post.
+        "likesCount": parent.get("likesCount"),
+        "commentsCount": parent.get("commentsCount"),
+        "viewsCount": parent.get("videoViewCount"),
         "contentType": "video" if is_video else "image",
         "videoUrl": video_url,
         "coverUrl": image_url,
