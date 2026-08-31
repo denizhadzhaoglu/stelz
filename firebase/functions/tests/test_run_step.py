@@ -31,6 +31,27 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# DROP EVERY STUBBED firebase/google MODULE BEFORE IMPORTING main.
+#
+# This file is the one that wants the REAL packages; the handler tests replace
+# them with bare ModuleType stubs in sys.modules so they can run without
+# credentials. Whichever imports first wins, and under `unittest discover` that
+# is alphabetical — test_expand_audience and friends come first, so main.py's
+# `from firebase_functions import https_fn` then resolved
+# `from firebase_admin import app_check` against a stub and raised ImportError.
+#
+# The result was a suite that passed per-module and failed as a whole, which is
+# the worse of the two: it looks green in the way people usually check.
+# Deleting the entries makes the next import load the real thing. Doing it here
+# rather than asking every other test file to clean up keeps the requirement
+# where the unusual need is.
+for _mod in [m for m in list(sys.modules)
+             if m == "firebase_admin" or m.startswith("firebase_admin.")
+             or m == "firebase_functions" or m.startswith("firebase_functions.")
+             or m in ("google.cloud.firestore", "google.cloud.pubsub_v1")]:
+    if not getattr(sys.modules[_mod], "__file__", None):
+        del sys.modules[_mod]
+
 import main  # noqa: E402
 
 
